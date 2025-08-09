@@ -158,14 +158,14 @@ export function DashboardClient({ user }: DashboardClientProps) {
                   onClick={() => setDropdownOpen(!dropdownOpen)}
                   className="w-8 h-8 bg-cyan-500 rounded-full flex items-center justify-center hover:ring-2 hover:ring-cyan-500 hover:ring-offset-2 transition-all text-white text-sm font-medium"
                 >
-                  {user.name?.charAt(0)?.toUpperCase() || user.email?.charAt(0)?.toUpperCase() || 'U'}
+                  {user.name?.charAt(0)?.toUpperCase() ?? user.email?.charAt(0)?.toUpperCase() ?? 'U'}
                 </button>
 
                 {dropdownOpen && (
                   <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
                     <div className="px-4 py-2 border-b border-gray-200">
-                      <p className="text-sm font-medium">{user.name || 'Anonymous User'}</p> 
-                      <p className="text-xs text-gray-500">{user.email || 'No email'}</p>
+                      <p className="text-sm font-medium">{user.name ?? 'Anonymous User'}</p> 
+                      <p className="text-xs text-gray-500">{user.email ?? 'No email'}</p>
                     </div>
                     <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Profile</button>
                     <button className="w-full text-left px-4 py-2 text-sm hover:bg-gray-50">Settings</button>
