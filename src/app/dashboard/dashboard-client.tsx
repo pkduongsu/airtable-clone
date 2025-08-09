@@ -189,7 +189,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
       <div className="flex flex-auto">
         {/* Expandable Sidebar */}
         <aside 
-          className={`bg-white border-r border-gray-200 transition-all duration-300 ease-in-out ${
+          className={`bg-white border-r border-gray-200 transition-all duration-100 ease-in-out ${
             sidebarExpanded ? 'w-64' : 'w-16'
           } relative`}
           onMouseEnter={() => setSidebarExpanded(true)}
