@@ -14,17 +14,12 @@ datasource db {
     url      = env("DATABASE_URL")
 }
 
-model Post {
-    id        Int      @id @default(autoincrement())
-    name      String
-    createdAt DateTime @default(now())
-    updatedAt DateTime @updatedAt
-
-    createdBy   User   @relation(fields: [createdById], references: [id])
-    createdById String
-
-    @@index([name])
+enum ColumnType {
+    TEXT
+    NUMBER
 }
+
+
 
 // Necessary for Next auth
 model Account {
@@ -62,7 +57,7 @@ model User {
     image         String?
     accounts      Account[]
     sessions      Session[]
-    posts         Post[]
+    bases         Base[]
 }
 
 model VerificationToken {
@@ -71,4 +66,76 @@ model VerificationToken {
     expires    DateTime
 
     @@unique([identifier, token])
+}
+
+//for creating bases, tables and rows
+model Base {
+    id String @id @default(cuid())
+    name String
+
+    userId String
+    user         User     @relation(fields: [userId], references: [id])
+
+    tables Table[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+model Table {
+    id String @id @default(cuid())
+    name String 
+    baseId String 
+    base Base @relation(fields: [baseId], references:[id])
+
+    rows Row[]
+    columns Column[]
+    views View[]
+
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+model Column {
+  id       String     @id @default(cuid())
+  tableId  String
+  table    Table      @relation(fields: [tableId], references: [id])
+  name     String
+  type     ColumnType
+  order    Int
+  width    Int        @default(150)
+  cells    Cell[]
+}
+
+model Row {
+  id       String   @id @default(cuid())
+  tableId  String
+  table    Table    @relation(fields: [tableId], references: [id])
+  order    Int
+  cells    Cell[]
+  
+  @@index([tableId, order])
+}
+
+model Cell {
+  id       String  @id @default(cuid())
+  rowId    String
+  row      Row     @relation(fields: [rowId], references: [id])
+  columnId String
+  column   Column  @relation(fields: [columnId], references: [id])
+  value    Json?   // Store different types as JSON
+  
+  @@index([value], type: Gin) // For JSONB search
+  @@index([columnId]) // Separate B-tree index for columnId
+}
+
+model View {
+  id        String       @id @default(cuid())
+  tableId   String
+  table     Table        @relation(fields: [tableId], references: [id])
+  name      String
+  config    Json         // Stores filters, sorts, hidden columns
+  isDefault Boolean      @default(false)
+  createdAt DateTime     @default(now())
 }

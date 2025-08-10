@@ -1,15 +1,14 @@
+import { auth } from "~/server/auth";
+import { DashboardClient } from "~/app/_components/dashboard-client";
 import Image from "next/image";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-
-import { auth } from "~/server/auth";
-import { api, HydrateClient } from "~/trpc/server";
+import { HydrateClient } from "~/trpc/server";
 
 export default async function Home() {
   const session = await auth();
-
+  
   if (session?.user) {
-    redirect("/dashboard");
+    return <DashboardClient user={session.user} />;
   }
 
   return (
