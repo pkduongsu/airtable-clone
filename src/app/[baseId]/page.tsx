@@ -198,10 +198,10 @@ export default function BasePage() {
             return (
               <Input
                 type="text"
-                className={`w-full bg-transparent border-0 outline-none rounded px-1 h-auto py-1 ${
+                className={`w-full h-full bg-transparent border-0 outline-none rounded px-1  py-1 ${
                   isFocused 
                     ? 'ring-2 ring-blue-500 bg-blue-50' 
-                    : 'focus:ring-2 focus:ring-blue-500'
+                    : 'focus:ring-2 ring-blue-500 focus:ring-blue-500'
                 }`}
                 placeholder={`Enter ${column.name.toLowerCase()}`}
                 value={getValue() as string ?? ""}
