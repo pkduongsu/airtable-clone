@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Menu,
   Rocket,
-  FileText,
+  Users2,
   Upload,
   Layers,
   Search,
@@ -14,19 +14,16 @@ import {
   Home,
   Star,
   ChevronDown,
-  Share2,
-  Users,
   Plus,
   ChevronRight,
   Package,
   ShoppingCart,
-  List,
-  Grid3X3,
   Database,
-  Clock,
-  Table,
+  Grid2x2,
 } from "lucide-react";
 import Image from "next/image";
+import { api } from "~/trpc/react";
+import { CreateBaseModal } from "./CreateBaseModal";
 
 interface User {
   id: string;
@@ -44,6 +41,9 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [workspacesExpanded, setWorkspacesExpanded] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [createBaseModalOpen, setCreateBaseModalOpen] = useState(false);
+
+  const { data: bases, refetch: refetchBases } = api.base.list.useQuery();
 
   const templateCards = [
     {
@@ -57,7 +57,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
     {
       title: 'Start with templates',
       description: 'Select a template to get started and customize as you go.',
-      icon: FileText,
+      icon: Grid2x2,
       bgColor: 'bg-blue-100',
       hoverBgColor: 'hover:bg-blue-200',
       iconColor: 'text-blue-600',
@@ -80,13 +80,6 @@ export function DashboardClient({ user }: DashboardClientProps) {
     },
   ];
 
-  const recentBases = [
-    { name: 'Product roadmap', icon: Layers, time: '2 hours ago', color: 'from-pink-500 to-red-500' },
-    { name: 'Customer database', icon: Database, time: '5 hours ago', color: 'from-blue-500 to-indigo-500' },
-    { name: 'Marketing calendar', icon: Clock, time: '1 day ago', color: 'from-green-500 to-teal-500' },
-    { name: 'Sales pipeline', icon: Table, time: '3 days ago', color: 'from-purple-500 to-pink-500' },
-  ];
-
   return (
       <div className="h-screen w-screen flex flex-col bg-white">
         {/*Top Nav Bar - to be isolated to a component later */}
@@ -107,7 +100,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
                 </button>
 
                   {/* Logo */}
-                  <Link href="/dashboard" >
+                  <Link href="/" >
                     <Image
                       src="/airtable_hori.svg"
                       alt="hori_logo"
@@ -186,25 +179,25 @@ export function DashboardClient({ user }: DashboardClientProps) {
         </header>
           
       {/* Main Layout */}
-      <div className="flex flex-auto">
+      <div className="flex flex-auto relative">
         {/* Expandable Sidebar */}
         <aside 
           className={`bg-white border-r border-gray-200 transition-all duration-100 ease-in-out ${
-            sidebarExpanded ? 'w-64' : 'w-16'
-          } relative`}
+            sidebarExpanded ? 'w-80' : 'w-12'
+          } absolute left-0 top-0 bottom-0 z-10 shadow-lg`}
           onMouseEnter={() => setSidebarExpanded(true)}
           onMouseLeave={() => setSidebarExpanded(false)}
         >
-          <nav className="p-3 space-y-1">
+          <nav className="p-2 space-y-1">
             {/* Main Navigation Items */}
-            <button className="w-full flex items-center gap-3 px-3 py-2 rounded-md bg-gray-200 text-gray-900 transition-colors">
-              <Home className="h-5 w-5 flex-shrink-0" />
+            <button className="w-full flex items-center gap-3 px-1 py-2 rounded-md hover:bg-gray-200 text-gray-900 transition-colors">
+              <Home className="h-5 w-5 flex-shrink-0" strokeWidth={1.5}/>
               {sidebarExpanded && <span className="text-sm font-medium">Home</span>}
             </button>
 
             <div className="w-full">
               <button 
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-200 text-gray-700 transition-colors"
+                className="w-full flex items-center gap-3 px-1 py-2 rounded-md hover:bg-gray-200 text-gray-700 transition-colors"
                 onClick={() => sidebarExpanded && setWorkspacesExpanded(!workspacesExpanded)}
               >
                 <Star className="h-5 w-5 flex-shrink-0" />
@@ -216,22 +209,25 @@ export function DashboardClient({ user }: DashboardClientProps) {
                 )}
               </button>
               {sidebarExpanded && workspacesExpanded && (
-                <div className="ml-8 mt-1 space-y-1">
-                  <div className="px-3 py-1">
-                    <p className="text-xs text-gray-500">Your starred bases, interfaces, and workspaces will appear here</p>
+                <div className="ml-8 mt-1 space-y-1 pr-2">
+                  <div className="px-1 py-1 flex items-center">
+                    <Star className="h-5 w-5 flex-shrink-0" />
+                    <p className="text-xs text-gray-500 flex-1 text-left">Your starred bases, interfaces, and workspaces will appear here</p>
                   </div>
                 </div>
               )}
             </div>
 
-            <button className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-200 text-gray-700 transition-colors">
-              <Share2 className="h-5 w-5 flex-shrink-0" />
+            <button className="w-full flex items-center gap-3 px-1 py-2 rounded-md hover:bg-gray-200 text-gray-700 transition-colors">
+              <svg width="20" height="20" viewBox="0 0 16 16" className="flex-none text-gray-700">
+                <use fill="currentColor" href="/icons/icon_definitions.svg#Share" />
+              </svg>
               {sidebarExpanded && <span className="text-sm font-medium">Shared</span>}
             </button>
 
             <div className="w-full">
-              <button className="w-full flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-200 text-gray-700 transition-colors">
-                <Users className="h-5 w-5 flex-shrink-0" />
+              <button className="w-full flex items-center gap-3 px-1 py-2 rounded-md hover:bg-gray-200 text-gray-700 transition-colors">
+                <Users2 className="h-5 w-5 flex-shrink-0" />
                 {sidebarExpanded && (
                   <>
                     <span className="text-sm font-medium flex-1 text-left">Workspaces</span>
@@ -261,20 +257,17 @@ export function DashboardClient({ user }: DashboardClientProps) {
                 <span className="text-sm">Import</span>
               </button>
               
-              <button className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors">
+              <button className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+                      onClick={() => setCreateBaseModalOpen(true)}>
                 <Plus className="h-5 w-5" />
                 <span className="text-sm font-medium">Create</span>
               </button>
-              
-              <div className="pt-2 mt-2 border-t border-gray-300">
-                <a href="#" className="text-xs text-blue-600 hover:underline">https://airtable.com</a>
-              </div>
             </div>
           )}
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 p-8 bg-white overflow-auto">
+        <main className="flex-1 ml-16 p-8 bg-white overflow-auto">
           <div className="max-w-6xl mx-auto">
             <h1 className="text-2xl font-bold mb-6">Home</h1>
             
@@ -303,49 +296,58 @@ export function DashboardClient({ user }: DashboardClientProps) {
             {/* Recent Bases Section */}
             <section className="mb-6">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-sm font-medium text-gray-600">Recently opened</h2>
-                
-                {/* View Toggle */}
-                <div className="flex bg-white border border-gray-200 rounded-md p-0.5">
-                  <button
-                    onClick={() => setViewMode('list')}
-                    className={`px-2 py-1 rounded transition-colors ${viewMode === 'list' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
-                  >
-                    <List size={16} className="text-gray-600" />
-                  </button>
-                  <button
-                    onClick={() => setViewMode('grid')}
-                    className={`px-2 py-1 rounded transition-colors ${viewMode === 'grid' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
-                  >
-                    <Grid3X3 size={16} className="text-gray-600" />
-                  </button>
+                <h2 className="text-sm font-medium text-gray-600">Your Bases</h2>
+                <div className="flex items-center gap-4">
+                  {/* View Toggle */}
+                  <div className="flex bg-white rounded-md p-0.5">
+                    <button
+                      onClick={() => setViewMode('list')}
+                      className={`px-2 py-1 rounded-full transition-colors ${viewMode === 'list' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                    >
+                      <Menu size={16} className="text-gray-600" />
+                    </button>
+                    <button
+                      onClick={() => setViewMode('grid')}
+                      className={`px-2 py-1 rounded-full transition-colors ${viewMode === 'grid' ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                    >
+                      <Grid2x2 size={16} className="text-gray-600" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* Base Cards */}
               <div className={viewMode === 'grid' ? 'grid grid-cols-3 gap-4' : 'space-y-3'}>
-                {recentBases.slice(0, viewMode === 'grid' ? 3 : 2).map((base, index) => (
-                  <article 
-                    key={index}
-                    className="bg-white rounded-lg p-5 border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className={`w-10 h-10 bg-gradient-to-br ${base.color} rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform`}>
-                        <base.icon className="w-5 h-5 text-white" />
+                {bases?.map((base) => (
+                  <Link href={`/${base.id}`} key={base.id}>
+                    <article 
+                      className="bg-white rounded-lg p-5 border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all cursor-pointer group"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+                          <Database className="w-5 h-5 text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="font-medium text-sm mb-0.5">{base.name}</h3>
+                          <p className="text-xs text-gray-500">
+                            {base.tables.length} table{base.tables.length !== 1 ? 's' : ''}
+                          </p>
+                        </div>
                       </div>
-                      <div className="flex-1">
-                        <h3 className="font-medium text-sm mb-0.5">{base.name}</h3>
-                        <p className="text-xs text-gray-500">Opened {base.time}</p>
-                      </div>
-                    </div>
-                  </article>
+                    </article>
+                  </Link>
                 ))}
               </div>
             </section>
           </div>
         </main>
       </div>
-    </div>
 
+      <CreateBaseModal
+        open={createBaseModalOpen}
+        onOpenChange={setCreateBaseModalOpen}
+        onSuccess={refetchBases}
+      />
+    </div>
   );
 }
