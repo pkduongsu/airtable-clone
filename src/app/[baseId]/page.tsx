@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import {
   createColumnHelper,
@@ -61,6 +61,19 @@ interface TableColumn {
   width: number;
 }
 
+interface TableData {
+  id: string;
+  name: string;
+  rows: TableRow[];
+  columns: TableColumn[];
+}
+
+interface FlatRow {
+  id: string;
+  rowIndex: number;
+  [key: string]: string | number;
+}
+
 
 // Helper to get cell value for a row and column
 const getCellValue = (row: TableRow, columnId: string): string => {
@@ -74,17 +87,17 @@ const getCellValue = (row: TableRow, columnId: string): string => {
 };
 
 // Create flattened row data for TanStack Table
-const createFlattenedRows = (tableData: any) => {
+const createFlattenedRows = (tableData: TableData | undefined): FlatRow[] => {
   if (!tableData?.rows || !tableData?.columns) return [];
   
-  return tableData.rows.map((row: any, index: number) => {
-    const flatRow: any = {
+  return tableData.rows.map((row: TableRow, index: number) => {
+    const flatRow: FlatRow = {
       id: row.id,
       rowIndex: index + 1,
     };
     
     // Add each column as a property
-    tableData.columns.forEach((column: any) => {
+    tableData.columns.forEach((column: TableColumn) => {
       flatRow[column.id] = getCellValue(row, column.id);
     });
     
@@ -98,8 +111,11 @@ export default function BasePage() {
   
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState("grid");
   const [globalFilter, setGlobalFilter] = useState("");
+  
+  // Cell focus state for arrow key navigation
+  const [focusedCell, setFocusedCell] = useState<{ rowIndex: number; columnId: string } | null>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
   
   // Table state
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -132,7 +148,7 @@ export default function BasePage() {
     if (!tableData?.columns) return [];
     
     try {
-      const columnHelper = createColumnHelper<any>();
+      const columnHelper = createColumnHelper<FlatRow>();
     
     const tableColumns = [
       // Row number column
@@ -175,15 +191,27 @@ export default function BasePage() {
               </Button>
             </div>
           ),
-          cell: ({ getValue }) => (
-            <Input
-              type="text"
-              className="w-full bg-transparent border-0 outline-none focus:ring-2 focus:ring-blue-500 rounded px-1 h-auto py-1"
-              placeholder={`Enter ${column.name.toLowerCase()}`}
-              value={getValue() as string ?? ""}
-              readOnly // Make it read-only for now, can add editing later
-            />
-          ),
+          cell: ({ getValue, row }) => {
+            const rowIndex = row.original.rowIndex - 1; // Convert back to 0-based index
+            const isFocused = focusedCell?.rowIndex === rowIndex && focusedCell?.columnId === column.id;
+            
+            return (
+              <Input
+                type="text"
+                className={`w-full bg-transparent border-0 outline-none rounded px-1 h-auto py-1 ${
+                  isFocused 
+                    ? 'ring-2 ring-blue-500 bg-blue-50' 
+                    : 'focus:ring-2 focus:ring-blue-500'
+                }`}
+                placeholder={`Enter ${column.name.toLowerCase()}`}
+                value={getValue() as string ?? ""}
+                data-cell={`${rowIndex}-${column.id}`}
+                onFocus={() => setFocusedCell({ rowIndex, columnId: column.id })}
+                onBlur={() => setFocusedCell(null)}
+                readOnly // Make it read-only for now, can add editing later
+              />
+            );
+          },
           size: column.width,
           enableSorting: true,
           filterFn: "includesString",
@@ -210,15 +238,15 @@ export default function BasePage() {
       console.error('Error creating columns:', error);
       return [];
     }
-  }, [tableData?.columns]);
+  }, [tableData?.columns, focusedCell?.columnId, focusedCell?.rowIndex, setFocusedCell]);
 
   // Prepare data for the table
-  const data = useMemo(() => createFlattenedRows(tableData), [tableData]);
+  const data = useMemo(() => createFlattenedRows(tableData as TableData), [tableData]);
 
   // Create the table instance
   const table = useReactTable({
-    data: data || [],
-    columns: columns || [],
+    data: data ?? [],
+    columns: columns ?? [],
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -235,6 +263,64 @@ export default function BasePage() {
     },
   });
 
+  // Keyboard navigation handler
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!focusedCell || !tableData?.columns || !data) return;
+      
+      const { rowIndex, columnId } = focusedCell;
+      const currentColumnIndex = tableData.columns.findIndex(col => col.id === columnId);
+      const totalRows = data.length;
+      const totalColumns = tableData.columns.length;
+      
+      let newRowIndex = rowIndex;
+      let newColumnIndex = currentColumnIndex;
+      
+      switch (event.key) {
+        case 'ArrowUp':
+          event.preventDefault();
+          newRowIndex = Math.max(0, rowIndex - 1);
+          break;
+        case 'ArrowDown':
+          event.preventDefault();
+          newRowIndex = Math.min(totalRows - 1, rowIndex + 1);
+          break;
+        case 'ArrowLeft':
+          event.preventDefault();
+          newColumnIndex = Math.max(0, currentColumnIndex - 1);
+          break;
+        case 'ArrowRight':
+          event.preventDefault();
+          newColumnIndex = Math.min(totalColumns - 1, currentColumnIndex + 1);
+          break;
+        default:
+          return;
+      }
+      
+      const newColumnId = tableData.columns[newColumnIndex]!.id;
+      if (newColumnId) {
+        setFocusedCell({ rowIndex: newRowIndex, columnId: newColumnId });
+        
+        // Focus the actual input element
+        setTimeout(() => {
+          if (tableRef.current) {
+            const cellElement = tableRef.current.querySelector(
+              `[data-cell="${newRowIndex}-${newColumnId}"]`
+            );
+            if (cellElement instanceof HTMLInputElement) {
+              cellElement.focus();
+              cellElement.select();
+            }
+          }
+        }, 0);
+      }
+    };
+
+    if (focusedCell) {
+      document.addEventListener('keydown', handleKeyDown);
+      return () => document.removeEventListener('keydown', handleKeyDown);
+    }
+  }, [focusedCell, tableData?.columns, data]);
 
   // Early return if no selected table
   if (!selectedTable || !tableData) {
@@ -261,7 +347,7 @@ export default function BasePage() {
                 <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
             </div>
-            <span className="text-base font-semibold">{base?.name || "Loading..."}</span>
+            <span className="text-base font-semibold">{base?.name ?? "Loading..."}</span>
           </div>
 
           {/* Center Tabs */}
@@ -343,9 +429,9 @@ export default function BasePage() {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
-            <DropdownMenuItem onClick={() => setActiveView("grid")}>Grid view</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setActiveView("gallery")}>Gallery view</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setActiveView("kanban")}>Kanban view</DropdownMenuItem>
+            <DropdownMenuItem>Grid view</DropdownMenuItem>
+            <DropdownMenuItem>Gallery view</DropdownMenuItem>
+            <DropdownMenuItem>Kanban view</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -372,7 +458,7 @@ export default function BasePage() {
                     onChange={() => column.toggleVisibility()}
                     className="mr-2"
                   />
-                  {column.columnDef.header as string || column.id}
+                  {(column.columnDef.header as string) ?? column.id}
                 </DropdownMenuItem>
               ))}
           </DropdownMenuContent>
@@ -418,7 +504,7 @@ export default function BasePage() {
             <DropdownMenuItem onClick={() => setSorting([])}>
               Clear all sorting
             </DropdownMenuItem>
-            {sorting.map((sort, index) => (
+            {sorting.map((sort) => (
               <DropdownMenuItem key={sort.id}>
                 {sort.id}: {sort.desc ? "Descending" : "Ascending"}
               </DropdownMenuItem>
@@ -450,7 +536,7 @@ export default function BasePage() {
       </div>
 
       {/* Main Table Content */}
-      <div className="flex-1 bg-white overflow-hidden">
+      <div className="flex-1 bg-white overflow-hidden" ref={tableRef}>
         <div className="h-full border-l border-gray-200">
           <div className="overflow-auto h-full">
             <table className="w-full">
@@ -514,7 +600,7 @@ export default function BasePage() {
         {/* Bottom Status Bar */}
         <div className="h-8 border-t border-gray-200 bg-gray-50 flex items-center px-4">
           <span className="text-xs text-gray-500">
-            {table.getFilteredRowModel().rows.length} of {data.length} records
+            {table.getFilteredRowModel().rows.length} of {data?.length ?? 0} records
             {globalFilter && ` (filtered)`}
             {sorting.length > 0 && ` (sorted)`}
           </span>

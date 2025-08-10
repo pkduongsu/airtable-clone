@@ -3,7 +3,6 @@ import { faker } from "@faker-js/faker";
 
 import {  createTRPCRouter,
   protectedProcedure,
-  publicProcedure,
 } from "~/server/api/trpc";
 
 //CRUD
