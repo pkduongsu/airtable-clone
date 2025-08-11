@@ -1,5 +1,5 @@
 import { auth } from "~/server/auth";
-import { DashboardClient } from "~/app/_components/dashboard-client";
+import { DashboardClient } from "~/app/_components/DashboardClient";
 import Image from "next/image";
 import Link from "next/link";
 import { HydrateClient } from "~/trpc/server";

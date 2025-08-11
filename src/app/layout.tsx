@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 
 const geist = Geist({
   subsets: ["latin"],
-  variable: "--font-geist-sans",
+  variable: "--font-family-system",
 });
 
 export default function RootLayout({
