@@ -7,7 +7,7 @@ import {  createTRPCRouter,
 export const baseRouter = createTRPCRouter({
     create: protectedProcedure
     .input(z.object({
-      name: z.string().min(1).max(255),
+      name: z.string().min(1).max(255).default("Untitled Base"),
       createSampleTable: z.boolean().default(true),
     }))
     .mutation(async ({ ctx, input }) => {

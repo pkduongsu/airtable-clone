@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import {
   createColumnHelper,
   flexRender,
@@ -38,6 +39,10 @@ import {
   History,
   ChevronUp,
 } from "lucide-react";
+import AirtableBase from "../_components/icons/AirtableBase";
+import LeftArrow from "../_components/icons/LeftArrow";
+import Question from "../_components/icons/Question";
+import Bell from "../_components/icons/Bell";
 
 // Types for our table data
 interface TableCell {
@@ -334,20 +339,71 @@ export default function BasePage() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-white">
-      {/* Top Navigation Bar */}
-      <header className="h-12 border-b border-gray-200 flex items-center px-4 bg-white">
+    <div className="h-screen flex bg-gray-50">
+      {/* Sidebar */}
+      <aside className="w-[56px] bg-white border-r border-gray-200 flex flex-col items-center justify-between py-4 px-2">
+        <div className="h-full flex flex-col py-2 px-1">
+          {/* Top section */}
+          <div className="flex flex-col items-center gap-2">
+            <div className="flex items-center">
+              <Link href="/" className="flex flex-none relative group">
+                {/* AirtableBase - visible by default, hidden on hover */}
+                <div className="group-hover:opacity-0 group-hover:scale-75 transition-all duration-200 ease-in-out">
+                  <AirtableBase />
+                </div>
+                
+                {/* Left Arrow - hidden by default, visible on hover */}
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 scale-125 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-in-out">
+                  <LeftArrow />
+                </div>
+              </Link>
+            </div>
+
+            {/* Omni Icon - TODO */}
+            <div className="px-1">
+              <div>
+                <div className="flex h-full rounded-full">
+                  <div className="flex h-full items-center justify-center rounded-full focus:outline-white text-purple-600">
+
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Spacer to push bottom content down */}
+          <div className="flex-1"></div>
+          
+          {/* Bottom buttons */}
+          <div className="flex flex-col items-center gap-1.5">
+            <div 
+              role="button" 
+              className="w-7 h-7 rounded-full hover:bg-gray-100 focus:outline-none flex items-center justify-center cursor-pointer transition-colors"
+            >
+              <Question size={16} className="flex-shrink-0 text-gray-700" />
+            </div>
+            <div
+              role="button"
+              className="p-1.5 rounded-full hover:bg-gray-100 cursor-pointer transition-all relative">
+              <Bell size={16} className="text-gray-600" />
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col">
+        {/* Top Navigation Bar */}
+        <header className="h-16 border-b border-gray-200 flex items-center justify-center px-4 bg-white">
         <div className="flex items-center gap-3 flex-1">
           {/* Base Icon and Name */}
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-pink-500 to-red-500 rounded-lg flex items-center justify-center">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-white">
-                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 17L12 22L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M2 12L12 17L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
+            <div className="w-8 h-8 bg-[#63498d] border rounded-sm flex items-center justify-center">
+              <div className="relative top-0.5">
+                <AirtableBase color="hsla(0, 0%, 100%, 0.95)" />
+              </div>
             </div>
-            <span className="text-base font-semibold">{base?.name ?? "Loading..."}</span>
+            <span className="text-base font-family-inter">{base?.name ?? "Loading..."}</span>
           </div>
 
           {/* Center Tabs */}
@@ -373,7 +429,7 @@ export default function BasePage() {
       </header>
 
       {/* Table Tabs Bar */}
-      <div className="h-10 border-b border-gray-200 flex items-center px-4 bg-gray-50">
+      <div className="h-10 border-b border-gray-200 flex items-center px-4">
         <div className="flex items-center gap-1">
           {/* Table Tabs */}
           {tables?.map((table) => (
@@ -605,18 +661,19 @@ export default function BasePage() {
             {sorting.length > 0 && ` (sorted)`}
           </span>
         </div>
-      </div>
+        </div>
 
-      {/* Create Table Modal */}
-      <CreateTableModal
-        baseId={baseId}
-        open={createModalOpen}
-        onOpenChange={setCreateModalOpen}
-        onSuccess={() => {
-          void refetchTables();
-          void refetchTableData();
-        }}
-      />
+        {/* Create Table Modal */}
+        <CreateTableModal
+          baseId={baseId}
+          open={createModalOpen}
+          onOpenChange={setCreateModalOpen}
+          onSuccess={() => {
+            void refetchTables();
+            void refetchTableData();
+          }}
+        />
+      </div>
     </div>
   );
 }
