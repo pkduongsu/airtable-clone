@@ -27,7 +27,6 @@ import {
 import { Input } from "~/components/ui/input";
 import { 
   Plus, 
-  ChevronDown,
   Grid3X3,
   Eye,
   Filter,
@@ -43,6 +42,7 @@ import AirtableBase from "../_components/icons/AirtableBase";
 import LeftArrow from "../_components/icons/LeftArrow";
 import Question from "../_components/icons/Question";
 import Bell from "../_components/icons/Bell";
+import ChevronDown from "../_components/icons/ChevronDown"
 
 // Types for our table data
 interface TableCell {
@@ -398,12 +398,12 @@ export default function BasePage() {
         <div className="flex items-center gap-3 flex-1">
           {/* Base Icon and Name */}
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-[#63498d] border rounded-sm flex items-center justify-center">
+            <div className="w-[32px] h-[32px] bg-[#63498d] border rounded-[6px] flex items-center justify-center">
               <div className="relative top-0.5">
                 <AirtableBase color="hsla(0, 0%, 100%, 0.95)" />
               </div>
             </div>
-            <span className="text-base font-family-inter">{base?.name ?? "Loading..."}</span>
+            <span className="text-[17px] leading-[24px] font-[675] text-[#1d1f25] font-family-inter">{base?.name ?? "Loading..."}</span>
           </div>
 
           {/* Center Tabs */}
