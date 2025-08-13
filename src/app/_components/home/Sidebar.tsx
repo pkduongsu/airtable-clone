@@ -113,7 +113,7 @@ export function Sidebar({
           </button>
           
           <button 
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 mt-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
+            className="w-full cursor-pointer flex items-center justify-center gap-2 px-3 py-2 mt-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors"
             onClick={onCreateClick}
           >
             <Plus className="h-5 w-5" />

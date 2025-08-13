@@ -92,7 +92,6 @@ model Table {
     columns Column[]
     views View[]
 
-
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
 }

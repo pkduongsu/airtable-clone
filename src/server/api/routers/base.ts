@@ -20,19 +20,52 @@ export const baseRouter = createTRPCRouter({
 
       // Optionally create a sample table
       if (input.createSampleTable) {
-        await ctx.db.table.create({
+        const table = await ctx.db.table.create({
           data: {
             name: "Table 1",
             baseId: base.id,
             columns: {
               create: [
-                { name: "Name", type: "TEXT", order: 0, width: 300 },
-                { name: "Notes", type: "TEXT", order: 1, width: 200 },
-                { name: "Assignee", type: "TEXT", order: 2, width: 200 },
-                { name: "Priority", type: "NUMBER", order: 3, width: 150 },
+                { name: "Name", type: "TEXT", order: 0, width: 200 },
+                { name: "Notes", type: "TEXT", order: 1, width: 250 },
+                { name: "Assignee", type: "TEXT", order: 2, width: 150 },
+                { name: "Status", type: "TEXT", order: 3, width: 120 },
+                { name: "Attachments", type: "TEXT", order: 4, width: 150 },
+                { name: "Attachment Summary", type: "TEXT", order: 5, width: 200 },
               ],
             },
           },
+          include: {
+            columns: true,
+          },
+        });
+
+        // Create 3 empty rows with empty cells
+        const rows = [];
+        const cells = [];
+
+        for (let i = 0; i < 3; i++) {
+          const row = await ctx.db.row.create({
+            data: {
+              tableId: table.id,
+              order: i,
+            },
+          });
+          rows.push(row);
+
+          // Create empty cells for each column
+          for (const column of table.columns) {
+            cells.push({
+              rowId: row.id,
+              columnId: column.id,
+              value: { text: "" }, // Empty text value
+            });
+          }
+        }
+
+        // Bulk insert empty cells
+        await ctx.db.cell.createMany({
+          data: cells,
         });
       }
 
@@ -63,10 +96,13 @@ export const baseRouter = createTRPCRouter({
           userId: ctx.session.user.id,
         },
         include: {
-          tables: true,
+          tables: {
+            orderBy: { name: "asc" },
+          },
         },
       });
     }),
+
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))

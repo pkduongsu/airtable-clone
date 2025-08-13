@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "~/trpc/react";
 import { Navbar } from "./home/Navbar";
 import { Sidebar } from "./home/Sidebar";
@@ -19,6 +20,7 @@ interface DashboardClientProps {
 }
 
 export function DashboardClient({ user }: DashboardClientProps) {
+  const router = useRouter();
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [sidebarExpandedButton, setSidebarExpandedButton] = useState(false);
   const [starredExpanded, setStarredExpanded] = useState(false);
@@ -48,12 +50,21 @@ export function DashboardClient({ user }: DashboardClientProps) {
     }
   };
 
+  const utils = api.useUtils();
   const { data: bases, refetch: refetchBases } = api.base.list.useQuery();
   const deleteBaseMutation = api.base.delete.useMutation();
-  //reload instantly after a base creation
   const createBaseMutation = api.base.create.useMutation({
-    onSuccess: () => {
-      void refetchBases();
+    onSuccess: (newBase) => {
+      // Add the new base to the cache so it appears when user navigates back
+      utils.base.list.setData(undefined, (oldData) => {
+        const baseWithTables = {
+          ...newBase,
+          tables: [{ id: "temp", name: "Table 1" }] // Matches the sample table created
+        };
+        if (!oldData) return [baseWithTables];
+        return [baseWithTables, ...oldData];
+      });
+      router.push(`/${newBase.id}`);
     },
   });
 

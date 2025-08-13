@@ -77,7 +77,7 @@ export function Navbar({ user, onMenuClick }: NavbarProps) {
         </div>
         
         {/* Search Bar */}
-        <div className="flex w-[340px] relative"> 
+        <div className="flex w-[340px] relative border-0"> 
           <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
             <Search 
               className="text-black-400 pointer-events-none"
@@ -87,7 +87,7 @@ export function Navbar({ user, onMenuClick }: NavbarProps) {
             <input
               type="text"
               placeholder="Search..."
-              className="w-full pl-9 pr-16 py-1.5 bg-white-50 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-colors border border-gray-200"
+              className="w-full pl-9 pr-16 py-1.5 bg-white-50 rounded-2xl text-sm focus:outline-none  focus:bg-white transition-colors border-border-default shadow-at-main-nav"
             />
             <kbd className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none inline-flex items-center px-1.5 py-0.5 rounded border bg-none font-family-system font-[400] leading-[20px] border-none">
               <span className="text-[#979aa0] text-[13px]">ctrl K</span>
