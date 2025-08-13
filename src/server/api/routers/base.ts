@@ -67,4 +67,67 @@ export const baseRouter = createTRPCRouter({
         },
       });
     }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      // Verify the base belongs to the user before deleting
+      const base = await ctx.db.base.findFirst({
+        where: {
+          id: input.id,
+          userId: ctx.session.user.id,
+        },
+      });
+
+      if (!base) {
+        throw new Error("Base not found or you don't have permission to delete it");
+      }
+
+      // Delete in the correct order due to foreign key constraints
+      // First, delete all cells, then rows, columns, views, and finally tables
+      const tables = await ctx.db.table.findMany({
+        where: { baseId: input.id },
+        select: { id: true }
+      });
+
+      for (const table of tables) {
+        // Delete cells
+        await ctx.db.cell.deleteMany({
+          where: {
+            row: {
+              tableId: table.id
+            }
+          }
+        });
+
+        // Delete rows
+        await ctx.db.row.deleteMany({
+          where: { tableId: table.id }
+        });
+
+        // Delete columns
+        await ctx.db.column.deleteMany({
+          where: { tableId: table.id }
+        });
+
+        // Delete views
+        await ctx.db.view.deleteMany({
+          where: { tableId: table.id }
+        });
+
+        // Delete the table
+        await ctx.db.table.delete({
+          where: { id: table.id }
+        });
+      }
+
+      // Finally, delete the base
+      await ctx.db.base.delete({
+        where: {
+          id: input.id,
+        },
+      });
+
+      return { success: true };
+    }),
 })
