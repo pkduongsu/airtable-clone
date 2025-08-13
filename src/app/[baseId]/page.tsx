@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
+import { useSession } from "next-auth/react";
 import {
   createColumnHelper,
   flexRender,
@@ -17,7 +17,6 @@ import {
 import { api } from "~/trpc/react";
 import { CreateTableModal } from "../_components/CreateTableModal";
 import { Button } from "~/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,14 +34,12 @@ import {
   Palette,
   Share2,
   Search,
-  History,
   ChevronUp,
 } from "lucide-react";
-import AirtableBase from "../_components/icons/AirtableBase";
-import LeftArrow from "../_components/icons/LeftArrow";
-import Question from "../_components/icons/Question";
-import Bell from "../_components/icons/Bell";
-import ChevronDown from "../_components/icons/ChevronDown"
+import ChevronDown from "../_components/icons/ChevronDown";
+import { BaseSidebar } from "../_components/base/BaseSidebar";
+import { BaseNavBar } from "../_components/base/BaseNavBar";
+import { TableTabsBar } from "../_components/base/TableTabsBar";
 
 // Types for our table data
 interface TableCell {
@@ -80,6 +77,7 @@ interface FlatRow {
 }
 
 
+
 // Helper to get cell value for a row and column
 const getCellValue = (row: TableRow, columnId: string): string => {
   const cell = row.cells.find(c => c.columnId === columnId);
@@ -111,8 +109,11 @@ const createFlattenedRows = (tableData: TableData | undefined): FlatRow[] => {
 };
 
 export default function BasePage() {
+  const { data: session } = useSession();
   const params = useParams();
   const baseId = params?.baseId as string;
+  
+  const user = session?.user;
   
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
@@ -143,10 +144,82 @@ export default function BasePage() {
     { enabled: !!selectedTable }
   );
 
-  // Select first table by default
-  if (tables && tables.length > 0 && !selectedTable) {
-    setSelectedTable(tables[0]!.id);
-  }
+  const createTableMutation = api.table.create.useMutation();
+  const updateTableMutation = api.table.update.useMutation();
+  const deleteTableMutation = api.table.delete.useMutation();
+
+  const handleCreateTable = async () => {
+    try {
+      const tableNumber = (tables?.length ?? 0) + 1;
+      const newTable = await createTableMutation.mutateAsync({
+        baseId,
+        name: `Table ${tableNumber}`,
+        generateSampleData: true,
+      });
+      
+      // Refetch tables to include the new table
+      await refetchTables();
+      
+      // Select the newly created table
+      setSelectedTable(newTable.id);
+      
+      // Refetch table data for the new table
+      await refetchTableData();
+    } catch (error) {
+      console.error('Failed to create table:', error);
+      throw error;
+    }
+  };
+
+  const handleRenameTable = async (tableId: string, newName: string) => {
+    try {
+      await updateTableMutation.mutateAsync({
+        id: tableId,
+        name: newName,
+      });
+      
+      // Refetch tables to reflect the new name
+      await refetchTables();
+    } catch (error) {
+      console.error('Failed to rename table:', error);
+      throw error;
+    }
+  };
+
+  const handleDeleteTable = async (tableId: string) => {
+    try {
+      // Prevent deleting the last table
+      if (tables && tables.length <= 1) {
+        throw new Error("Cannot delete the last table in the base");
+      }
+
+      await deleteTableMutation.mutateAsync({
+        id: tableId,
+      });
+      
+      // If the deleted table was selected, select the first remaining table
+      if (selectedTable === tableId) {
+        const remainingTables = tables?.filter(t => t.id !== tableId) ?? [];
+        if (remainingTables.length > 0) {
+          setSelectedTable(remainingTables[0]!.id);
+        }
+      }
+      
+      // Refetch tables to reflect the deletion
+      await refetchTables();
+    } catch (error) {
+      console.error('Failed to delete table:', error);
+      throw error;
+    }
+  };
+
+  // Select first table when tables are loaded
+  useEffect(() => {
+    if (tables && tables.length > 0 && !selectedTable) {
+      setSelectedTable(tables[0]!.id);
+    }
+  }, [tables, selectedTable]);
+
 
   // Create columns for TanStack Table
   const columns = useMemo(() => {
@@ -327,7 +400,18 @@ export default function BasePage() {
     }
   }, [focusedCell, tableData?.columns, data]);
 
-  // Early return if no selected table
+  // Early return if no session or no selected table
+  if (!session || !user) {
+    return (
+      <div className="h-screen flex flex-col bg-white">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-gray-500">Loading session...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading only if we have a table selected but no data yet
   if (!selectedTable || !tableData) {
     return (
       <div className="h-screen flex flex-col bg-white">
@@ -340,142 +424,23 @@ export default function BasePage() {
 
   return (
     <div className="h-screen flex bg-gray-50">
-      {/* Sidebar */}
-      <aside className="w-[56px] bg-white border-r border-gray-200 flex flex-col items-center justify-between py-4 px-2">
-        <div className="h-full flex flex-col py-2 px-1">
-          {/* Top section */}
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center">
-              <Link href="/" className="flex flex-none relative group">
-                {/* AirtableBase - visible by default, hidden on hover */}
-                <div className="group-hover:opacity-0 group-hover:scale-75 transition-all duration-200 ease-in-out">
-                  <AirtableBase />
-                </div>
-                
-                {/* Left Arrow - hidden by default, visible on hover */}
-                <div className="absolute inset-0 flex items-center justify-center opacity-0 scale-125 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-in-out">
-                  <LeftArrow />
-                </div>
-              </Link>
-            </div>
-
-            {/* Omni Icon - TODO */}
-            <div className="px-1">
-              <div>
-                <div className="flex h-full rounded-full">
-                  <div className="flex h-full items-center justify-center rounded-full focus:outline-white text-purple-600">
-
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          {/* Spacer to push bottom content down */}
-          <div className="flex-1"></div>
-          
-          {/* Bottom buttons */}
-          <div className="flex flex-col items-center gap-1.5">
-            <div 
-              role="button" 
-              className="w-7 h-7 rounded-full hover:bg-gray-100 focus:outline-none flex items-center justify-center cursor-pointer transition-colors"
-            >
-              <Question size={16} className="flex-shrink-0 text-gray-700" />
-            </div>
-            <div
-              role="button"
-              className="p-1.5 rounded-full hover:bg-gray-100 cursor-pointer transition-all relative">
-              <Bell size={16} className="text-gray-600" />
-            </div>
-          </div>
-        </div>
-      </aside>
+      <BaseSidebar user={user} />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
-        {/* Top Navigation Bar */}
-        <header className="h-16 border-b border-gray-200 flex items-center justify-center px-4 bg-white">
-        <div className="flex items-center gap-3 flex-1">
-          {/* Base Icon and Name */}
-          <div className="flex items-center gap-2">
-            <div className="w-[32px] h-[32px] bg-[#63498d] border rounded-[6px] flex items-center justify-center">
-              <div className="relative top-0.5">
-                <AirtableBase color="hsla(0, 0%, 100%, 0.95)" />
-              </div>
-            </div>
-            <span className="text-[17px] leading-[24px] font-[675] text-[#1d1f25] font-family-inter">{base?.name ?? "Loading..."}</span>
-          </div>
+      <div className="box-border flex flex-col flex-auto h-full [--omni-app-frame-min-width:600px] [--omni-app-frame-transition-duration:300ms] bg-white ">
+        <BaseNavBar base={base} />
 
-          {/* Center Tabs */}
-          <div className="flex-1 flex justify-center">
-            <Tabs defaultValue="data" className="w-auto">
-              <TabsList className="h-12 bg-transparent border-0 p-0">
-                <TabsTrigger value="data" className="rounded-none px-4">Data</TabsTrigger>
-                <TabsTrigger value="automations" className="rounded-none px-4">Automations</TabsTrigger>
-                <TabsTrigger value="interfaces" className="rounded-none px-4">Interfaces</TabsTrigger>
-                <TabsTrigger value="forms" className="border-none rounded-none px-4">Forms</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-
-          {/* Right Side Actions */}
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" className="h-8 w-8">
-              <History className="h-4 w-4" />
-            </Button>
-            <Button className="h-8 px-3 bg-red-600 hover:bg-pink-700">Share</Button>
-          </div>
-        </div>
-      </header>
-
-      {/* Table Tabs Bar */}
-      <div className="h-10 border-b border-gray-200 flex items-center px-4">
-        <div className="flex items-center gap-1">
-          {/* Table Tabs */}
-          {tables?.map((table) => (
-            <Button
-              key={table.id}
-              variant={selectedTable === table.id ? "secondary" : "ghost"}
-              size="sm"
-              className="h-7 px-3"
-              onClick={() => setSelectedTable(table.id)}
-            >
-              {table.name}
-              <ChevronDown className="ml-1 h-3 w-3" />
-            </Button>
-          ))}
-
-          {/* Add Table Button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2"
-            onClick={() => setCreateModalOpen(true)}
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            Add or import
-          </Button>
-        </div>
-
-        <div className="ml-auto">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7">
-                Tools
-                <ChevronDown className="ml-1 h-3 w-3" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem>Extensions</DropdownMenuItem>
-              <DropdownMenuItem>Automations</DropdownMenuItem>
-              <DropdownMenuItem>Scripts</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
+        <TableTabsBar 
+          tables={tables}
+          selectedTable={selectedTable}
+          onSelectTable={setSelectedTable}
+          onCreateTable={handleCreateTable}
+          onRenameTable={handleRenameTable}
+          onDeleteTable={handleDeleteTable}
+        />
 
       {/* Toolbar */}
-      <div className="h-12 border-b border-gray-200 flex items-center px-4 gap-2">
+      <div className="h-12 border-b border-gray-200 flex items-center px-4 gap-2 min-w-[600px] ">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="h-8">
@@ -651,8 +616,7 @@ export default function BasePage() {
               </tbody>
             </table>
           </div>
-        </div>
-
+          
         {/* Bottom Status Bar */}
         <div className="h-8 border-t border-gray-200 bg-gray-50 flex items-center px-4">
           <span className="text-xs text-gray-500">
@@ -662,6 +626,7 @@ export default function BasePage() {
           </span>
         </div>
         </div>
+      </div>
 
         {/* Create Table Modal */}
         <CreateTableModal

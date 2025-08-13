@@ -1,5 +1,4 @@
 import z from "zod";
-import { faker } from "@faker-js/faker";
 
 import {  createTRPCRouter,
   protectedProcedure,
@@ -30,28 +29,34 @@ export const tableRouter = createTRPCRouter({
                 width: 200,
               },
               {
-                name: "Email",
+                name: "Notes",
                 type: "TEXT", 
                 order: 1,
                 width: 250,
               },
               {
-                name: "Age",
-                type: "NUMBER",
+                name: "Assignee",
+                type: "TEXT",
                 order: 2,
-                width: 100,
+                width: 150,
               },
               {
                 name: "Status",
                 type: "TEXT",
                 order: 3,
+                width: 120,
+              },
+              {
+                name: "Attachments",
+                type: "TEXT",
+                order: 4,
                 width: 150,
               },
               {
-                name: "Score",
-                type: "NUMBER",
-                order: 4,
-                width: 120,
+                name: "Attachment Summary",
+                type: "TEXT",
+                order: 5,
+                width: 200,
               },
             ],
           },
@@ -61,13 +66,13 @@ export const tableRouter = createTRPCRouter({
         },
       });
 
-      // Generate sample data if requested
+      // Generate empty rows if requested
       if (input.generateSampleData) {
         const rows = [];
         const cells = [];
 
-        // Create 100 sample rows
-        for (let i = 0; i < 100; i++) {
+        // Create 3 empty rows
+        for (let i = 0; i < 3; i++) {
           const row = await ctx.db.row.create({
             data: {
               tableId: table.id,
@@ -76,44 +81,74 @@ export const tableRouter = createTRPCRouter({
           });
           rows.push(row);
 
-          // Create cells for each column
+          // Create empty cells for each column
           for (const column of table.columns) {
-            let value;
-            
-            switch (column.name) {
-              case "Name":
-                value = { text: faker.person.fullName() };
-                break;
-              case "Email":
-                value = { text: faker.internet.email() };
-                break;
-              case "Age":
-                value = { number: faker.number.int({ min: 18, max: 80 }) };
-                break;
-              case "Status":
-                value = { text: faker.helpers.arrayElement(["Active", "Pending", "Inactive"]) };
-                break;
-              case "Score":
-                value = { number: faker.number.float({ min: 0, max: 100 }) };
-                break;
-              default:
-                value = { text: faker.lorem.word() };
-            }
-
             cells.push({
               rowId: row.id,
               columnId: column.id,
-              value,
+              value: { text: "" }, // Empty text value
             });
           }
         }
 
-        // Bulk insert cells
+        // Bulk insert empty cells
         await ctx.db.cell.createMany({
           data: cells,
         });
       }
 
+      return table;
+    }),
+
+  update: protectedProcedure
+    .input(z.object({
+      id: z.string(),
+      name: z.string().min(1).max(255),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const table = await ctx.db.table.update({
+        where: { id: input.id },
+        data: { name: input.name },
+      });
+      return table;
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({
+      id: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Delete all related data in the correct order due to foreign key constraints
+      
+      // First, delete all cells
+      await ctx.db.cell.deleteMany({
+        where: {
+          row: {
+            tableId: input.id
+          }
+        }
+      });
+
+      // Then, delete all rows
+      await ctx.db.row.deleteMany({
+        where: { tableId: input.id }
+      });
+
+      // Delete all columns
+      await ctx.db.column.deleteMany({
+        where: { tableId: input.id }
+      });
+
+      // Delete all views
+      await ctx.db.view.deleteMany({
+        where: { tableId: input.id }
+      });
+
+      // Finally, delete the table
+      const table = await ctx.db.table.delete({
+        where: { id: input.id },
+      });
+      
       return table;
     }),
 
@@ -146,7 +181,7 @@ export const tableRouter = createTRPCRouter({
             select: { rows: true },
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { name: "asc" },
       });
     }),
 

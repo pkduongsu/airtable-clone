@@ -7,7 +7,8 @@
 
 @theme {
   --font-family-system: -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
-  --font-family-inter: 'Inter Display', -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --font-family-inter: 'Inter', -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
+  --font-family-inter-updated: 'Inter', -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
   --breakpoint-xxl: 1460px;
 }
 
@@ -48,6 +49,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-grey-25: var(--palette-gray-gray25);
+  --color-border-default : var(--border-default);
 }
 
 .shadow-at-main-nav {
@@ -64,10 +66,26 @@
               0px 2px 8px 0px rgba(0, 0, 0, 0.08);
 }
 
+.shadow-table {
+  box-shadow: 0px 0px 1px rgba(0, 0, 0, 0.32), 
+              0px 0px 2px rgba(0, 0, 0, 0.08), 
+              0px 1px 3px rgba(0, 0, 0, 0.08);
+  transition: box-shadow 0.2s ease;
+}
+
+
 .heading-primary {
   font-family: var(--font-family-inter);
   color: #1d1f25;
   font-weight: 675;
+}
+
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
 }
 
 :root {
@@ -104,6 +122,7 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
   --palette-gray-gray25: rgb(249, 250, 251);
+  --border-default: rgba(0, 0, 0, 0.1);
 }
 
 .dark {
