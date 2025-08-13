@@ -1,9 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-import {
-  Trash2,
-} from "lucide-react";
 import { api } from "~/trpc/react";
 import { Navbar } from "./home/Navbar";
 import { Sidebar } from "./home/Sidebar";
@@ -53,9 +50,10 @@ export function DashboardClient({ user }: DashboardClientProps) {
 
   const { data: bases, refetch: refetchBases } = api.base.list.useQuery();
   const deleteBaseMutation = api.base.delete.useMutation();
+  //reload instantly after a base creation
   const createBaseMutation = api.base.create.useMutation({
     onSuccess: () => {
-      refetchBases();
+      void refetchBases();
     },
   });
 
