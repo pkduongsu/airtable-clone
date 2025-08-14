@@ -88,7 +88,7 @@ export function TableTabsBar({
 
   return (
     <div className="relative print:hidden">
-      <div className="flex relative z-1 bg-[#FCF3FF] transition-[width] duration-300 ease-in-out w-[calc(100vw-56px)] h-8">
+      <div className="flex relative z-1 bg-[#FCF3FF] transition-[width] duration-300 ease-in-out w-[calc(100vw-56px)] h-8 mb-[-1px]">
         <div className="flex flex-auto relative">
           <div className="absolute inset-0">
             <div className="flex flex-auto overflow-auto scrollbar-hidden pt-1 pl-1 -mt-1 -ml-1">
@@ -96,9 +96,11 @@ export function TableTabsBar({
                 <div className="flex h-[32px]">
                   {tables?.map((table) => (
                     <div key={table.id} className="flex relative flex-none">
-                      <div className={`flex flex-auto relative focus-within:outline-none  border-r focus-within:ring-2 rounded-tr-[3px] cursor-pointer font-bold transition-colors duration-200 ${
+                      <div 
+                        data-tab-id={table.id}
+                        className={`flex flex-auto relative focus-within:outline-none  border-r focus-within:ring-2 rounded-tr-[3px] cursor-pointer font-bold transition-colors duration-200 ${
                         selectedTable === table.id 
-                          ? 'bg-white shadow-table' 
+                          ? 'bg-white z-30 h-[33px] border-b-0' 
                           : 'bg-[#FCF3FF] hover:bg-gray-200'
                       }`}>
                         <div>
