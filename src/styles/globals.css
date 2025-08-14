@@ -10,6 +10,7 @@
   --font-family-inter: 'Inter', -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
   --font-family-inter-updated: 'Inter', -apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol';
   --breakpoint-xxl: 1460px;
+  --grid-area-sub-header: sub-header;
 }
 
 @theme inline {
@@ -86,6 +87,15 @@
 }
 .scrollbar-hidden::-webkit-scrollbar {
   display: none;
+}
+
+.toolbar-button {
+  background-color: white;
+  border-radius: 3px;
+}
+
+.toolbar-button:hover {
+  background-color: #0000000d;
 }
 
 :root {
