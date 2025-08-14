@@ -5,7 +5,7 @@ import ChevronDown from "../icons/ChevronDown";
 import AirtableBase from "../icons/AirtableBase";
 import ClockCounterClockwise from "../icons/ClockCounterClockwise";
 
-interface BaseNavBarProps {
+interface NavBarProps {
   base?: {
     id: string;
     name: string;
@@ -22,7 +22,7 @@ interface BaseNavBarProps {
   } | null;
 }
 
-export function BaseNavBar({ base } : BaseNavBarProps) {
+export function NavBar({ base } : NavBarProps) {
   const [selectedTab, setSelectedTab] = useState("Data");
   
   const tabs = ["Data", "Automations", "Interfaces", "Forms"];

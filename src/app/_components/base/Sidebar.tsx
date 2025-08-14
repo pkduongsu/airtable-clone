@@ -18,12 +18,12 @@ interface User {
   image?: string | null;
 }
 
-interface BaseSideBarProps {
+interface SideBarProps {
   user: User;
 }
 
 
-export function BaseSidebar({user} : BaseSideBarProps) {
+export function Sidebar({user} : SideBarProps) {
 
   const [accountOpen, setAccountOpen] = useState(false);
 
