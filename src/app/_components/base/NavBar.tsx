@@ -28,7 +28,7 @@ export function NavBar({ base } : NavBarProps) {
   const tabs = ["Data", "Automations", "Interfaces", "Forms"];
   
   return (
-    <header className="h-[57px] border-b box-border border-border-default print:hidden bg-white">
+    <header className="h-[64.26px] border-b-0 print:hidden bg-white" style={{borderBottom: '1px solid var(--border-default)'}}>
         <div className="flex h-full gap-2 min-w-[600px] justify-between">
             {/* Base Icon and Name */}
             <div className="flex pl-4 bg-white overflow-hidden h-full">

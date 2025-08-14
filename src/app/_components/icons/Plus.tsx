@@ -9,7 +9,7 @@ export default function Omni({className, size, color} : PlusIconProps) {
        <svg 
             width={size} 
             height={size} 
-            viewBox="0 0 18 18" 
+            viewBox="0 0 16 16" 
             className={className}
             xmlns="http://www.w3.org/2000/svg"
             >

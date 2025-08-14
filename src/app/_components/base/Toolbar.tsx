@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import List from "../icons/List";
 import GridFeature from "../icons/GridFeature";
 import ChevronDown from "../icons/ChevronDown";
@@ -6,11 +7,50 @@ import FunnelSimple from "../icons/FunnelSimple";
 import Group from "../icons/Group";
 import ArrowsDownUp from "../icons/ArrowsDownUp";
 import PaintBucket from "../icons/PaintBucket";
+import RowHeightSmall from "../icons/RowHeightSmall";
+import ArrowSquareOut from "../icons/ArrowSquareOut";
+import MagnifyingGlass from "../icons/MagnifyingGlass";
 
-export default function Toolbar() {
+interface ToolbarProps {
+  selectedTable?: string | null;
+  tables?: Array<{ id: string; name: string; }>;
+}
+
+export default function Toolbar({ selectedTable, tables: _tables }: ToolbarProps) {
+  const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
+  
+  useEffect(() => {
+    if (selectedTable) {
+      // Find the selected tab element and measure it
+      const selectedTabElement = document.querySelector(`[data-tab-id="${selectedTable}"]`);
+      if (selectedTabElement) {
+        const rect = selectedTabElement.getBoundingClientRect();
+        const containerRect = document.querySelector('.w-\\[calc\\(100vw-56px\\)\\]')?.getBoundingClientRect();
+        if (containerRect) {
+          setTabDimensions({
+            left: rect.left - containerRect.left,
+            width: rect.width
+          });
+        }
+      }
+    }
+  }, [selectedTable]);
+
   return (
     <div className="w-full relative bg-white">
-      <div className="flex flex-none gap-2 items-center border-b border-border-default overflow-hidden print:hidden h-12 min-w-[600px]">
+      {/* Custom border with gap under selected tab */}
+      <div className="absolute top-0 left-0 right-0 h-px bg-border-default">
+        {tabDimensions && (
+          <div 
+            className="absolute top-0 h-px bg-white"
+            style={{
+              left: `${tabDimensions.left}px`,
+              width: `${tabDimensions.width}px`
+            }}
+          />
+        )}
+      </div>
+      <div className="flex flex-none border-b border-border-default gap-2 items-center overflow-hidden print:hidden h-12 min-w-[600px]">
         <div className="flex flex-auto items-center pl-4 pr-2">
           {/* Sidebar open/close */}
           <button className="mr-2 flex items-center justify-center cursor-pointer focus-visible:outline h-8 w-8 toolbar-button rounded-[6px]">
@@ -42,12 +82,14 @@ export default function Toolbar() {
                     <button className="toolbar-button focus-visible:outline mr-2">
                       <div className="cursor-pointer flex items-center px-2 py-1">
                         <EyeSlash size={16} color="#616670" className="flex-none transition-colors duration-200" />
+                        <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Hide fields</div>                      
                       </div>
                     </button>
                     {/* Filter button */}
                     <button className="focus-visible:outline toolbar-button">
                       <div className="cursor-pointer flex items-center px-2 py-1">
                         <FunnelSimple size={16} color="#616670" className="flex-none transition-colors duration-200" />
+                        <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Filter</div>
                       </div>
                     </button>
                   </div>
@@ -55,7 +97,8 @@ export default function Toolbar() {
                 <div className="flex items-center">
                   <button className="toolbar-button focus-visible:outline mr-2">
                     <div className="cursor-pointer flex items-center px-2 py-1">
-                      <Group size={16} color="#616670" className="flex-none" />
+                      <Group size={16} color="#616670" className="flex-none"/>
+                      <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Group</div>
                     </div>
                   </button>
                   <div>
@@ -63,6 +106,7 @@ export default function Toolbar() {
                       <button className="toolbar-button focus-visible:outline mr-2">
                         <div className="cursor-pointer flex items-center px-2 py-1">
                             <ArrowsDownUp size={16} color="#616670" className="flex-none" />
+                            <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Sort</div>
                         </div>
                       </button>
                     </div>
@@ -71,11 +115,28 @@ export default function Toolbar() {
                 <button className="toolbar-button focus-visible:outline mr-2">
                     <div className="cursor-pointer flex items-center px-2 py-1">
                         <PaintBucket size={16} color="#616670" className="flex-none" />
+                        <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Color</div>
+                    </div>
+                </button>
+                <button className="toolbar-button focus-visible:outline mr-2">
+                    <div className="cursor-pointer flex items-center px-2 py-1">
+                        <RowHeightSmall size={16} color="#616670" className="flex-none" />
                     </div>
                 </button>
               </div>
+              <span className="flex items-center mr-2">
+                <button className="toolbar-button">
+                    <div className="cursor-pointer pointer flex items-center px-2 py-1">
+                        <ArrowSquareOut size={16} color="#616670" className="flex-none" />
+                         <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Share and sync</div>
+                    </div>
+                </button>
+              </span>
             </div>
           </div>
+          <button className="mr-2 flex items-center justify-center focus-visible:outline cursor-pointer toolbar-button">
+            <MagnifyingGlass  size={16} color="#616670" className="flex-none" />
+          </button>
         </div>
       </div>
     </div>
