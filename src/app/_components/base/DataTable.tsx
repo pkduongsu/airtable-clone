@@ -13,6 +13,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import ChevronDown from "../icons/ChevronDown";
 import { TableControls } from "./TableControls";
 import { EditableCell } from "./EditableCell";
+import { TableNavigationProvider } from "./TableNavigationContext";
 
 // Define the types for our table data based on the actual tRPC return type
 type TableData = {
@@ -136,15 +137,18 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
         header: column.name,
         size: 179, // Fixed width for all columns
         cell: (info) => {
-          const value = info.getValue() as string;
+          const value = info.getValue()!
           const row = info.row.original;
-          const cellId = row.__cellIds[column.id];
+          const cellId = row.__cellIds[column.id]!;
+          const rowIndex = info.row.index;
+          const columnIndex = info.column.getIndex() - 1; // Subtract 1 because first column is row number
           
           return (
             <EditableCell
-              cellId={cellId ?? ""}
+              cellId={cellId}
               initialValue={value ?? ""}
               onSave={onTableDataRefresh}
+              position={{ rowIndex, columnIndex }}
             />
           );
         },
@@ -181,7 +185,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex]);
+  }, [tableData, selectedRows, hoveredRowIndex, onTableDataRefresh]);
 
   const table = useReactTable({
     data,
@@ -212,15 +216,19 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
 
 
   return (
-    <div 
-      ref={tableContainerRef}
-      className="w-full h-full overflow-auto"
-      style={{
-        contain: 'strict', // CSS containment to prevent layout escape
-        paddingRight: '70px',
-        paddingBottom: '70px',
-      }}
+    <TableNavigationProvider 
+      totalRows={tableData.rows.length}
+      totalColumns={tableData.columns.length}
     >
+      <div 
+        ref={tableContainerRef}
+        className="w-full h-full overflow-auto"
+        style={{
+          contain: 'strict', // CSS containment to prevent layout escape
+          paddingRight: '70px',
+          paddingBottom: '70px',
+        }}
+      >
       <div 
         style={{ 
           width: table.getCenterTotalSize() + 100,
@@ -333,5 +341,6 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
         onTableDataRefresh={onTableDataRefresh}
       />
     </div>
+    </TableNavigationProvider>
   );
 }
