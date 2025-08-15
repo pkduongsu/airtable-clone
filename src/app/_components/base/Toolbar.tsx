@@ -14,9 +14,12 @@ import MagnifyingGlass from "../icons/MagnifyingGlass";
 interface ToolbarProps {
   selectedTable?: string | null;
   tables?: Array<{ id: string; name: string; }>;
+  onSidebarHover?: () => void;
+  onSidebarLeave?: () => void;
+  onSidebarClick?: () => void;
 }
 
-export default function Toolbar({ selectedTable, tables: _tables }: ToolbarProps) {
+export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover, onSidebarLeave, onSidebarClick }: ToolbarProps) {
   const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
   
   useEffect(() => {
@@ -53,7 +56,12 @@ export default function Toolbar({ selectedTable, tables: _tables }: ToolbarProps
       <div className="flex flex-none border-b border-border-default gap-2 items-center overflow-hidden print:hidden h-12 min-w-[600px]">
         <div className="flex flex-auto items-center pl-4 pr-2">
           {/* Sidebar open/close */}
-          <button className="mr-2 flex items-center justify-center cursor-pointer focus-visible:outline h-8 w-8 toolbar-button rounded-[6px]">
+          <button 
+            className="mr-2 flex items-center justify-center cursor-pointer focus-visible:outline h-8 w-8 toolbar-button rounded-[6px]"
+            onMouseEnter={onSidebarHover}
+            onMouseLeave={onSidebarLeave}
+            onClick={onSidebarClick}
+          >
             <List size={16} color="#1d1f25" />
           </button>
           {/* Grid view */}
