@@ -12,6 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import ChevronDown from "../icons/ChevronDown";
 import { TableControls } from "./TableControls";
+import { EditableCell } from "./EditableCell";
 
 // Define the types for our table data based on the actual tRPC return type
 type TableData = {
@@ -50,7 +51,8 @@ type TableData = {
 
 type TableRow = {
   id: string;
-  [key: string]: string | undefined;
+  __cellIds: Record<string, string>; // Map column ID to cell ID
+  [key: string]: string | undefined | Record<string, string>;
 };
 
 const columnHelper = createColumnHelper<TableRow>();
@@ -134,20 +136,16 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
         header: column.name,
         size: 179, // Fixed width for all columns
         cell: (info) => {
-          const value = info.getValue();
+          const value = info.getValue() as string;
+          const row = info.row.original;
+          const cellId = row.__cellIds[column.id];
+          
           return (
-            <div className="w-full h-full flex items-center">
-              <input 
-                type="text"
-                value={value ?? ""}
-                onChange={(e) => {
-                  // TODO: Implement cell editing
-                  console.log("Cell edited:", column.name, e.target.value);
-                }}
-                className="w-full h-full px-2 py-1 border-none bg-transparent focus:outline-none focus:bg-white text-sm text-gray-900"
-                placeholder=""
-              />
-            </div>
+            <EditableCell
+              cellId={cellId ?? ""}
+              initialValue={value ?? ""}
+              onSave={onTableDataRefresh}
+            />
           );
         },
       })
@@ -158,10 +156,13 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
 
     // Transform rows data into the format expected by TanStack Table
     const tableData_rows: TableRow[] = tableData.rows.map((row) => {
-      const rowData: TableRow = { id: row.id };
+      const rowData: TableRow = { id: row.id, __cellIds: {} };
       
       // For each cell, map it to the column ID
       row.cells.forEach((cell) => {
+        // Store cell ID for editing
+        rowData.__cellIds[cell.columnId] = cell.id;
+        
         // Handle different value formats from JSON
         const value = cell.value;
         if (value && typeof value === 'object' && 'text' in value) {
@@ -217,14 +218,13 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       style={{
         contain: 'strict', // CSS containment to prevent layout escape
         paddingRight: '70px',
-        paddingBottom: '100px',
+        paddingBottom: '70px',
       }}
     >
       <div 
         style={{ 
           width: table.getCenterTotalSize() + 100,
           minWidth: '100%',
-          minHeight: '100%',
         }}
       >
         <table style={{ display: 'grid', width: '100%' }}>

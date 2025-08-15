@@ -91,7 +91,7 @@ export function TableTabsBar({
       <div className="flex relative z-1 bg-[#FCF3FF] transition-[width] duration-300 ease-in-out w-[calc(100vw-56px)] h-8 mb-[-1px]">
         <div className="flex flex-auto relative">
           <div className="absolute inset-0">
-            <div className="flex flex-auto overflow-auto scrollbar-hidden pt-1 pl-1 -mt-1 -ml-1">
+            <div className="flex flex-auto overflow-x-auto overflow-y-hidden scrollbar-hidden pt-1 pl-1 -mt-1 -ml-1">
               <nav className="flex flex-none">
                 <div className="flex h-[32px]">
                   {tables?.map((table) => (

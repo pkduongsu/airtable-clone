@@ -300,4 +300,24 @@ export const tableRouter = createTRPCRouter({
 
       return row;
     }),
+
+  updateCell: protectedProcedure
+    .input(z.object({
+      cellId: z.string(),
+      value: z.union([z.string(), z.number(), z.object({ text: z.string() })]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Update the cell value
+      const cell = await ctx.db.cell.update({
+        where: { id: input.cellId },
+        data: { 
+          value: typeof input.value === 'string' 
+            ? { text: input.value }
+            : typeof input.value === 'number'
+            ? { number: input.value }
+            : input.value
+        },
+      });
+      return cell;
+    }),
 });
