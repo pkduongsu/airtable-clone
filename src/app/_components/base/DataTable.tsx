@@ -136,13 +136,13 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
         header: column.name,
         size: 179, // Fixed width for all columns
         cell: (info) => {
-          const value = info.getValue() as string;
+          const value = info.getValue()!;
           const row = info.row.original;
-          const cellId = row.__cellIds[column.id];
+          const cellId = row.__cellIds[column.id]!;
           
           return (
             <EditableCell
-              cellId={cellId ?? ""}
+              cellId={cellId}
               initialValue={value ?? ""}
               onSave={onTableDataRefresh}
             />
@@ -181,7 +181,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex]);
+  }, [tableData, selectedRows, hoveredRowIndex, onTableDataRefresh]);
 
   const table = useReactTable({
     data,
