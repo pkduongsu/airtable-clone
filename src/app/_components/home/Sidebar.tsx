@@ -34,7 +34,7 @@ export function Sidebar({
 
   return (
     <aside 
-      className={`bg-white border-r border-gray-200 transition-all duration-100 ease-in-out ${
+      className={`bg-white border-r border-border-default transition-all duration-100 ease-in-out ${
         sidebarExpanded ? 'w-80' : 'w-12'
       } ${
         sidebarExpandedButton ? 'w-80' : 'w-12'

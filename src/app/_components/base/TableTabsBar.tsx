@@ -202,7 +202,7 @@ export function TableTabsBar({
                 }}
               />
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="cursor-pointer flex justify-end gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -214,6 +214,7 @@ export function TableTabsBar({
                 size="sm"
                 onClick={handleSaveRename}
                 disabled={!newTableName.trim()}
+                className="cursor-pointer"
               >
                 Save
               </Button>
