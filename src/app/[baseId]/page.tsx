@@ -199,11 +199,12 @@ export default function BasePage() {
             />
             
             {/* Main Content Panel */}
-            <div className="flex-1 min-w-0">
-              <main className="h-full relative bg-[#f6f8fc] overflow-hidden">
-                <div className="h-full w-full">
-                  <DataTable tableData={tableData} />
-                </div>
+            <div className="flex-1 min-w-0 w-0 overflow-hidden">
+              <main className="h-full relative bg-[#f6f8fc]">
+                <DataTable 
+                  tableData={tableData} 
+                  onTableDataRefresh={refetchTableData}
+                />
               </main>
             </div>
           </div>

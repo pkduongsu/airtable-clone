@@ -211,4 +211,93 @@ export const tableRouter = createTRPCRouter({
         },
       });
     }),
+
+  createColumn: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      name: z.string().min(1).max(255),
+      type: z.enum(["TEXT", "NUMBER"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get the current max order for columns in this table
+      const maxOrderResult = await ctx.db.column.aggregate({
+        where: { tableId: input.tableId },
+        _max: { order: true },
+      });
+      
+      const nextOrder = (maxOrderResult._max.order ?? -1) + 1;
+
+      // Create the new column
+      const column = await ctx.db.column.create({
+        data: {
+          tableId: input.tableId,
+          name: input.name,
+          type: input.type,
+          order: nextOrder,
+          width: 179, // Default width
+        },
+      });
+
+      // Get all existing rows for this table
+      const rows = await ctx.db.row.findMany({
+        where: { tableId: input.tableId },
+      });
+
+      // Create empty cells for this new column in all existing rows
+      if (rows.length > 0) {
+        const cells = rows.map(row => ({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: "" }, // Empty value for new column
+        }));
+
+        await ctx.db.cell.createMany({
+          data: cells,
+        });
+      }
+
+      return column;
+    }),
+
+  createRow: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get the current max order for rows in this table
+      const maxOrderResult = await ctx.db.row.aggregate({
+        where: { tableId: input.tableId },
+        _max: { order: true },
+      });
+      
+      const nextOrder = (maxOrderResult._max.order ?? -1) + 1;
+
+      // Create the new row
+      const row = await ctx.db.row.create({
+        data: {
+          tableId: input.tableId,
+          order: nextOrder,
+        },
+      });
+
+      // Get all columns for this table
+      const columns = await ctx.db.column.findMany({
+        where: { tableId: input.tableId },
+      });
+
+      // Create empty cells for this new row in all existing columns
+      if (columns.length > 0) {
+        const cells = columns.map(column => ({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: "" }, // Empty value for new row
+        }));
+
+        await ctx.db.cell.createMany({
+          data: cells,
+        });
+      }
+
+      return row;
+    }),
 });
