@@ -9,8 +9,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
-import Plus from "../icons/Plus";
-import ChevronDown from "../icons/ChevronDown";
+import Plus from "../../icons/Plus";
+import ChevronDown from "../../icons/ChevronDown";
 
 interface Table {
   id: string;

@@ -1,7 +1,7 @@
 "use client";
 
-import Plus from "../icons/Plus";
-import Database from "../icons/Database";
+import Plus from "../../icons/Plus";
+import Database from "../../icons/Database";
 
 interface SummaryBarProps {
   recordCount: number;

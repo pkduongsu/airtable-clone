@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import ChevronDown from "../icons/ChevronDown";
-import AirtableBase from "../icons/AirtableBase";
-import ClockCounterClockwise from "../icons/ClockCounterClockwise";
+import ChevronDown from "../../icons/ChevronDown";
+import AirtableBase from "../../icons/AirtableBase";
+import ClockCounterClockwise from "../../icons/ClockCounterClockwise";
 
 interface NavBarProps {
   base?: {

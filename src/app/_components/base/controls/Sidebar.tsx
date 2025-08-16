@@ -2,10 +2,10 @@
 
 import React from "react";
 import Link from "next/link";
-import AirtableBase from "../icons/AirtableBase";
-import LeftArrow from "../icons/LeftArrow";
-import Question from "../icons/Question";
-import Bell from "../icons/Bell";
+import AirtableBase from "../../icons/AirtableBase";
+import LeftArrow from "../../icons/LeftArrow";
+import Question from "../../icons/Question";
+import Bell from "../../icons/Bell";
 import { CleanTooltip, CleanTooltipContent, CleanTooltipTrigger } from "~/components/ui/clean-tooltip";
 import { useState } from "react";
 import { TooltipProvider } from "@radix-ui/react-tooltip";

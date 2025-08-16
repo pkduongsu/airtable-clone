@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import Plus from "../icons/Plus";
-import { AddColumnModal } from "./AddColumnModal";
+import Plus from "../../icons/Plus";
+import { AddColumnModal } from "../modals/AddColumnModal";
 import { api } from "~/trpc/react";
 
 interface TableControlsProps {

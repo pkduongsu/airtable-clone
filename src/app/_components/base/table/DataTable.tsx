@@ -10,10 +10,11 @@ import {
   type ColumnSizingState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import ChevronDown from "../icons/ChevronDown";
-import Spinner from "../icons/Spinner";
-import { TableControls } from "./TableControls";
+import ChevronDown from "../../icons/ChevronDown";
+import Spinner from "../../icons/Spinner";
+import { TableControls } from "../controls/TableControls";
 import { EditableCell } from "./EditableCell";
+import { type SortRule } from "../modals/SortModal";
 
 // Define the types for our table data based on the actual tRPC return type
 type TableData = {
@@ -67,9 +68,11 @@ interface DataTableProps {
   fetchNextPage?: () => void;
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
+  hiddenColumns?: Set<string>;
+  sortRules?: SortRule[];
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [] }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -105,7 +108,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
   // Handle cell navigation
   const handleCellNavigation = useCallback((direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right', currentRowIndex: number, currentColumnIndex: number) => {
     const maxRowIndex = tableData.rows.length - 1;
-    const maxColumnIndex = tableData.columns.length - 1; // Excluding row number column
+    const visibleColumnCount = tableData.columns.filter(column => !hiddenColumns.has(column.id)).length;
+    const maxColumnIndex = visibleColumnCount - 1; // Excluding row number column
     
     let newRowIndex = currentRowIndex;
     let newColumnIndex = currentColumnIndex;
@@ -155,7 +159,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       // Clear focusedCell to prevent interference
       setFocusedCell(null);
     }
-  }, [tableData.rows.length, tableData.columns.length]);
+  }, [tableData.rows.length, tableData.columns, hiddenColumns]);
 
   // Handle keyboard events for cell selection and navigation
   useEffect(() => {
@@ -196,6 +200,38 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedCell, handleCellNavigation, handleCellDeselection]);
+
+  // Function to apply sorting to table rows
+  const applySorting = useCallback((rows: TableRow[]) => {
+    if (sortRules.length === 0) return rows;
+
+    return [...rows].sort((a, b) => {
+      for (const rule of sortRules) {
+        const aValue = a[rule.columnId] ?? '';
+        const bValue = b[rule.columnId] ?? '';
+        
+        let comparison = 0;
+        
+        if (rule.columnType === 'NUMBER') {
+          const aStr = typeof aValue === 'string' ? aValue : '';
+          const bStr = typeof bValue === 'string' ? bValue : '';
+          const aNum = parseFloat(aStr) || 0;
+          const bNum = parseFloat(bStr) || 0;
+          comparison = aNum - bNum;
+        } else {
+          // Text comparison
+          const aStr = typeof aValue === 'string' ? aValue : '';
+          const bStr = typeof bValue === 'string' ? bValue : '';
+          comparison = aStr.localeCompare(bStr);
+        }
+        
+        if (comparison !== 0) {
+          return rule.direction === 'desc' ? -comparison : comparison;
+        }
+      }
+      return 0;
+    });
+  }, [sortRules]);
 
   // Transform the data structure into a format that TanStack Table can use
   const { columns, data } = useMemo(() => {
@@ -255,8 +291,9 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       },
     });
 
-    // Create column definitions for data columns
-    const tableColumns: ColumnDef<TableRow, string | undefined>[] = tableData.columns.map((column, columnIndex) =>
+    // Create column definitions for data columns (filter out hidden columns)
+    const visibleColumns = tableData.columns.filter(column => !hiddenColumns.has(column.id));
+    const tableColumns: ColumnDef<TableRow, string | undefined>[] = visibleColumns.map((column, columnIndex) =>
       columnHelper.accessor(column.id, {
         id: column.id,
         header: column.name,
@@ -311,11 +348,14 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       return rowData;
     });
 
+    // Apply sorting to the rows
+    const sortedRows = applySorting(tableData_rows);
+
     return {
       columns: allColumns,
-      data: tableData_rows,
+      data: sortedRows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, applySorting]);
 
   const table = useReactTable({
     data,
