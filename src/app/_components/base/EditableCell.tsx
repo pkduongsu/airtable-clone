@@ -13,9 +13,11 @@ interface EditableCellProps {
   isSelected?: boolean;
   onSelect?: () => void;
   onDeselect?: () => void;
+  rowId?: string;
+  onContextMenu?: (event: React.MouseEvent, rowId: string) => void;
 }
 
-export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
@@ -276,6 +278,13 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (rowId && onContextMenu) {
+      onContextMenu(e, rowId);
+    }
+  };
+
   if (isEditing) {
     return (
       <div className={`w-full h-full flex items-center ${className}`}>
@@ -317,6 +326,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         onClick={handleClick}
         onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={handleContextMenu}
         data-cell="true"
       >
         {value}

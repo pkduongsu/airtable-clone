@@ -320,4 +320,160 @@ export const tableRouter = createTRPCRouter({
       });
       return cell;
     }),
+
+  insertRowAbove: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      targetRowId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get the target row to find its order
+      const targetRow = await ctx.db.row.findUnique({
+        where: { id: input.targetRowId },
+        select: { order: true },
+      });
+
+      if (!targetRow) {
+        throw new Error("Target row not found");
+      }
+
+      const newOrder = targetRow.order;
+
+      // Increment order of all rows at or after the target position
+      await ctx.db.row.updateMany({
+        where: {
+          tableId: input.tableId,
+          order: { gte: newOrder },
+        },
+        data: {
+          order: { increment: 1 },
+        },
+      });
+
+      // Create the new row at the target position
+      const row = await ctx.db.row.create({
+        data: {
+          tableId: input.tableId,
+          order: newOrder,
+        },
+      });
+
+      // Get all columns for this table
+      const columns = await ctx.db.column.findMany({
+        where: { tableId: input.tableId },
+      });
+
+      // Create empty cells for this new row in all existing columns
+      if (columns.length > 0) {
+        const cells = columns.map(column => ({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: "" },
+        }));
+
+        await ctx.db.cell.createMany({
+          data: cells,
+        });
+      }
+
+      return row;
+    }),
+
+  insertRowBelow: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      targetRowId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get the target row to find its order
+      const targetRow = await ctx.db.row.findUnique({
+        where: { id: input.targetRowId },
+        select: { order: true },
+      });
+
+      if (!targetRow) {
+        throw new Error("Target row not found");
+      }
+
+      const newOrder = targetRow.order + 1;
+
+      // Increment order of all rows after the target position
+      await ctx.db.row.updateMany({
+        where: {
+          tableId: input.tableId,
+          order: { gte: newOrder },
+        },
+        data: {
+          order: { increment: 1 },
+        },
+      });
+
+      // Create the new row at the position after target
+      const row = await ctx.db.row.create({
+        data: {
+          tableId: input.tableId,
+          order: newOrder,
+        },
+      });
+
+      // Get all columns for this table
+      const columns = await ctx.db.column.findMany({
+        where: { tableId: input.tableId },
+      });
+
+      // Create empty cells for this new row in all existing columns
+      if (columns.length > 0) {
+        const cells = columns.map(column => ({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: "" },
+        }));
+
+        await ctx.db.cell.createMany({
+          data: cells,
+        });
+      }
+
+      return row;
+    }),
+
+  deleteRow: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      rowId: z.string(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      // Get the target row to find its order
+      const targetRow = await ctx.db.row.findUnique({
+        where: { id: input.rowId },
+        select: { order: true },
+      });
+
+      if (!targetRow) {
+        throw new Error("Row not found");
+      }
+
+      // Delete all cells associated with this row
+      await ctx.db.cell.deleteMany({
+        where: { rowId: input.rowId },
+      });
+
+      // Delete the row
+      await ctx.db.row.delete({
+        where: { id: input.rowId },
+      });
+
+      // Decrement order of all rows after the deleted row
+      await ctx.db.row.updateMany({
+        where: {
+          tableId: input.tableId,
+          order: { gt: targetRow.order },
+        },
+        data: {
+          order: { decrement: 1 },
+        },
+      });
+
+      return { success: true };
+    }),
 });
