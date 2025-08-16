@@ -5,6 +5,7 @@ import { api } from "~/trpc/react";
 
 interface EditableCellProps {
   cellId: string;
+  tableId: string;
   initialValue: string;
   className?: string;
   onNavigate?: (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => void;
@@ -14,25 +15,26 @@ interface EditableCellProps {
   onDeselect?: () => void;
 }
 
-export function EditableCell({ cellId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect: _onDeselect }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect: _onDeselect }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
+  const [hasLocalChanges, setHasLocalChanges] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
   const utils = api.useUtils();
   const updateCellMutation = api.table.updateCell.useMutation({
     onMutate: async ({ cellId, value: newValue }) => {
-      // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel();
+      // Cancel any outgoing refetches for this specific table
+      await utils.table.getTableData.cancel({ tableId });
       
       // Snapshot the previous value
-      const previousData = utils.table.getTableData.getData();
+      const previousData = utils.table.getTableData.getData({ tableId });
       
       // Optimistically update the cache
       if (previousData) {
-        utils.table.getTableData.setData({ tableId: previousData.id }, (old) => {
+        utils.table.getTableData.setData({ tableId }, (old) => {
           if (!old) return old;
           
           return {
@@ -61,19 +63,20 @@ export function EditableCell({ cellId, initialValue, className = "", onNavigate,
     onError: (err, variables, context) => {
       // Revert to the previous value on error
       if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: context.previousData.id }, context.previousData);
+        utils.table.getTableData.setData({ tableId }, context.previousData);
       }
       setValue(initialValue); // Revert local state too
+      // Only invalidate on error to ensure we get fresh server state
+      void utils.table.getTableData.invalidate({ tableId });
     },
-    onSettled: () => {
-      // Always refetch after error or success to ensure server state
-      void utils.table.getTableData.invalidate();
-    }
   });
 
   // Debounced save function
   const debouncedSave = useCallback(async (newValue: string) => {
-    if (newValue === initialValue) return;
+    if (newValue === initialValue) {
+      setHasLocalChanges(false);
+      return;
+    }
 
     setIsSaving(true);
     try {
@@ -81,19 +84,23 @@ export function EditableCell({ cellId, initialValue, className = "", onNavigate,
         cellId,
         value: newValue,
       });
+      setHasLocalChanges(false); // Clear the flag on successful save
       // No need to call onSave since we're using optimistic updates
     } catch (error) {
       console.error('Failed to update cell:', error);
       // Error handling is done in the mutation's onError callback
+      // Keep hasLocalChanges true so user can retry
     } finally {
       setIsSaving(false);
     }
   }, [cellId, initialValue, updateCellMutation]);
 
-  // Update local value when initialValue changes
+  // Update local value when initialValue changes, but only if we don't have pending local changes
   useEffect(() => {
-    setValue(initialValue);
-  }, [initialValue]);
+    if (!hasLocalChanges && !isEditing) {
+      setValue(initialValue);
+    }
+  }, [initialValue, hasLocalChanges, isEditing]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -106,6 +113,7 @@ export function EditableCell({ cellId, initialValue, className = "", onNavigate,
   // Handle value changes with debouncing
   const handleValueChange = useCallback((newValue: string) => {
     setValue(newValue);
+    setHasLocalChanges(true);
     
     // Clear existing timeout
     if (saveTimeoutRef.current) {
@@ -161,6 +169,7 @@ export function EditableCell({ cellId, initialValue, className = "", onNavigate,
   const handleSave = async () => {
     if (value === initialValue) {
       // No changes made, just exit edit mode
+      setHasLocalChanges(false);
       setIsEditing(false);
       return;
     }
@@ -171,17 +180,20 @@ export function EditableCell({ cellId, initialValue, className = "", onNavigate,
         value,
       });
       
+      setHasLocalChanges(false); // Clear the flag on successful save
       // No need to call onSave since we're using optimistic updates
       setIsEditing(false);
     } catch (error) {
       console.error('Failed to update cell:', error);
       // Error handling is done in the mutation's onError callback
       setIsEditing(false);
+      // Keep hasLocalChanges true so user can retry
     }
   };
 
   const handleCancel = () => {
     setValue(initialValue);
+    setHasLocalChanges(false);
     setIsEditing(false);
   };
 

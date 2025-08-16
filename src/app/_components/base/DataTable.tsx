@@ -250,6 +250,7 @@ export function DataTable({ tableData }: DataTableProps) {
           return (
             <EditableCell
               cellId={cellId}
+              tableId={tableData.id}
               initialValue={value ?? ""}
               onNavigate={(direction) => handleCellNavigation(direction, rowIndex, columnIndex)}
               shouldFocus={focusedCell?.rowIndex === rowIndex && focusedCell?.columnIndex === columnIndex}
