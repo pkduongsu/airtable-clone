@@ -78,98 +78,21 @@ export default function BasePage() {
   const utils = api.useUtils();
   
   const createRowMutation = api.table.createRow.useMutation({
-    onMutate: async ({ tableId }) => {
-      // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel({ tableId });
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getData({ tableId });
-      
-      // Generate temporary IDs
-      const tempRowId = `temp-row-${Date.now()}`;
-      
-      // Optimistically update the cache
-      if (previousData) {
-        const maxOrder = Math.max(...previousData.rows.map(row => row.order), -1);
-        const nextOrder = maxOrder + 1;
-        
-        // Create empty cells for all existing columns
-        const newCells = previousData.columns.map(column => ({
-          id: `temp-cell-${tempRowId}-${column.id}`,
-          rowId: tempRowId,
-          columnId: column.id,
-          value: { text: "" },
-          column,
-        }));
-        
-        const newRow = {
-          id: tempRowId,
-          tableId,
-          order: nextOrder,
-          cells: newCells,
-        };
-        
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            rows: [...old.rows, newRow],
-            _count: {
-              ...old._count,
-              rows: old._count.rows + 1,
-            }
-          };
-        });
-      }
-      
-      return { previousData, tempRowId };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
-      }
-    },
     onSettled: (data, error, variables) => {
       // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
 
   const bulkInsertRowsMutation = api.table.bulkInsertRows.useMutation({
-    onMutate: async ({ tableId, count = 100000 }) => {
-      await utils.table.getTableData.cancel({ tableId });
-      const previousData = utils.table.getTableData.getData({ tableId });
-      
-      // Optimistically update the count
-      if (previousData) {
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            _count: {
-              ...old._count,
-              rows: old._count.rows + count,
-            }
-          };
-        });
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
-      }
+    onError: () => {
       setIsBulkLoading(false);
     },
     onSuccess: () => {
       setIsBulkLoading(false);
     },
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
 
@@ -251,170 +174,20 @@ export default function BasePage() {
   };
 
   const insertRowAboveMutation = api.table.insertRowAbove.useMutation({
-    onMutate: async ({ tableId, targetRowId }) => {
-      await utils.table.getTableData.cancel({ tableId });
-      const previousData = utils.table.getTableData.getData({ tableId });
-      
-      if (previousData) {
-        const targetRow = previousData.rows.find(row => row.id === targetRowId);
-        if (!targetRow) return { previousData };
-        
-        const tempRowId = `temp-row-${Date.now()}`;
-        const newOrder = targetRow.order;
-        
-        // Create empty cells for all existing columns
-        const newCells = previousData.columns.map(column => ({
-          id: `temp-cell-${tempRowId}-${column.id}`,
-          rowId: tempRowId,
-          columnId: column.id,
-          value: { text: "" },
-          column,
-        }));
-        
-        const newRow = {
-          id: tempRowId,
-          tableId,
-          order: newOrder,
-          cells: newCells,
-        };
-
-        // Update row orders and insert new row
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            rows: [
-              ...old.rows.map(row => 
-                row.order >= newOrder 
-                  ? { ...row, order: row.order + 1 }
-                  : row
-              ),
-              newRow
-            ].sort((a, b) => a.order - b.order),
-            _count: {
-              ...old._count,
-              rows: old._count.rows + 1,
-            }
-          };
-        });
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
-      }
-    },
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
 
   const insertRowBelowMutation = api.table.insertRowBelow.useMutation({
-    onMutate: async ({ tableId, targetRowId }) => {
-      await utils.table.getTableData.cancel({ tableId });
-      const previousData = utils.table.getTableData.getData({ tableId });
-      
-      if (previousData) {
-        const targetRow = previousData.rows.find(row => row.id === targetRowId);
-        if (!targetRow) return { previousData };
-        
-        const tempRowId = `temp-row-${Date.now()}`;
-        const newOrder = targetRow.order + 1;
-        
-        // Create empty cells for all existing columns
-        const newCells = previousData.columns.map(column => ({
-          id: `temp-cell-${tempRowId}-${column.id}`,
-          rowId: tempRowId,
-          columnId: column.id,
-          value: { text: "" },
-          column,
-        }));
-        
-        const newRow = {
-          id: tempRowId,
-          tableId,
-          order: newOrder,
-          cells: newCells,
-        };
-
-        // Update row orders and insert new row
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            rows: [
-              ...old.rows.map(row => 
-                row.order >= newOrder 
-                  ? { ...row, order: row.order + 1 }
-                  : row
-              ),
-              newRow
-            ].sort((a, b) => a.order - b.order),
-            _count: {
-              ...old._count,
-              rows: old._count.rows + 1,
-            }
-          };
-        });
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
-      }
-    },
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
 
   const deleteRowMutation = api.table.deleteRow.useMutation({
-    onMutate: async ({ tableId, rowId }) => {
-      await utils.table.getTableData.cancel({ tableId });
-      const previousData = utils.table.getTableData.getData({ tableId });
-      
-      if (previousData) {
-        const targetRow = previousData.rows.find(row => row.id === rowId);
-        if (!targetRow) return { previousData };
-        
-        const deletedOrder = targetRow.order;
-
-        // Remove row and update orders
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            rows: old.rows
-              .filter(row => row.id !== rowId)
-              .map(row => 
-                row.order > deletedOrder 
-                  ? { ...row, order: row.order - 1 }
-                  : row
-              ),
-            _count: {
-              ...old._count,
-              rows: old._count.rows - 1,
-            }
-          };
-        });
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
-      }
-    },
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
 

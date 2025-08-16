@@ -30,22 +30,25 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const updateCellMutation = api.table.updateCell.useMutation({
     onMutate: async () => {
       // Cancel any outgoing refetches for this specific table
-      await utils.table.getTableData.cancel({ tableId });
+      await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // Snapshot the previous value for error recovery
-      const previousData = utils.table.getTableData.getData({ tableId });
+      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
       
       return { previousData };
     },
     onError: (err, variables, context) => {
       // Revert to the previous value on error
       if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId }, context.previousData);
+        utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, context.previousData);
       }
       setValue(initialValue); // Revert local state too
       setIsSaving(false); // Clear saving state on error
-      // Only invalidate on error to ensure we get fresh server state
-      void utils.table.getTableData.invalidate({ tableId });
+      console.error('Failed to update cell:', err);
+    },
+    onSettled: () => {
+      // Always refetch to ensure server state after mutation completes
+      void utils.table.getTableData.invalidate({ tableId, limit: 100 });
     },
   });
 
@@ -76,22 +79,40 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
 
   // Function to update cache immediately (used for navigation persistence)
   const updateCacheImmediately = useCallback((newValue: string) => {
-    utils.table.getTableData.setData({ tableId }, (old) => {
+    utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
       if (!old) return old;
+      
+      // Find and update the specific cell across all pages
+      let cellFound = false;
+      const updatedPages = old.pages.map(page => {
+        if (cellFound) return page; // Skip if we already found and updated the cell
+        
+        const hasTargetCell = page.rows.some(row => 
+          row.cells.some(cell => cell.id === cellId)
+        );
+        
+        if (!hasTargetCell) return page;
+        
+        cellFound = true;
+        return {
+          ...page,
+          rows: page.rows.map(row => ({
+            ...row,
+            cells: row.cells.map(cell => 
+              cell.id === cellId 
+                ? { 
+                    ...cell, 
+                    value: { text: newValue }
+                  }
+                : cell
+            )
+          }))
+        };
+      });
       
       return {
         ...old,
-        rows: old.rows.map(row => ({
-          ...row,
-          cells: row.cells.map(cell => 
-            cell.id === cellId 
-              ? { 
-                  ...cell, 
-                  value: { text: newValue }
-                }
-              : cell
-          )
-        }))
+        pages: updatedPages,
       };
     });
   }, [utils.table.getTableData, tableId, cellId]);
