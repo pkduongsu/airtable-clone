@@ -197,34 +197,61 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     setIsEditing(false);
   };
 
+  const handleSaveAndNavigate = (direction: 'tab' | 'shift-tab' | 'enter' ) => {
+    // If no changes, just exit edit mode and navigate
+    if (value === initialValue) {
+      setHasLocalChanges(false);
+      setIsEditing(false);
+      // Use setTimeout to ensure the input loses focus before navigation
+      setTimeout(() => onNavigate?.(direction), 0);
+      return;
+    }
+
+    // Exit edit mode immediately for smooth navigation
+    setIsEditing(false);
+    
+    // Save in the background
+    const saveInBackground = async () => {
+      try {
+        await updateCellMutation.mutateAsync({
+          cellId,
+          value,
+        });
+        setHasLocalChanges(false);
+      } catch (error) {
+        console.error('Failed to update cell:', error);
+        // Keep hasLocalChanges true so user can retry
+      }
+    };
+    
+    void saveInBackground();
+    
+    // Navigate immediately after exiting edit mode
+    setTimeout(() => onNavigate?.(direction), 0);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.('enter');
+      handleSaveAndNavigate('enter');
     } else if (e.key === 'Escape') {
       e.preventDefault();
       handleCancel();
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.(e.shiftKey ? 'shift-tab' : 'tab');
+      handleSaveAndNavigate(e.shiftKey ? 'shift-tab' : 'tab');
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.('up');
+      handleSaveAndNavigate('up');
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.('down');
+      handleSaveAndNavigate('down');
     } else if (e.key === 'ArrowLeft' && inputRef.current?.selectionStart === 0) {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.('left');
+      handleSaveAndNavigate('left');
     } else if (e.key === 'ArrowRight' && inputRef.current?.selectionStart === value.length) {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.('right');
+      handleSaveAndNavigate('right');
     }
   };
 
