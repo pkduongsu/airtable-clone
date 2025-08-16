@@ -12,6 +12,7 @@ import { TableTabsBar } from "../_components/base/TableTabsBar";
 import  Toolbar  from "../_components/base/Toolbar";
 import { DataTable } from "../_components/base/DataTable";
 import { ViewSidebar } from "../_components/base/ViewSidebar";
+import { SummaryBar } from "../_components/base/SummaryBar";
 
 
 export default function BasePage() {
@@ -47,6 +48,68 @@ export default function BasePage() {
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
   const deleteTableMutation = api.table.delete.useMutation();
+  
+  const utils = api.useUtils();
+  
+  const createRowMutation = api.table.createRow.useMutation({
+    onMutate: async ({ tableId }) => {
+      // Cancel any outgoing refetches
+      await utils.table.getTableData.cancel({ tableId });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getData({ tableId });
+      
+      // Generate temporary IDs
+      const tempRowId = `temp-row-${Date.now()}`;
+      
+      // Optimistically update the cache
+      if (previousData) {
+        const maxOrder = Math.max(...previousData.rows.map(row => row.order), -1);
+        const nextOrder = maxOrder + 1;
+        
+        // Create empty cells for all existing columns
+        const newCells = previousData.columns.map(column => ({
+          id: `temp-cell-${tempRowId}-${column.id}`,
+          rowId: tempRowId,
+          columnId: column.id,
+          value: { text: "" },
+          column,
+        }));
+        
+        const newRow = {
+          id: tempRowId,
+          tableId,
+          order: nextOrder,
+          cells: newCells,
+        };
+        
+        utils.table.getTableData.setData({ tableId }, (old) => {
+          if (!old) return old;
+          
+          return {
+            ...old,
+            rows: [...old.rows, newRow],
+            _count: {
+              ...old._count,
+              rows: old._count.rows + 1,
+            }
+          };
+        });
+      }
+      
+      return { previousData, tempRowId };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
+      }
+    },
+    onSettled: (data, error, variables) => {
+      // Always refetch to ensure server state
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+    }
+  });
 
   const handleCreateTable = async () => {
     try {
@@ -110,6 +173,18 @@ export default function BasePage() {
     } catch (error) {
       console.error('Failed to delete table:', error);
       throw error;
+    }
+  };
+
+  const handleAddRow = async () => {
+    if (!selectedTable) return;
+    
+    try {
+      await createRowMutation.mutateAsync({
+        tableId: selectedTable,
+      });
+    } catch (error) {
+      console.error('Failed to create row:', error);
     }
   };
 
@@ -199,12 +274,13 @@ export default function BasePage() {
             />
             
             {/* Main Content Panel */}
-            <div className="flex-1 min-w-0 w-0 overflow-hidden">
-              <main className="h-full relative bg-[#f6f8fc]">
+            <div className="flex-1 min-w-0 w-0 overflow-hidden flex flex-col">
+              <main className="flex-1 h-full relative bg-[#f6f8fc]">
                 <DataTable 
                   tableData={tableData} 
                 />
               </main>
+              <SummaryBar recordCount={tableData._count.rows} onAddRow={handleAddRow} />
             </div>
           </div>
         </div>
