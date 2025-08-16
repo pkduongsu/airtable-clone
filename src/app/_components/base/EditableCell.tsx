@@ -5,48 +5,104 @@ import { api } from "~/trpc/react";
 
 interface EditableCellProps {
   cellId: string;
+  tableId: string;
   initialValue: string;
-  onSave?: () => void;
   className?: string;
   onNavigate?: (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => void;
   shouldFocus?: boolean;
   isSelected?: boolean;
   onSelect?: () => void;
   onDeselect?: () => void;
+  rowId?: string;
+  onContextMenu?: (event: React.MouseEvent, rowId: string) => void;
 }
 
-export function EditableCell({ cellId, initialValue, onSave, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
+  const [hasLocalChanges, setHasLocalChanges] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latestValueRef = useRef<string>(initialValue);
   
-  const updateCellMutation = api.table.updateCell.useMutation();
+  const utils = api.useUtils();
+  const updateCellMutation = api.table.updateCell.useMutation({
+    onMutate: async () => {
+      // Cancel any outgoing refetches for this specific table
+      await utils.table.getTableData.cancel({ tableId });
+      
+      // Snapshot the previous value for error recovery
+      const previousData = utils.table.getTableData.getData({ tableId });
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setData({ tableId }, context.previousData);
+      }
+      setValue(initialValue); // Revert local state too
+      setIsSaving(false); // Clear saving state on error
+      // Only invalidate on error to ensure we get fresh server state
+      void utils.table.getTableData.invalidate({ tableId });
+    },
+  });
 
-  // Debounced save function
-  const debouncedSave = useCallback(async (newValue: string) => {
-    if (newValue === initialValue) return;
-
-    setIsSaving(true);
-    try {
-      await updateCellMutation.mutateAsync({
-        cellId,
-        value: newValue,
-      });
-      onSave?.();
-    } catch (error) {
-      console.error('Failed to update cell:', error);
-      setValue(initialValue);
-    } finally {
+  // Server save function (just server sync, cache already updated)
+  const saveToServer = useCallback((newValue: string) => {
+    if (newValue === initialValue) {
+      setHasLocalChanges(false);
       setIsSaving(false);
+      return;
     }
-  }, [cellId, initialValue, updateCellMutation, onSave]);
 
-  // Update local value when initialValue changes
+    // Don't set isSaving here - it's already set in handleValueChange
+    updateCellMutation.mutate({
+      cellId,
+      value: newValue,
+    }, {
+      onSuccess: () => {
+        setHasLocalChanges(false);
+        setIsSaving(false);
+      },
+      onError: (error) => {
+        console.error('Failed to update cell:', error);
+        setIsSaving(false);
+        // Keep hasLocalChanges true so user can retry
+      }
+    });
+  }, [cellId, initialValue, updateCellMutation]);
+
+  // Function to update cache immediately (used for navigation persistence)
+  const updateCacheImmediately = useCallback((newValue: string) => {
+    utils.table.getTableData.setData({ tableId }, (old) => {
+      if (!old) return old;
+      
+      return {
+        ...old,
+        rows: old.rows.map(row => ({
+          ...row,
+          cells: row.cells.map(cell => 
+            cell.id === cellId 
+              ? { 
+                  ...cell, 
+                  value: { text: newValue }
+                }
+              : cell
+          )
+        }))
+      };
+    });
+  }, [utils.table.getTableData, tableId, cellId]);
+
+  // Update local value when initialValue changes, but only if we don't have pending local changes
   useEffect(() => {
-    setValue(initialValue);
-  }, [initialValue]);
+    if (!hasLocalChanges && !isEditing) {
+      setValue(initialValue);
+      latestValueRef.current = initialValue;
+    }
+  }, [initialValue, hasLocalChanges, isEditing]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -56,20 +112,25 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
     }
   }, [isEditing]);
 
-  // Handle value changes with debouncing
+  // Handle value changes with deferred optimistic update
   const handleValueChange = useCallback((newValue: string) => {
     setValue(newValue);
+    setHasLocalChanges(true);
+    latestValueRef.current = newValue;
     
     // Clear existing timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
-    // Set new timeout for auto-save
+    // Set new timeout for deferred cache update and server save
     saveTimeoutRef.current = setTimeout(() => {
-      void debouncedSave(newValue);
-    }, 1000); // Auto-save after 1 second of inactivity
-  }, [debouncedSave]);
+      // Update cache after user stops typing
+      updateCacheImmediately(newValue);
+      setIsSaving(true);
+      saveToServer(newValue);
+    }, 500); // Shorter delay for cache update, longer total for server save
+  }, [saveToServer, updateCacheImmediately]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -95,11 +156,18 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
     e.preventDefault();
     e.stopPropagation();
     
-    if (isSelected) {
+    if (isSelected && !isEditing) {
       // Second click on already selected cell - enter edit mode
       setIsEditing(true);
-    } else {
+    } else if (!isSelected) {
       // First click - select the cell
+      onSelect?.();
+    }
+  };
+
+  const handleMouseDown = (_e: React.MouseEvent) => {
+    // On mousedown, immediately select the cell for faster response
+    if (!isSelected) {
       onSelect?.();
     }
   };
@@ -114,66 +182,107 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
   const handleSave = async () => {
     if (value === initialValue) {
       // No changes made, just exit edit mode
+      setHasLocalChanges(false);
       setIsEditing(false);
       return;
     }
 
-    try {
-      await updateCellMutation.mutateAsync({
-        cellId,
-        value,
-      });
-      
-      // Call onSave callback to refresh table data
-      onSave?.();
-      
-      setIsEditing(false);
-    } catch (error) {
-      console.error('Failed to update cell:', error);
-      // Revert to original value on error
-      setValue(initialValue);
-      setIsEditing(false);
+    // Clear any pending auto-save
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
     }
+    
+    // Update cache immediately and save
+    updateCacheImmediately(latestValueRef.current);
+    setIsEditing(false);
+    setIsSaving(true);
+    saveToServer(latestValueRef.current);
   };
 
   const handleCancel = () => {
     setValue(initialValue);
+    setHasLocalChanges(false);
     setIsEditing(false);
+  };
+
+  const handleSaveAndNavigate = (direction: 'tab' | 'shift-tab' | 'enter' ) => {
+    // If no changes, just exit edit mode and navigate
+    if (value === initialValue) {
+      setHasLocalChanges(false);
+      setIsEditing(false);
+      // Use setTimeout to ensure the input loses focus before navigation
+      setTimeout(() => onNavigate?.(direction), 0);
+      return;
+    }
+
+    // Clear any pending auto-save
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    
+    // Exit edit mode immediately for smooth navigation
+    setIsEditing(false);
+    
+    // Update cache immediately and save
+    updateCacheImmediately(latestValueRef.current);
+    setIsSaving(true);
+    saveToServer(latestValueRef.current);
+    
+    // Navigate immediately after exiting edit mode
+    setTimeout(() => onNavigate?.(direction), 0);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.('enter');
+      handleSaveAndNavigate('enter');
     } else if (e.key === 'Escape') {
       e.preventDefault();
       handleCancel();
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      void handleSave();
-      onNavigate?.(e.shiftKey ? 'shift-tab' : 'tab');
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      void handleSave();
-      onNavigate?.('up');
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      void handleSave();
-      onNavigate?.('down');
-    } else if (e.key === 'ArrowLeft' && inputRef.current?.selectionStart === 0) {
-      e.preventDefault();
-      void handleSave();
-      onNavigate?.('left');
-    } else if (e.key === 'ArrowRight' && inputRef.current?.selectionStart === value.length) {
-      e.preventDefault();
-      void handleSave();
-      onNavigate?.('right');
+      handleSaveAndNavigate(e.shiftKey ? 'shift-tab' : 'tab');
     }
   };
 
-  const handleBlur = () => {
-    void handleSave();
+  const handleBlur = (e: React.FocusEvent) => {
+    // Check if we're blurring to focus on another editable cell
+    const relatedTarget = e.relatedTarget as HTMLElement;
+    const isClickingOnAnotherCell = relatedTarget && 
+      (relatedTarget.closest('[data-cell]') !== null ||
+       relatedTarget.closest('td') !== null ||
+       relatedTarget.classList.contains('cursor-text'));
+    
+    if (isClickingOnAnotherCell) {
+      // If clicking on another cell, exit edit mode immediately and save in background
+      setIsEditing(false);
+      
+      // Immediately deselect this cell to allow the new cell to be selected
+      // Use setTimeout to ensure this happens after the current event loop
+      setTimeout(() => onDeselect?.(), 0);
+      
+      // Ensure data persists by updating cache immediately before navigation
+      if (latestValueRef.current !== initialValue) {
+        // Clear any pending auto-save
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        // Update cache immediately to ensure persistence
+        updateCacheImmediately(latestValueRef.current);
+        setIsSaving(true);
+        saveToServer(latestValueRef.current);
+      }
+    } else {
+      // Normal blur behavior
+      void handleSave();
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (rowId && onContextMenu) {
+      onContextMenu(e, rowId);
+    }
   };
 
   if (isEditing) {
@@ -206,7 +315,7 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
     if (isSelected) {
       return `${baseClasses} bg-blue-50 border border-blue-500 border-solid`;
     } else {
-      return `${baseClasses} hover:bg-gray-50`;
+      return `${baseClasses} hover:bg-[#f8f8f8]`;
     }
   };
 
@@ -215,7 +324,10 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
       <div 
         className={getCellClassName()}
         onClick={handleClick}
+        onMouseDown={handleMouseDown}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={handleContextMenu}
+        data-cell="true"
       >
         {value}
       </div>

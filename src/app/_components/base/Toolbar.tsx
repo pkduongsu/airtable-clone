@@ -10,6 +10,8 @@ import PaintBucket from "../icons/PaintBucket";
 import RowHeightSmall from "../icons/RowHeightSmall";
 import ArrowSquareOut from "../icons/ArrowSquareOut";
 import MagnifyingGlass from "../icons/MagnifyingGlass";
+import { CleanTooltip, CleanTooltipContent, CleanTooltipTrigger } from "~/components/ui/clean-tooltip";
+import { TooltipProvider } from "@radix-ui/react-tooltip";
 
 interface ToolbarProps {
   selectedTable?: string | null;
@@ -40,6 +42,7 @@ export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover
   }, [selectedTable]);
 
   return (
+    <TooltipProvider>
     <div className="w-full relative bg-white">
       {/* Custom border with gap under selected tab */}
       <div className="absolute top-0 left-0 right-0 h-px bg-border-default">
@@ -126,27 +129,51 @@ export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover
                         <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Color</div>
                     </div>
                 </button>
-                <button className="toolbar-button focus-visible:outline mr-2">
-                    <div className="cursor-pointer flex items-center px-2 py-1">
-                        <RowHeightSmall size={16} color="#616670" className="flex-none" />
-                    </div>
-                </button>
+                <CleanTooltip>
+                  <CleanTooltipTrigger asChild>
+                    <button className="toolbar-button focus-visible:outline mr-2">
+                        <div className="cursor-pointer flex items-center px-2 py-1">
+                            <RowHeightSmall size={16} color="#616670" className="flex-none" />
+                        </div>
+                    </button>
+                  </CleanTooltipTrigger>
+                  <CleanTooltipContent side="bottom" sideOffset={8}>
+                    Row height
+                  </CleanTooltipContent>
+                </CleanTooltip>
               </div>
               <span className="flex items-center mr-2">
-                <button className="toolbar-button">
-                    <div className="cursor-pointer pointer flex items-center px-2 py-1">
-                        <ArrowSquareOut size={16} color="#616670" className="flex-none" />
-                         <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Share and sync</div>
-                    </div>
-                </button>
+                <CleanTooltip>
+                  <CleanTooltipTrigger asChild>
+                    <button className="toolbar-button">
+                        <div className="cursor-pointer pointer flex items-center px-2 py-1">
+                            <ArrowSquareOut size={16} color="#616670" className="flex-none" />
+                             <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Share and sync</div>
+                        </div>
+                    </button>
+                  </CleanTooltipTrigger>
+                  <CleanTooltipContent side="bottom" sideOffset={8}>
+                    Share and sync
+                  </CleanTooltipContent>
+                </CleanTooltip>
               </span>
             </div>
           </div>
-          <button className="mr-2 flex items-center justify-center focus-visible:outline cursor-pointer toolbar-button">
-            <MagnifyingGlass  size={16} color="#616670" className="flex-none" />
-          </button>
+          <div className="flex items-center mr-2">
+            <CleanTooltip>
+              <CleanTooltipTrigger asChild>
+                <button className="flex items-center justify-center focus-visible:outline cursor-pointer rounded-[6px] hover:bg-gray-100 w-8 h-8">
+                  <MagnifyingGlass size={16} color="#616670" className="flex-none" />
+                </button>
+              </CleanTooltipTrigger>
+              <CleanTooltipContent side="bottom" sideOffset={8}>
+                Search
+              </CleanTooltipContent>
+            </CleanTooltip>
+          </div>
         </div>
       </div>
     </div>
+    </TooltipProvider>
   );
 };

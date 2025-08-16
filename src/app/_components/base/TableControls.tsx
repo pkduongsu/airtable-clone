@@ -18,18 +18,168 @@ interface TableControlsProps {
     }>;
   };
   tableTotalWidth: number;
-  onTableDataRefresh?: () => void;
 }
 
 export function TableControls({ 
   tableData, 
-  tableTotalWidth, 
-  onTableDataRefresh 
+  tableTotalWidth 
 }: TableControlsProps) {
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
   
-  const createColumnMutation = api.table.createColumn.useMutation();
-  const createRowMutation = api.table.createRow.useMutation();
+  const utils = api.useUtils();
+  
+  const createColumnMutation = api.table.createColumn.useMutation({
+    onMutate: async ({ tableId, name, type }) => {
+      // Cancel any outgoing refetches
+      await utils.table.getTableData.cancel({ tableId });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getData({ tableId });
+      
+      // Generate temporary IDs
+      const tempColumnId = `temp-column-${Date.now()}`;
+      
+      // Optimistically update the cache
+      if (previousData) {
+        const maxOrder = Math.max(...previousData.columns.map(col => col.order), -1);
+        const nextOrder = maxOrder + 1;
+        
+        const newColumn = {
+          id: tempColumnId,
+          name,
+          type,
+          order: nextOrder,
+          width: 179,
+          tableId,
+        };
+        
+        // Add new column and create empty cells for all existing rows
+        utils.table.getTableData.setData({ tableId }, (old) => {
+          if (!old) return old;
+          
+          return {
+            ...old,
+            columns: [...old.columns, newColumn],
+            rows: old.rows.map(row => ({
+              ...row,
+              cells: [
+                ...row.cells,
+                {
+                  id: `temp-cell-${row.id}-${tempColumnId}`,
+                  rowId: row.id,
+                  columnId: tempColumnId,
+                  value: { text: "" },
+                  column: newColumn,
+                }
+              ]
+            }))
+          };
+        });
+      }
+      
+      return { previousData, tempColumnId };
+    },
+    onSuccess: (newColumn, variables, context) => {
+      // Replace temporary data with real server data for columns
+      if (context?.tempColumnId) {
+        const { tableId } = variables;
+        utils.table.getTableData.setData({ tableId }, (old) => {
+          if (!old) return old;
+          
+          return {
+            ...old,
+            columns: old.columns.map(col => 
+              col.id === context.tempColumnId ? newColumn : col
+            ),
+            rows: old.rows.map(row => ({
+              ...row,
+              cells: row.cells.map(cell =>
+                cell.columnId === context.tempColumnId
+                  ? { ...cell, columnId: newColumn.id, column: newColumn }
+                  : cell
+              )
+            }))
+          };
+        });
+      }
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
+      }
+    },
+    onSettled: (data, error, variables) => {
+      // Always refetch to ensure server state
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+    }
+  });
+  
+  const createRowMutation = api.table.createRow.useMutation({
+    onMutate: async ({ tableId }) => {
+      // Cancel any outgoing refetches
+      await utils.table.getTableData.cancel({ tableId });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getData({ tableId });
+      
+      // Generate temporary IDs
+      const tempRowId = `temp-row-${Date.now()}`;
+      
+      // Optimistically update the cache
+      if (previousData) {
+        const maxOrder = Math.max(...previousData.rows.map(row => row.order), -1);
+        const nextOrder = maxOrder + 1;
+        
+        // Create empty cells for all existing columns
+        const newCells = previousData.columns.map(column => ({
+          id: `temp-cell-${tempRowId}-${column.id}`,
+          rowId: tempRowId,
+          columnId: column.id,
+          value: { text: "" },
+          column,
+        }));
+        
+        const newRow = {
+          id: tempRowId,
+          tableId,
+          order: nextOrder,
+          cells: newCells,
+        };
+        
+        utils.table.getTableData.setData({ tableId }, (old) => {
+          if (!old) return old;
+          
+          return {
+            ...old,
+            rows: [...old.rows, newRow],
+            _count: {
+              ...old._count,
+              rows: old._count.rows + 1,
+            }
+          };
+        });
+      }
+      
+      return { previousData, tempRowId };
+    },
+    onSuccess: (_newRow, _variables, _context) => {
+      // Since the server doesn't return the full row with cells,
+      // we'll let the invalidate in onSettled handle the final update
+      // The optimistic update provides immediate feedback, and
+      // the invalidate ensures we have the correct server state
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
+      }
+    },
+    onSettled: (data, error, variables) => {
+      // Always refetch to ensure server state
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+    }
+  });
 
   const handleAddColumnClick = () => {
     setShowAddColumnModal(true);
@@ -46,10 +196,10 @@ export function TableControls({
         name,
         type,
       });
-
-      onTableDataRefresh?.();
+      // No need to call onTableDataRefresh since we're using optimistic updates
     } catch (error) {
       console.error('Failed to create column:', error);
+      // Error handling is done in the mutation's onError callback
     }
   };
 
@@ -58,10 +208,10 @@ export function TableControls({
       await createRowMutation.mutateAsync({
         tableId: tableData.id,
       });
-
-      onTableDataRefresh?.();
+      // No need to call onTableDataRefresh since we're using optimistic updates
     } catch (error) {
       console.error('Failed to create row:', error);
+      // Error handling is done in the mutation's onError callback
     }
   };
 

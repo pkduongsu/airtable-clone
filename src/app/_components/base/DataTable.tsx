@@ -59,10 +59,13 @@ const columnHelper = createColumnHelper<TableRow>();
 
 interface DataTableProps {
   tableData: TableData;
-  onTableDataRefresh?: () => void;
+  onInsertRowAbove?: (tableId: string, rowId: string) => void;
+  onInsertRowBelow?: (tableId: string, rowId: string) => void;
+  onDeleteRow?: (tableId: string, rowId: string) => void;
+  onContextMenu?: (position: { x: number; y: number }, rowId: string) => void;
 }
 
-export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -82,6 +85,18 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
   const handleCellDeselection = useCallback(() => {
     setSelectedCell(null);
   }, []);
+
+  // Handle context menu
+  const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
+    event.preventDefault();
+    
+    // For fixed positioning, we use clientX/clientY directly
+    // These are already relative to the viewport which is what we want for position: fixed
+    if (onContextMenu) {
+      onContextMenu({ x: event.clientX, y: event.clientY }, rowId);
+    }
+  }, [onContextMenu]);
+
 
   // Handle cell navigation
   const handleCellNavigation = useCallback((direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right', currentRowIndex: number, currentColumnIndex: number) => {
@@ -251,13 +266,15 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
           return (
             <EditableCell
               cellId={cellId}
+              tableId={tableData.id}
               initialValue={value ?? ""}
-              onSave={onTableDataRefresh}
               onNavigate={(direction) => handleCellNavigation(direction, rowIndex, columnIndex)}
               shouldFocus={focusedCell?.rowIndex === rowIndex && focusedCell?.columnIndex === columnIndex}
               isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
               onSelect={() => handleCellSelection(rowIndex, columnIndex)}
               onDeselect={handleCellDeselection}
+              rowId={row.id}
+              onContextMenu={handleContextMenuClick}
             />
           );
         },
@@ -294,7 +311,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, onTableDataRefresh, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick]);
 
   const table = useReactTable({
     data,
@@ -452,8 +469,8 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       <TableControls
         tableData={tableData}
         tableTotalWidth={table.getCenterTotalSize()}
-        onTableDataRefresh={onTableDataRefresh}
       />
+
     </div>
   );
 }
