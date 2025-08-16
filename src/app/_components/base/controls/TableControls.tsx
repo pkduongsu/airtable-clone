@@ -31,50 +31,58 @@ export function TableControls({
   const createColumnMutation = api.table.createColumn.useMutation({
     onMutate: async ({ tableId, name, type }) => {
       // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel({ tableId });
+      await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // Snapshot the previous value
-      const previousData = utils.table.getTableData.getData({ tableId });
+      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
       
       // Generate temporary IDs
       const tempColumnId = `temp-column-${Date.now()}`;
       
       // Optimistically update the cache
       if (previousData) {
-        const maxOrder = Math.max(...previousData.columns.map(col => col.order), -1);
-        const nextOrder = maxOrder + 1;
-        
-        const newColumn = {
-          id: tempColumnId,
-          name,
-          type,
-          order: nextOrder,
-          width: 179,
-          tableId,
-        };
-        
-        // Add new column and create empty cells for all existing rows
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
+        const firstPage = previousData.pages[0];
+        if (firstPage) {
+          const maxOrder = Math.max(...firstPage.columns.map(col => col.order), -1);
+          const nextOrder = maxOrder + 1;
           
-          return {
-            ...old,
-            columns: [...old.columns, newColumn],
-            rows: old.rows.map(row => ({
-              ...row,
-              cells: [
-                ...row.cells,
-                {
-                  id: `temp-cell-${row.id}-${tempColumnId}`,
-                  rowId: row.id,
-                  columnId: tempColumnId,
-                  value: { text: "" },
-                  column: newColumn,
-                }
-              ]
-            }))
+          const newColumn = {
+            id: tempColumnId,
+            name,
+            type,
+            order: nextOrder,
+            width: 179,
+            tableId,
           };
-        });
+          
+          // Add new column and create empty cells for all existing rows across all pages
+          utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
+            if (!old) return old;
+            
+            const updatedPages = old.pages.map(page => ({
+              ...page,
+              columns: [...page.columns, newColumn],
+              rows: page.rows.map(row => ({
+                ...row,
+                cells: [
+                  ...row.cells,
+                  {
+                    id: `temp-cell-${row.id}-${tempColumnId}`,
+                    rowId: row.id,
+                    columnId: tempColumnId,
+                    value: { text: "" },
+                    column: newColumn,
+                  }
+                ]
+              }))
+            }));
+            
+            return {
+              ...old,
+              pages: updatedPages,
+            };
+          });
+        }
       }
       
       return { previousData, tempColumnId };
@@ -83,15 +91,15 @@ export function TableControls({
       // Replace temporary data with real server data for columns
       if (context?.tempColumnId) {
         const { tableId } = variables;
-        utils.table.getTableData.setData({ tableId }, (old) => {
+        utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
           if (!old) return old;
           
-          return {
-            ...old,
-            columns: old.columns.map(col => 
+          const updatedPages = old.pages.map(page => ({
+            ...page,
+            columns: page.columns.map(col => 
               col.id === context.tempColumnId ? newColumn : col
             ),
-            rows: old.rows.map(row => ({
+            rows: page.rows.map(row => ({
               ...row,
               cells: row.cells.map(cell =>
                 cell.columnId === context.tempColumnId
@@ -99,6 +107,11 @@ export function TableControls({
                   : cell
               )
             }))
+          }));
+          
+          return {
+            ...old,
+            pages: updatedPages,
           };
         });
       }
@@ -106,59 +119,76 @@ export function TableControls({
     onError: (err, variables, context) => {
       // Revert to the previous value on error
       if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
+        utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
       }
     },
     onSettled: (data, error, variables) => {
       // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
   
   const createRowMutation = api.table.createRow.useMutation({
     onMutate: async ({ tableId }) => {
       // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel({ tableId });
+      await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // Snapshot the previous value
-      const previousData = utils.table.getTableData.getData({ tableId });
+      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
       
       // Generate temporary IDs
       const tempRowId = `temp-row-${Date.now()}`;
       
       // Optimistically update the cache
-      if (previousData) {
-        const maxOrder = Math.max(...previousData.rows.map(row => row.order), -1);
-        const nextOrder = maxOrder + 1;
-        
-        // Create empty cells for all existing columns
-        const newCells = previousData.columns.map(column => ({
-          id: `temp-cell-${tempRowId}-${column.id}`,
-          rowId: tempRowId,
-          columnId: column.id,
-          value: { text: "" },
-          column,
-        }));
-        
-        const newRow = {
-          id: tempRowId,
-          tableId,
-          order: nextOrder,
-          cells: newCells,
-        };
-        
-        utils.table.getTableData.setData({ tableId }, (old) => {
-          if (!old) return old;
+      if (previousData && previousData.pages.length > 0) {
+        const firstPage = previousData.pages[0];
+        if (firstPage) {
+          // Find the maximum order across all pages
+          const allOrders = previousData.pages.flatMap(page => page.rows.map(row => row.order));
+          const maxOrder = Math.max(...allOrders, -1);
+          const nextOrder = maxOrder + 1;
           
-          return {
-            ...old,
-            rows: [...old.rows, newRow],
-            _count: {
-              ...old._count,
-              rows: old._count.rows + 1,
-            }
+          // Create empty cells for all existing columns
+          const newCells = firstPage.columns.map(column => ({
+            id: `temp-cell-${tempRowId}-${column.id}`,
+            rowId: tempRowId,
+            columnId: column.id,
+            value: { text: "" },
+            column,
+          }));
+          
+          const newRow = {
+            id: tempRowId,
+            tableId,
+            order: nextOrder,
+            cells: newCells,
           };
-        });
+          
+          // Add the new row to the last page (most recent)
+          utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
+            if (!old) return old;
+            
+            const updatedPages = [...old.pages];
+            const lastPageIndex = updatedPages.length - 1;
+            
+            if (lastPageIndex >= 0 && updatedPages[lastPageIndex]) {
+              const lastPage = updatedPages[lastPageIndex];
+              updatedPages[lastPageIndex] = {
+                ...lastPage,
+                rows: [...lastPage.rows, newRow],
+                _count: {
+                  ...lastPage._count,
+                  rows: lastPage._count.rows + 1,
+                }
+              };
+            }
+            
+            return {
+              ...old,
+              pages: updatedPages,
+            };
+          });
+        }
       }
       
       return { previousData, tempRowId };
@@ -172,12 +202,12 @@ export function TableControls({
     onError: (err, variables, context) => {
       // Revert to the previous value on error
       if (context?.previousData) {
-        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
+        utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
       }
     },
     onSettled: (data, error, variables) => {
       // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
     }
   });
 
