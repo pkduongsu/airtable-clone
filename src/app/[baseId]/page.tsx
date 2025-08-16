@@ -37,6 +37,9 @@ export default function BasePage() {
     rowId: string;
   } | null>(null);
 
+  // Bulk loading state
+  const [isBulkLoading, setIsBulkLoading] = useState(false);
+
   const { data: base } = api.base.getById.useQuery(
     { id: baseId },
     { enabled: !!baseId }
@@ -47,11 +50,26 @@ export default function BasePage() {
     { enabled: !!baseId }
   );
 
-  // Get detailed table data with rows and cells
-  const { data: tableData, refetch: refetchTableData } = api.table.getTableData.useQuery(
-    { tableId: selectedTable! },
-    { enabled: !!selectedTable }
+  // Get detailed table data with rows and cells using infinite query
+  const {
+    data: infiniteTableData,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    refetch: refetchTableData
+  } = api.table.getTableData.useInfiniteQuery(
+    { tableId: selectedTable!, limit: 100 },
+    {
+      enabled: !!selectedTable,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    }
   );
+
+  // Flatten the paginated data into a single tableData object
+  const tableData = infiniteTableData?.pages[0] ? {
+    ...infiniteTableData.pages[0], // Get table metadata from first page
+    rows: infiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
+  } : undefined;
 
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
@@ -115,6 +133,42 @@ export default function BasePage() {
     },
     onSettled: (data, error, variables) => {
       // Always refetch to ensure server state
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+    }
+  });
+
+  const bulkInsertRowsMutation = api.table.bulkInsertRows.useMutation({
+    onMutate: async ({ tableId, count = 100000 }) => {
+      await utils.table.getTableData.cancel({ tableId });
+      const previousData = utils.table.getTableData.getData({ tableId });
+      
+      // Optimistically update the count
+      if (previousData) {
+        utils.table.getTableData.setData({ tableId }, (old) => {
+          if (!old) return old;
+          
+          return {
+            ...old,
+            _count: {
+              ...old._count,
+              rows: old._count.rows + count,
+            }
+          };
+        });
+      }
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      if (context?.previousData) {
+        utils.table.getTableData.setData({ tableId: variables.tableId }, context.previousData);
+      }
+      setIsBulkLoading(false);
+    },
+    onSuccess: () => {
+      setIsBulkLoading(false);
+    },
+    onSettled: (data, error, variables) => {
       void utils.table.getTableData.invalidate({ tableId: variables.tableId });
     }
   });
@@ -400,6 +454,21 @@ export default function BasePage() {
     setContextMenu(null);
   };
 
+  const handleBulkAddRows = async () => {
+    if (!selectedTable || isBulkLoading) return;
+    
+    setIsBulkLoading(true);
+    try {
+      await bulkInsertRowsMutation.mutateAsync({
+        tableId: selectedTable,
+        count: 100000,
+      });
+    } catch (error) {
+      console.error('Failed to bulk insert rows:', error);
+      setIsBulkLoading(false);
+    }
+  };
+
   // Select first table when tables are loaded
   useEffect(() => {
     if (tables && tables.length > 0 && !selectedTable) {
@@ -494,9 +563,17 @@ export default function BasePage() {
                   onInsertRowBelow={handleInsertRowBelow}
                   onDeleteRow={handleDeleteRow}
                   onContextMenu={handleContextMenu}
+                  fetchNextPage={fetchNextPage}
+                  hasNextPage={hasNextPage}
+                  isFetchingNextPage={isFetchingNextPage}
                 />
               </main>
-              <SummaryBar recordCount={tableData._count.rows} onAddRow={handleAddRow} />
+              <SummaryBar 
+                recordCount={tableData?._count.rows ?? 0} 
+                onAddRow={handleAddRow} 
+                onBulkAddRows={handleBulkAddRows}
+                isBulkLoading={isBulkLoading}
+              />
             </div>
           </div>
         </div>

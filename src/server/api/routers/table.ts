@@ -1,4 +1,5 @@
 import z from "zod";
+import { faker } from '@faker-js/faker';
 
 import {  createTRPCRouter,
   protectedProcedure,
@@ -186,30 +187,51 @@ export const tableRouter = createTRPCRouter({
     }),
 
   getTableData: protectedProcedure
-    .input(z.object({ tableId: z.string() }))
+    .input(z.object({ 
+      tableId: z.string(),
+      limit: z.number().min(1).max(1000).default(100),
+      cursor: z.number().default(0)
+    }))
     .query(async ({ ctx, input }) => {
-      return ctx.db.table.findUnique({
-        where: { id: input.tableId },
+      const { tableId, limit, cursor } = input;
+      
+      // Get table metadata (columns and count)
+      const table = await ctx.db.table.findUnique({
+        where: { id: tableId },
         include: {
           columns: {
             orderBy: { order: "asc" },
-          },
-          rows: {
-            include: {
-              cells: {
-                include: {
-                  column: true,
-                },
-              },
-            },
-            orderBy: { order: "asc" },
-            take: 50, // Limit to first 50 rows for performance
           },
           _count: {
             select: { rows: true },
           },
         },
       });
+
+      if (!table) {
+        throw new Error("Table not found");
+      }
+
+      // Get paginated rows
+      const rows = await ctx.db.row.findMany({
+        where: { tableId },
+        include: {
+          cells: {
+            include: {
+              column: true,
+            },
+          },
+        },
+        orderBy: { order: "asc" },
+        skip: cursor,
+        take: limit,
+      });
+
+      return {
+        ...table,
+        rows,
+        nextCursor: rows.length === limit ? cursor + limit : null,
+      };
     }),
 
   createColumn: protectedProcedure
@@ -475,5 +497,108 @@ export const tableRouter = createTRPCRouter({
       });
 
       return { success: true };
+    }),
+
+  bulkInsertRows: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      count: z.number().default(100000),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { tableId, count } = input;
+
+      // Get table columns to generate appropriate fake data
+      const columns = await ctx.db.column.findMany({
+        where: { tableId },
+        orderBy: { order: 'asc' },
+      });
+
+      // Get current max order for rows
+      const maxOrderResult = await ctx.db.row.aggregate({
+        where: { tableId },
+        _max: { order: true },
+      });
+
+      const startOrder = (maxOrderResult._max.order ?? -1) + 1;
+
+      // Function to generate fake data based on column name and type
+      const generateFakeValue = (columnName: string, columnType: string) => {
+        const lowerName = columnName.toLowerCase();
+        
+        if (lowerName.includes('name') || lowerName.includes('title')) {
+          return faker.person.fullName();
+        } else if (lowerName.includes('email')) {
+          return faker.internet.email();
+        } else if (lowerName.includes('note') || lowerName.includes('description') || lowerName.includes('comment')) {
+          return faker.lorem.word();
+        } else if (lowerName.includes('assignee') || lowerName.includes('owner') || lowerName.includes('user')) {
+          return faker.person.firstName();
+        } else if (lowerName.includes('status')) {
+          return faker.helpers.arrayElement(['In Progress', 'Complete', 'Pending', 'Review', 'Blocked']);
+        } else if (lowerName.includes('priority')) {
+          return faker.helpers.arrayElement(['High', 'Medium', 'Low', 'Critical']);
+        } else if (lowerName.includes('phone')) {
+          return faker.phone.number();
+        } else if (lowerName.includes('address')) {
+          return faker.location.streetAddress();
+        } else if (lowerName.includes('city')) {
+          return faker.location.city();
+        } else if (lowerName.includes('company') || lowerName.includes('organization')) {
+          return faker.company.name();
+        } else if (lowerName.includes('attachment') || lowerName.includes('file')) {
+          return faker.helpers.arrayElement(['', 'document.pdf', 'image.jpg', 'spreadsheet.xlsx']);
+        } else if (columnType === 'NUMBER') {
+          return faker.number.int({ min: 1, max: 1000 }).toString();
+        } else {
+          // Default text data
+          return faker.lorem.words(faker.number.int({ min: 1, max: 4 }));
+        }
+      };
+
+      // Process in batches to avoid memory/timeout issues
+      const batchSize = 1000;
+      const batches = Math.ceil(count / batchSize);
+
+      for (let batch = 0; batch < batches; batch++) {
+        const batchStart = batch * batchSize;
+        const batchEnd = Math.min(batchStart + batchSize, count);
+        const batchCount = batchEnd - batchStart;
+
+        // Prepare rows for this batch
+        const rowsData = [];
+        for (let i = 0; i < batchCount; i++) {
+          rowsData.push({
+            tableId,
+            order: startOrder + batchStart + i,
+          });
+        }
+
+        // Insert rows in batch
+        const insertedRows = await ctx.db.row.createManyAndReturn({
+          data: rowsData,
+        });
+
+        // Prepare cells for this batch
+        const cellsData = [];
+        for (const row of insertedRows) {
+          for (const column of columns) {
+            const fakeValue = generateFakeValue(column.name, column.type);
+            cellsData.push({
+              rowId: row.id,
+              columnId: column.id,
+              value: { text: fakeValue },
+            });
+          }
+        }
+
+        // Insert cells in batch
+        if (cellsData.length > 0) {
+          await ctx.db.cell.createMany({
+            data: cellsData,
+          });
+        }
+      }
+
+      return { success: true, insertedCount: count };
     }),
 });

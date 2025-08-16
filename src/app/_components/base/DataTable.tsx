@@ -63,16 +63,19 @@ interface DataTableProps {
   onInsertRowBelow?: (tableId: string, rowId: string) => void;
   onDeleteRow?: (tableId: string, rowId: string) => void;
   onContextMenu?: (position: { x: number; y: number }, rowId: string) => void;
+  fetchNextPage?: () => void;
+  hasNextPage?: boolean;
+  isFetchingNextPage?: boolean;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const [selectedCell, setSelectedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
-  
+
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
@@ -340,6 +343,27 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     overscan: 5,
   });
 
+  // Infinite scrolling logic
+  useEffect(() => {
+    if (!fetchNextPage || !hasNextPage || isFetchingNextPage) return;
+
+    const container = tableContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      const scrollPercentage = (scrollTop + clientHeight) / scrollHeight;
+      
+      // Trigger fetch when user has scrolled 80% of the way down
+      if (scrollPercentage > 0.8) {
+        fetchNextPage();
+      }
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+
 
   // Handle clicking outside cells to deselect
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
@@ -460,6 +484,23 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
                 </tr>
               );
             })}
+            
+            {/* Loading indicator at the bottom */}
+            {isFetchingNextPage && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: `${rowVirtualizer.getTotalSize()}px`,
+                  width: '100%',
+                  padding: '16px',
+                  textAlign: 'center',
+                  color: '#666',
+                  fontSize: '14px',
+                }}
+              >
+                Loading more rows...
+              </div>
+            )}
           </tbody>
         </table>
         
