@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useRef } from "react";
+import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -67,9 +67,116 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
+  const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  const [selectedCell, setSelectedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  // Handle cell selection
+  const handleCellSelection = useCallback((rowIndex: number, columnIndex: number) => {
+    setSelectedCell({ rowIndex, columnIndex });
+  }, []);
+
+  // Handle cell deselection
+  const handleCellDeselection = useCallback(() => {
+    setSelectedCell(null);
+  }, []);
+
+  // Handle cell navigation
+  const handleCellNavigation = useCallback((direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right', currentRowIndex: number, currentColumnIndex: number) => {
+    const maxRowIndex = tableData.rows.length - 1;
+    const maxColumnIndex = tableData.columns.length - 1; // Excluding row number column
+    
+    let newRowIndex = currentRowIndex;
+    let newColumnIndex = currentColumnIndex;
+
+    switch (direction) {
+      case 'tab':
+        if (currentColumnIndex < maxColumnIndex) {
+          newColumnIndex = currentColumnIndex + 1;
+        } else if (currentRowIndex < maxRowIndex) {
+          newRowIndex = currentRowIndex + 1;
+          newColumnIndex = 0;
+        }
+        break;
+      case 'shift-tab':
+        if (currentColumnIndex > 0) {
+          newColumnIndex = currentColumnIndex - 1;
+        } else if (currentRowIndex > 0) {
+          newRowIndex = currentRowIndex - 1;
+          newColumnIndex = maxColumnIndex;
+        }
+        break;
+      case 'enter':
+      case 'down':
+        if (currentRowIndex < maxRowIndex) {
+          newRowIndex = currentRowIndex + 1;
+        }
+        break;
+      case 'up':
+        if (currentRowIndex > 0) {
+          newRowIndex = currentRowIndex - 1;
+        }
+        break;
+      case 'right':
+        if (currentColumnIndex < maxColumnIndex) {
+          newColumnIndex = currentColumnIndex + 1;
+        }
+        break;
+      case 'left':
+        if (currentColumnIndex > 0) {
+          newColumnIndex = currentColumnIndex - 1;
+        }
+        break;
+    }
+
+    if (newRowIndex !== currentRowIndex || newColumnIndex !== currentColumnIndex) {
+      setSelectedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
+      // Clear focusedCell to prevent interference
+      setFocusedCell(null);
+    }
+  }, [tableData.rows.length, tableData.columns.length]);
+
+  // Handle keyboard events for cell selection and navigation
+  useEffect(() => {
+    if (!selectedCell) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle keyboard events if no input is focused
+      const activeElement = document.activeElement;
+      if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        // Trigger focus to enter edit mode
+        setFocusedCell(selectedCell);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCellDeselection();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        handleCellNavigation(e.shiftKey ? 'shift-tab' : 'tab', selectedCell.rowIndex, selectedCell.columnIndex);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        handleCellNavigation('up', selectedCell.rowIndex, selectedCell.columnIndex);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        handleCellNavigation('down', selectedCell.rowIndex, selectedCell.columnIndex);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handleCellNavigation('left', selectedCell.rowIndex, selectedCell.columnIndex);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleCellNavigation('right', selectedCell.rowIndex, selectedCell.columnIndex);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedCell, handleCellNavigation, handleCellDeselection]);
 
   // Transform the data structure into a format that TanStack Table can use
   const { columns, data } = useMemo(() => {
@@ -130,7 +237,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
     });
 
     // Create column definitions for data columns
-    const tableColumns: ColumnDef<TableRow, string | undefined>[] = tableData.columns.map((column) =>
+    const tableColumns: ColumnDef<TableRow, string | undefined>[] = tableData.columns.map((column, columnIndex) =>
       columnHelper.accessor(column.id, {
         id: column.id,
         header: column.name,
@@ -139,12 +246,18 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
           const value = info.getValue()!;
           const row = info.row.original;
           const cellId = row.__cellIds[column.id]!;
+          const rowIndex = info.row.index;
           
           return (
             <EditableCell
               cellId={cellId}
               initialValue={value ?? ""}
               onSave={onTableDataRefresh}
+              onNavigate={(direction) => handleCellNavigation(direction, rowIndex, columnIndex)}
+              shouldFocus={focusedCell?.rowIndex === rowIndex && focusedCell?.columnIndex === columnIndex}
+              isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
+              onSelect={() => handleCellSelection(rowIndex, columnIndex)}
+              onDeselect={handleCellDeselection}
             />
           );
         },
@@ -181,7 +294,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, onTableDataRefresh]);
+  }, [tableData, selectedRows, hoveredRowIndex, onTableDataRefresh, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection]);
 
   const table = useReactTable({
     data,
@@ -211,6 +324,14 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
   });
 
 
+  // Handle clicking outside cells to deselect
+  const handleContainerClick = useCallback((e: React.MouseEvent) => {
+    // Only deselect if clicking directly on the container, not on child elements
+    if (e.target === e.currentTarget) {
+      handleCellDeselection();
+    }
+  }, [handleCellDeselection]);
+
   return (
     <div 
       ref={tableContainerRef}
@@ -220,6 +341,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
         paddingRight: '70px',
         paddingBottom: '70px',
       }}
+      onClick={handleContainerClick}
     >
       <div 
         style={{ 
