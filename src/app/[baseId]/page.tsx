@@ -6,14 +6,15 @@ import { useSession } from "next-auth/react";
 
 import { api } from "~/trpc/react";
 
-import { Sidebar } from "../_components/base/Sidebar";
-import { NavBar } from "../_components/base/NavBar";
-import { TableTabsBar } from "../_components/base/TableTabsBar";
-import  Toolbar  from "../_components/base/Toolbar";
-import { DataTable } from "../_components/base/DataTable";
-import { ViewSidebar } from "../_components/base/ViewSidebar";
-import { SummaryBar } from "../_components/base/SummaryBar";
-import { CellContextMenu } from "../_components/base/CellContextMenu";
+import { Sidebar } from "../_components/base/controls/Sidebar";
+import { NavBar } from "../_components/base/controls/NavBar";
+import { TableTabsBar } from "../_components/base/controls/TableTabsBar";
+import  Toolbar  from "../_components/base/controls/Toolbar";
+import { DataTable } from "../_components/base/table/DataTable";
+import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
+import { SummaryBar } from "../_components/base/controls/SummaryBar";
+import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
+import { type SortRule } from "../_components/base/modals/SortModal";
 
 
 export default function BasePage() {
@@ -39,6 +40,12 @@ export default function BasePage() {
 
   // Bulk loading state
   const [isBulkLoading, setIsBulkLoading] = useState(false);
+
+  // Column visibility state
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  // Sort state
+  const [sortRules, setSortRules] = useState<SortRule[]>([]);
 
   const { data: base } = api.base.getById.useQuery(
     { id: baseId },
@@ -242,12 +249,65 @@ export default function BasePage() {
     }
   };
 
+  // Column visibility handlers
+  const handleToggleColumn = (columnId: string) => {
+    setHiddenColumns(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(columnId)) {
+        newSet.delete(columnId);
+      } else {
+        newSet.add(columnId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleHideAllColumns = () => {
+    if (tableData?.columns) {
+      setHiddenColumns(new Set(tableData.columns.map(col => col.id)));
+    }
+  };
+
+  const handleShowAllColumns = () => {
+    setHiddenColumns(new Set());
+  };
+
+  // Sort handlers
+  const handleUpdateSortRule = (ruleId: string, direction: 'asc' | 'desc') => {
+    setSortRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, direction } : rule
+      )
+    );
+  };
+
+  const handleRemoveSortRule = (ruleId: string) => {
+    setSortRules(prev => prev.filter(rule => rule.id !== ruleId));
+  };
+
+  const handleAddSortRule = (columnId: string, columnName: string, columnType: string) => {
+    const newRule: SortRule = {
+      id: `sort-${Date.now()}-${Math.random()}`,
+      columnId,
+      direction: 'asc',
+      columnName,
+      columnType,
+    };
+    setSortRules(prev => [...prev, newRule]);
+  };
+
   // Select first table when tables are loaded
   useEffect(() => {
     if (tables && tables.length > 0 && !selectedTable) {
       setSelectedTable(tables[0]!.id);
     }
   }, [tables, selectedTable]);
+
+  // Reset hidden columns and sort rules when switching tables
+  useEffect(() => {
+    setHiddenColumns(new Set());
+    setSortRules([]);
+  }, [selectedTable]);
 
 
   // Early return if no session or no selected table
@@ -304,6 +364,15 @@ export default function BasePage() {
             onSidebarClick={() => {
               setSidebarExpanded(!sidebarExpanded);
             }}
+            columns={tableData?.columns || []}
+            hiddenColumns={hiddenColumns}
+            onToggleColumn={handleToggleColumn}
+            onHideAllColumns={handleHideAllColumns}
+            onShowAllColumns={handleShowAllColumns}
+            sortRules={sortRules}
+            onUpdateSortRule={handleUpdateSortRule}
+            onRemoveSortRule={handleRemoveSortRule}
+            onAddSortRule={handleAddSortRule}
           />
           
           {/* Content area with custom resizable nav and main content */}
@@ -339,6 +408,8 @@ export default function BasePage() {
                   fetchNextPage={fetchNextPage}
                   hasNextPage={hasNextPage}
                   isFetchingNextPage={isFetchingNextPage}
+                  hiddenColumns={hiddenColumns}
+                  sortRules={sortRules}
                 />
               </main>
               <SummaryBar 

@@ -1,17 +1,30 @@
-import { useEffect, useState } from "react";
-import List from "../icons/List";
-import GridFeature from "../icons/GridFeature";
-import ChevronDown from "../icons/ChevronDown";
-import EyeSlash from "../icons/EyeSlash";
-import FunnelSimple from "../icons/FunnelSimple";
-import Group from "../icons/Group";
-import ArrowsDownUp from "../icons/ArrowsDownUp";
-import PaintBucket from "../icons/PaintBucket";
-import RowHeightSmall from "../icons/RowHeightSmall";
-import ArrowSquareOut from "../icons/ArrowSquareOut";
-import MagnifyingGlass from "../icons/MagnifyingGlass";
+import { useEffect, useState, useRef } from "react";
+import List from "../../icons/List";
+import GridFeature from "../../icons/GridFeature";
+import ChevronDown from "../../icons/ChevronDown";
+import EyeSlash from "../../icons/EyeSlash";
+import FunnelSimple from "../../icons/FunnelSimple";
+import Group from "../../icons/Group";
+import ArrowsDownUp from "../../icons/ArrowsDownUp";
+import PaintBucket from "../../icons/PaintBucket";
+import RowHeightSmall from "../../icons/RowHeightSmall";
+import ArrowSquareOut from "../../icons/ArrowSquareOut";
+import MagnifyingGlass from "../../icons/MagnifyingGlass";
 import { CleanTooltip, CleanTooltipContent, CleanTooltipTrigger } from "~/components/ui/clean-tooltip";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
+import { ToolbarModal } from "../modals/ToolbarModal";
+import { HideFieldsModal } from "../modals/HideFieldsModal";
+import { SortModal, type SortRule } from "../modals/SortModal";
+import { AddSortModal } from "../modals/AddSortModal";
+
+interface Column {
+  id: string;
+  name: string;
+  type: string;
+  order: number;
+  width: number;
+  tableId: string;
+}
 
 interface ToolbarProps {
   selectedTable?: string | null;
@@ -19,10 +32,39 @@ interface ToolbarProps {
   onSidebarHover?: () => void;
   onSidebarLeave?: () => void;
   onSidebarClick?: () => void;
+  columns?: Column[];
+  hiddenColumns?: Set<string>;
+  onToggleColumn?: (columnId: string) => void;
+  onHideAllColumns?: () => void;
+  onShowAllColumns?: () => void;
+  sortRules?: SortRule[];
+  onUpdateSortRule?: (ruleId: string, direction: 'asc' | 'desc') => void;
+  onRemoveSortRule?: (ruleId: string) => void;
+  onAddSortRule?: (columnId: string, columnName: string, columnType: string) => void;
 }
 
-export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover, onSidebarLeave, onSidebarClick }: ToolbarProps) {
+export default function Toolbar({ 
+  selectedTable, 
+  tables: _tables, 
+  onSidebarHover, 
+  onSidebarLeave, 
+  onSidebarClick,
+  columns = [],
+  hiddenColumns = new Set(),
+  onToggleColumn,
+  onHideAllColumns,
+  onShowAllColumns,
+  sortRules = [],
+  onUpdateSortRule,
+  onRemoveSortRule,
+  onAddSortRule
+}: ToolbarProps) {
   const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
+  const [isHideFieldsModalOpen, setIsHideFieldsModalOpen] = useState(false);
+  const [isSortModalOpen, setIsSortModalOpen] = useState(false);
+  const [isAddSortModalOpen, setIsAddSortModalOpen] = useState(false);
+  const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
+  const sortButtonRef = useRef<HTMLButtonElement>(null);
   
   useEffect(() => {
     if (selectedTable) {
@@ -40,6 +82,24 @@ export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover
       }
     }
   }, [selectedTable]);
+
+  // Sort modal handlers
+  const handleAddSort = () => {
+    setIsSortModalOpen(false);
+    setIsAddSortModalOpen(true);
+  };
+
+  const handleSelectColumnForSort = (column: Column) => {
+    if (onAddSortRule) {
+      onAddSortRule(column.id, column.name, column.type);
+    }
+    setIsAddSortModalOpen(false);
+    setIsSortModalOpen(true);
+  };
+
+  const availableColumnsForSort = columns.filter(col => 
+    !sortRules.some(rule => rule.columnId === col.id)
+  );
 
   return (
     <TooltipProvider>
@@ -89,11 +149,28 @@ export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover
               <div className="flex items-center">
                 <div className="flex flex-row mr-2">
                   <div>
-                    {/* Show/Hide fields add tooltips to each button here */}
-                    <button className="toolbar-button focus-visible:outline mr-2">
+                    {/* Show/Hide fields button */}
+                    <button 
+                      ref={hideFieldsButtonRef}
+                      className={`toolbar-button focus-visible:outline mr-2 ${
+                        hiddenColumns.size > 0 ? 'bg-blue-50 border border-blue-200' : ''
+                      }`}
+                      onClick={() => setIsHideFieldsModalOpen(!isHideFieldsModalOpen)}
+                    >
                       <div className="cursor-pointer flex items-center px-2 py-1">
-                        <EyeSlash size={16} color="#616670" className="flex-none transition-colors duration-200" />
-                        <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Hide fields</div>                      
+                        <EyeSlash 
+                          size={16} 
+                          color={hiddenColumns.size > 0 ? "#2563eb" : "#616670"} 
+                          className="flex-none transition-colors duration-200" 
+                        />
+                        <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block ${
+                          hiddenColumns.size > 0 ? 'text-blue-700' : 'text-[#616670]'
+                        }`}>
+                          {hiddenColumns.size > 0 
+                            ? `${hiddenColumns.size} hidden field${hiddenColumns.size === 1 ? '' : 's'}`
+                            : 'Hide fields'
+                          }
+                        </div>                      
                       </div>
                     </button>
                     {/* Filter button */}
@@ -114,10 +191,27 @@ export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover
                   </button>
                   <div>
                     <div>
-                      <button className="toolbar-button focus-visible:outline mr-2">
+                      <button 
+                        ref={sortButtonRef}
+                        className={`toolbar-button focus-visible:outline mr-2 ${
+                          sortRules.length > 0 ? 'bg-orange-50 border border-orange-200' : ''
+                        }`}
+                        onClick={() => setIsSortModalOpen(!isSortModalOpen)}
+                      >
                         <div className="cursor-pointer flex items-center px-2 py-1">
-                            <ArrowsDownUp size={16} color="#616670" className="flex-none" />
-                            <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Sort</div>
+                            <ArrowsDownUp 
+                              size={16} 
+                              color={sortRules.length > 0 ? "#ea580c" : "#616670"} 
+                              className="flex-none" 
+                            />
+                            <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block ${
+                              sortRules.length > 0 ? 'text-orange-700' : 'text-[#616670]'
+                            }`}>
+                              {sortRules.length > 0 
+                                ? `Sorted by ${sortRules.length} field${sortRules.length === 1 ? '' : 's'}`
+                                : 'Sort'
+                              }
+                            </div>
                         </div>
                       </button>
                     </div>
@@ -173,6 +267,68 @@ export default function Toolbar({ selectedTable, tables: _tables, onSidebarHover
           </div>
         </div>
       </div>
+
+      {/* Hide Fields Modal */}
+      <ToolbarModal
+        isOpen={isHideFieldsModalOpen}
+        onClose={() => setIsHideFieldsModalOpen(false)}
+        triggerRef={hideFieldsButtonRef}
+        width={320}
+        maxHeight={400}
+      >
+        <HideFieldsModal
+          columns={columns}
+          hiddenColumns={hiddenColumns}
+          onToggleColumn={onToggleColumn ?? (() => {
+            // No-op when onToggleColumn is not provided
+          })}
+          onHideAll={onHideAllColumns ?? (() => {
+            // No-op when onHideAllColumns is not provided
+          })}
+          onShowAll={onShowAllColumns ?? (() => {
+            // No-op when onShowAllColumns is not provided
+          })}
+        />
+      </ToolbarModal>
+
+      {/* Sort Modal */}
+      <ToolbarModal
+        isOpen={isSortModalOpen}
+        onClose={() => setIsSortModalOpen(false)}
+        triggerRef={sortButtonRef}
+        width={360}
+        maxHeight={450}
+      >
+        <SortModal
+          columns={columns}
+          sortRules={sortRules}
+          onUpdateSortRule={onUpdateSortRule ?? (() => {
+            // No-op when onUpdateSortRule is not provided
+          })}
+          onRemoveSortRule={onRemoveSortRule ?? (() => {
+            // No-op when onRemoveSortRule is not provided
+          })}
+          onAddSort={handleAddSort}
+        />
+      </ToolbarModal>
+
+      {/* Add Sort Modal */}
+      <ToolbarModal
+        isOpen={isAddSortModalOpen}
+        onClose={() => setIsAddSortModalOpen(false)}
+        triggerRef={sortButtonRef}
+        width={280}
+        maxHeight={400}
+      >
+        <AddSortModal
+          columns={availableColumnsForSort}
+          onSelectColumn={handleSelectColumnForSort}
+          onClose={() => {
+            setIsAddSortModalOpen(false);
+            setIsSortModalOpen(true);
+          }}
+        />
+      </ToolbarModal>
     </div>
     </TooltipProvider>
   );

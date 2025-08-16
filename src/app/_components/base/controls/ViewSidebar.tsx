@@ -1,10 +1,10 @@
 "use client";
 
-import { CustomResizablePanel } from "./CustomResizablePanel";
-import Plus from "../icons/Plus";
-import MagnifyingGlass from "../icons/MagnifyingGlass";
-import Cog from "../icons/Cog";
-import GridFeature from "../icons/GridFeature";
+import { CustomResizablePanel } from "../CustomResizablePanel";
+import Plus from "../../icons/Plus";
+import MagnifyingGlass from "../../icons/MagnifyingGlass";
+import Cog from "../../icons/Cog";
+import GridFeature from "../../icons/GridFeature";
 
 interface ViewSidebarProps {
   isExpanded: boolean;

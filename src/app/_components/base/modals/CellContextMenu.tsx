@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import ArrowUp from "../icons/ArrowUp";
-import ArrowDown from "../icons/ArrowDown";
-import Trash from "../icons/Trash";
+import ArrowUp from "../../icons/ArrowUp";
+import ArrowDown from "../../icons/ArrowDown";
+import Trash from "../../icons/Trash";
 
 interface CellContextMenuProps {
   isOpen: boolean;
