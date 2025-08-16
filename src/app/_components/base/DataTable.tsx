@@ -59,10 +59,9 @@ const columnHelper = createColumnHelper<TableRow>();
 
 interface DataTableProps {
   tableData: TableData;
-  onTableDataRefresh?: () => void;
 }
 
-export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
+export function DataTable({ tableData }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -252,7 +251,6 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
             <EditableCell
               cellId={cellId}
               initialValue={value ?? ""}
-              onSave={onTableDataRefresh}
               onNavigate={(direction) => handleCellNavigation(direction, rowIndex, columnIndex)}
               shouldFocus={focusedCell?.rowIndex === rowIndex && focusedCell?.columnIndex === columnIndex}
               isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
@@ -294,7 +292,7 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, onTableDataRefresh, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection]);
 
   const table = useReactTable({
     data,
@@ -452,7 +450,6 @@ export function DataTable({ tableData, onTableDataRefresh }: DataTableProps) {
       <TableControls
         tableData={tableData}
         tableTotalWidth={table.getCenterTotalSize()}
-        onTableDataRefresh={onTableDataRefresh}
       />
     </div>
   );

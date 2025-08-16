@@ -203,7 +203,6 @@ export default function BasePage() {
               <main className="h-full relative bg-[#f6f8fc]">
                 <DataTable 
                   tableData={tableData} 
-                  onTableDataRefresh={refetchTableData}
                 />
               </main>
             </div>

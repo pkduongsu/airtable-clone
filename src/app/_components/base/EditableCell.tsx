@@ -6,7 +6,6 @@ import { api } from "~/trpc/react";
 interface EditableCellProps {
   cellId: string;
   initialValue: string;
-  onSave?: () => void;
   className?: string;
   onNavigate?: (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => void;
   shouldFocus?: boolean;
@@ -15,14 +14,62 @@ interface EditableCellProps {
   onDeselect?: () => void;
 }
 
-export function EditableCell({ cellId, initialValue, onSave, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect }: EditableCellProps) {
+export function EditableCell({ cellId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect: _onDeselect }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   
-  const updateCellMutation = api.table.updateCell.useMutation();
+  const utils = api.useUtils();
+  const updateCellMutation = api.table.updateCell.useMutation({
+    onMutate: async ({ cellId, value: newValue }) => {
+      // Cancel any outgoing refetches
+      await utils.table.getTableData.cancel();
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getData();
+      
+      // Optimistically update the cache
+      if (previousData) {
+        utils.table.getTableData.setData({ tableId: previousData.id }, (old) => {
+          if (!old) return old;
+          
+          return {
+            ...old,
+            rows: old.rows.map(row => ({
+              ...row,
+              cells: row.cells.map(cell => 
+                cell.id === cellId 
+                  ? { 
+                      ...cell, 
+                      value: typeof newValue === 'string' 
+                        ? { text: newValue }
+                        : typeof newValue === 'number'
+                        ? { number: newValue }
+                        : newValue
+                    }
+                  : cell
+              )
+            }))
+          };
+        });
+      }
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setData({ tableId: context.previousData.id }, context.previousData);
+      }
+      setValue(initialValue); // Revert local state too
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure server state
+      void utils.table.getTableData.invalidate();
+    }
+  });
 
   // Debounced save function
   const debouncedSave = useCallback(async (newValue: string) => {
@@ -34,14 +81,14 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
         cellId,
         value: newValue,
       });
-      onSave?.();
+      // No need to call onSave since we're using optimistic updates
     } catch (error) {
       console.error('Failed to update cell:', error);
-      setValue(initialValue);
+      // Error handling is done in the mutation's onError callback
     } finally {
       setIsSaving(false);
     }
-  }, [cellId, initialValue, updateCellMutation, onSave]);
+  }, [cellId, initialValue, updateCellMutation]);
 
   // Update local value when initialValue changes
   useEffect(() => {
@@ -124,14 +171,11 @@ export function EditableCell({ cellId, initialValue, onSave, className = "", onN
         value,
       });
       
-      // Call onSave callback to refresh table data
-      onSave?.();
-      
+      // No need to call onSave since we're using optimistic updates
       setIsEditing(false);
     } catch (error) {
       console.error('Failed to update cell:', error);
-      // Revert to original value on error
-      setValue(initialValue);
+      // Error handling is done in the mutation's onError callback
       setIsEditing(false);
     }
   };
