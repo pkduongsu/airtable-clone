@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import ChevronDown from "../icons/ChevronDown";
+import Spinner from "../icons/Spinner";
 import { TableControls } from "./TableControls";
 import { EditableCell } from "./EditableCell";
 
@@ -484,25 +485,31 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
                 </tr>
               );
             })}
-            
-            {/* Loading indicator at the bottom */}
-            {isFetchingNextPage && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: `${rowVirtualizer.getTotalSize()}px`,
-                  width: '100%',
-                  padding: '16px',
-                  textAlign: 'center',
-                  color: '#666',
-                  fontSize: '14px',
-                }}
-              >
-                Loading more rows...
-              </div>
-            )}
           </tbody>
         </table>
+        
+        {/* Loading indicator at the bottom */}
+        {isFetchingNextPage && (
+          <div
+            style={{
+              position: 'absolute',
+              top: `${rowVirtualizer.getTotalSize() + 40}px`,
+              width: '100%',
+              padding: '16px',
+              textAlign: 'center',
+              background: 'rgba(255, 255, 255, 0.95)',
+              borderTop: '1px solid #e5e7eb',
+              boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.1)',
+            }}
+          >
+            <div className="flex items-center justify-center gap-3">
+              <Spinner size={20} color="#666" />
+              <span className="text-sm text-gray-600 font-medium">
+                Loading more rows...
+              </span>
+            </div>
+          </div>
+        )}
         
       </div>
 
