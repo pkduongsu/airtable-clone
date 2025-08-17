@@ -4,7 +4,7 @@ interface PlusIconProps {
   color?: string;
 }
 
-export default function Omni({className, size, color} : PlusIconProps) {
+export default function Plus({className, size, color} : PlusIconProps) {
     return (
        <svg 
             width={size} 

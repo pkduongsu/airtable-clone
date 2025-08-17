@@ -1,6 +1,6 @@
 "use client";
 
-import { useState,  useEffect, } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 
@@ -15,6 +15,8 @@ import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
 import { SummaryBar } from "../_components/base/controls/SummaryBar";
 import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
 import { type SortRule } from "../_components/base/modals/SortModal";
+import { type FilterRule } from "../_components/base/modals/FilterModal";
+import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 
 
 export default function BasePage() {
@@ -47,6 +49,14 @@ export default function BasePage() {
   // Sort state
   const [sortRules, setSortRules] = useState<SortRule[]>([]);
 
+  // Filter state
+  const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
+
+  // View state
+  const [currentViewId, setCurrentViewId] = useState<string | null>(null);
+  const [isViewSwitching, setIsViewSwitching] = useState(false);
+
+
   const { data: base } = api.base.getById.useQuery(
     { id: baseId },
     { enabled: !!baseId }
@@ -57,7 +67,7 @@ export default function BasePage() {
     { enabled: !!baseId }
   );
 
-  // Get detailed table data with rows and cells using infinite query
+  // Get detailed table data with rows and cells using infinite query (stable base query without sorting)
   const {
     data: infiniteTableData,
     fetchNextPage,
@@ -65,18 +75,73 @@ export default function BasePage() {
     isFetchingNextPage,
     refetch: refetchTableData
   } = api.table.getTableData.useInfiniteQuery(
-    { tableId: selectedTable!, limit: 100 },
+    { 
+      tableId: selectedTable!, 
+      limit: 100
+      // Note: No sortRules here - keeping query stable
+    },
     {
       enabled: !!selectedTable,
       getNextPageParam: (lastPage) => lastPage.nextCursor,
     }
   );
 
+  // Background query for server-side processed data (when sort or filter rules exist)
+  const {
+    data: processedInfiniteTableData,
+    refetch: refetchProcessedData
+  } = api.table.getTableData.useInfiniteQuery(
+    { 
+      tableId: selectedTable!, 
+      limit: 100,
+      ...(sortRules.length > 0 && {
+        sortRules: sortRules.map(rule => ({
+          columnId: rule.columnId,
+          direction: rule.direction
+        }))
+      }),
+      ...(filterRules.length > 0 && {
+        filterRules: filterRules.map(rule => ({
+          id: rule.id,
+          columnId: rule.columnId,
+          columnName: rule.columnName,
+          columnType: rule.columnType,
+          operator: rule.operator,
+          value: rule.value
+        }))
+      })
+    },
+    {
+      enabled: !!selectedTable && (sortRules.length > 0 || filterRules.length > 0),
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    }
+  );
+
+  // Data persistence to prevent loading states
+  const lastKnownTableDataRef = useRef<typeof tableData>(undefined);
+
   // Flatten the paginated data into a single tableData object
-  const tableData = infiniteTableData?.pages[0] ? {
-    ...infiniteTableData.pages[0], // Get table metadata from first page
-    rows: infiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
-  } : undefined;
+  const tableData = useMemo(() => {
+    const data = infiniteTableData?.pages[0] ? {
+      ...infiniteTableData.pages[0], // Get table metadata from first page
+      rows: infiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
+    } : undefined;
+    
+    // Store the data if it exists
+    if (data) {
+      lastKnownTableDataRef.current = data;
+    }
+    
+    return data;
+  }, [infiniteTableData]);
+
+  // Server-side processed data (when available)
+  const serverProcessedTableData = useMemo(() => {
+    return processedInfiniteTableData?.pages[0] ? {
+      ...processedInfiniteTableData.pages[0], // Get table metadata from first page
+      rows: processedInfiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
+    } : undefined;
+  }, [processedInfiniteTableData]);
 
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
@@ -86,11 +151,17 @@ export default function BasePage() {
   
   const createRowMutation = api.table.createRow.useMutation({
     onMutate: async ({ tableId }) => {
-      // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId, 
+        limit: 100
+      });
       
       // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
       
       // Generate temporary IDs
       const tempRowId = `temp-row-${Date.now()}`;
@@ -121,7 +192,10 @@ export default function BasePage() {
           };
           
           // Add the new row to the last page (most recent)
-          utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
+          utils.table.getTableData.setInfiniteData({ 
+            tableId, 
+            limit: 100
+          }, (old) => {
             if (!old) return old;
             
             const updatedPages = [...old.pages];
@@ -152,12 +226,15 @@ export default function BasePage() {
     onError: (err, variables, context) => {
       // Revert to the previous value on error
       if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: variables.tableId, 
+          limit: 100
+        }, context.previousData);
       }
     },
-    onSettled: (data, error, variables) => {
-      // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
     }
   });
 
@@ -168,8 +245,9 @@ export default function BasePage() {
     onSuccess: () => {
       setIsBulkLoading(false);
     },
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation - bulk operations are less frequent
+      // and don't interfere with editing as much, but still avoid disruption
     }
   });
 
@@ -251,20 +329,20 @@ export default function BasePage() {
   };
 
   const insertRowAboveMutation = api.table.insertRowAbove.useMutation({
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation to prevent disrupting edit sessions
     }
   });
 
   const insertRowBelowMutation = api.table.insertRowBelow.useMutation({
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation to prevent disrupting edit sessions
     }
   });
 
   const deleteRowMutation = api.table.deleteRow.useMutation({
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation to prevent disrupting edit sessions
     }
   });
 
@@ -330,16 +408,39 @@ export default function BasePage() {
       }
       return newSet;
     });
+    // Trigger immediate save for instant feedback
+    triggerViewSave();
+  };
+
+  // Manual trigger for immediate view saves (separate from auto-save)
+  const triggerViewSave = () => {
+    if (currentViewId) {
+      // Use setTimeout to ensure state updates have been applied
+      setTimeout(() => {
+        const config: ViewConfig = {
+          sortRules,
+          filterRules,
+          hiddenColumns: Array.from(hiddenColumns),
+        };
+        console.log('Manual view save triggered for:', currentViewId);
+        updateViewMutationRef.current({
+          id: currentViewId,
+          config
+        });
+      }, 100);
+    }
   };
 
   const handleHideAllColumns = () => {
     if (tableData?.columns) {
       setHiddenColumns(new Set(tableData.columns.map(col => col.id)));
     }
+    triggerViewSave();
   };
 
   const handleShowAllColumns = () => {
     setHiddenColumns(new Set());
+    triggerViewSave();
   };
 
   // Sort handlers
@@ -349,10 +450,13 @@ export default function BasePage() {
         rule.id === ruleId ? { ...rule, direction } : rule
       )
     );
+    triggerViewSave();
+    // Trigger immediate save for explicit user actions
   };
 
   const handleRemoveSortRule = (ruleId: string) => {
     setSortRules(prev => prev.filter(rule => rule.id !== ruleId));
+    triggerViewSave();
   };
 
   const handleAddSortRule = (columnId: string, columnName: string, columnType: string) => {
@@ -364,7 +468,130 @@ export default function BasePage() {
       columnType,
     };
     setSortRules(prev => [...prev, newRule]);
+    triggerViewSave();
   };
+
+  const handleUpdateSortRuleField = (ruleId: string, columnId: string, columnName: string, columnType: string) => {
+    setSortRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
+      )
+    );
+    triggerViewSave();
+  };
+
+  // Filter handlers
+  const handleUpdateFilterRule = (ruleId: string, operator: FilterRule['operator'], value?: string | number) => {
+    setFilterRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, operator, value } : rule
+      )
+    );
+    triggerViewSave();
+  };
+
+  const handleRemoveFilterRule = (ruleId: string) => {
+    setFilterRules(prev => prev.filter(rule => rule.id !== ruleId));
+    triggerViewSave();
+  };
+
+  const handleAddFilterRule = (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
+    const newRule: FilterRule = {
+      id: `filter-${Date.now()}-${Math.random()}`,
+      columnId,
+      columnName,
+      columnType,
+      operator: columnType === 'NUMBER' ? 'equals' : 'contains',
+      value: undefined,
+    };
+    setFilterRules(prev => [...prev, newRule]);
+    triggerViewSave();
+  };
+
+  const handleUpdateFilterRuleField = (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
+    setFilterRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { 
+          ...rule, 
+          columnId, 
+          columnName, 
+          columnType,
+          operator: columnType === 'NUMBER' ? 'equals' : 'contains', // Reset operator when changing field type
+          value: undefined // Reset value when changing field
+        } : rule
+      )
+    );
+    triggerViewSave();
+  };
+
+  // Auto-save current view state when changes are made
+  const updateViewMutation = api.view.update.useMutation({
+    onSuccess: () => {
+      console.log('View config saved successfully');
+      // Immediately invalidate view list for instant feedback
+      void utils.view.list.invalidate({ tableId: selectedTable! });
+    },
+    onError: (error) => {
+      console.error('Failed to save view config:', error);
+    }
+  });
+  
+  // Use a ref to store the latest mutation function to avoid dependency issues
+  const updateViewMutationRef = useRef(updateViewMutation.mutate);
+  updateViewMutationRef.current = updateViewMutation.mutate;
+
+
+  // Get views for selected table
+  const { data: views, refetch: refetchViews } = api.view.list.useQuery(
+    { tableId: selectedTable! },
+    { enabled: !!selectedTable }
+  );
+
+
+
+
+  // Auto-save view configuration with long debounce to avoid editing interference
+  useEffect(() => {
+    if (isViewSwitching || !currentViewId) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      const config: ViewConfig = {
+        sortRules,
+        filterRules,
+        hiddenColumns: Array.from(hiddenColumns),
+      };
+
+      console.log('Auto-saving view config for:', currentViewId, config);
+      updateViewMutationRef.current({
+        id: currentViewId,
+        config
+      });
+    }, 1000); // 1 second - much faster response for view changes
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [sortRules, filterRules, hiddenColumns, isViewSwitching, currentViewId]);
+
+  // View handlers
+  const handleViewChange = useCallback((viewId: string | null, config: ViewConfig) => {
+    console.log('Manual view change to:', viewId);
+    
+    setIsViewSwitching(true);
+    setCurrentViewId(viewId);
+    
+    // Apply the new view configuration
+    setSortRules(config.sortRules);
+    setFilterRules(config.filterRules);
+    setHiddenColumns(new Set(config.hiddenColumns));
+    
+    // Re-enable auto-save after a very short delay
+    setTimeout(() => {
+      setIsViewSwitching(false);
+    }, 50);
+  }, []); // Keep empty dependencies to avoid auto-select loops
 
   // Select first table when tables are loaded
   useEffect(() => {
@@ -373,12 +600,160 @@ export default function BasePage() {
     }
   }, [tables, selectedTable]);
 
-  // Reset hidden columns and sort rules when switching tables
+  // Auto-select default view when table changes or views are loaded (only when no view is selected)
   useEffect(() => {
-    setHiddenColumns(new Set());
-    setSortRules([]);
+    if (!selectedTable || !views || views.length === 0 || isViewSwitching || currentViewId !== null) return;
+
+    // Only auto-select when we don't have a current view selected
+    const defaultView = views.find(view => view.isDefault) ?? views[0];
+    if (defaultView) {
+      console.log('Auto-selecting default view:', defaultView.name, 'ID:', defaultView.id);
+      handleViewChange(defaultView.id, defaultView.config as unknown as ViewConfig);
+    }
+  }, [selectedTable, views, isViewSwitching, currentViewId, handleViewChange]);
+
+  // Reset view when switching tables
+  useEffect(() => {
+    setCurrentViewId(null);
+    // Don't immediately refetch views to avoid disrupting editing
+    // Views will be loaded when needed
   }, [selectedTable]);
 
+  // Get the best available data source for processing
+  const getBaseDataForProcessing = useCallback(() => {
+    // Priority: current tableData > lastKnownTableData > null
+    return tableData ?? lastKnownTableDataRef.current;
+  }, [tableData]);
+
+  // Define proper row type for client-side processing
+  type TableRow = NonNullable<typeof tableData>['rows'][0];
+
+  // Client-side filtering function
+  const applyClientSideFilters = useCallback((rows: TableRow[], filterRules: FilterRule[]): TableRow[] => {
+    if (filterRules.length === 0) return rows;
+
+    return rows.filter(row => {
+      return filterRules.every(rule => {
+        const cell = row.cells.find(cell => cell.columnId === rule.columnId);
+        const cellValue = cell?.value as { text?: string } | null;
+        const textValue = cellValue?.text ?? '';
+
+        switch (rule.operator) {
+          case 'is_empty':
+            return textValue === '';
+          case 'is_not_empty':
+            return textValue !== '';
+          case 'contains':
+            return textValue.toLowerCase().includes((rule.value as string)?.toLowerCase() ?? '');
+          case 'not_contains':
+            return !textValue.toLowerCase().includes((rule.value as string)?.toLowerCase() ?? '');
+          case 'equals':
+            if (rule.columnType === 'NUMBER') {
+              const numValue = parseFloat(textValue) || 0;
+              return numValue === (rule.value as number);
+            }
+            return textValue.toLowerCase() === ((rule.value as string)?.toLowerCase() ?? '');
+          case 'greater_than':
+            const greaterValue = parseFloat(textValue) || 0;
+            return greaterValue > (rule.value as number);
+          case 'less_than':
+            const lessValue = parseFloat(textValue) || 0;
+            return lessValue < (rule.value as number);
+          default:
+            return true;
+        }
+      });
+    });
+  }, []);
+
+  // Client-side sorting function
+  const applyClientSideSorting = useCallback((rows: TableRow[], sortRules: SortRule[]): TableRow[] => {
+    if (sortRules.length === 0) return rows;
+
+    return [...rows].sort((a, b) => {
+      for (const rule of sortRules) {
+        const cellA = a.cells.find(cell => cell.columnId === rule.columnId);
+        const cellB = b.cells.find(cell => cell.columnId === rule.columnId);
+        
+        const valueA = cellA?.value as { text?: string } | null;
+        const valueB = cellB?.value as { text?: string } | null;
+        
+        const textA = valueA?.text ?? '';
+        const textB = valueB?.text ?? '';
+        
+        // Determine column type from the first sort rule's column
+        const isNumber = rule.columnType === 'NUMBER';
+        
+        let comparison = 0;
+        
+        if (isNumber) {
+          const numA = parseFloat(textA) || 0;
+          const numB = parseFloat(textB) || 0;
+          comparison = numA - numB;
+        } else {
+          comparison = textA.toLowerCase().localeCompare(textB.toLowerCase());
+        }
+        
+        if (comparison !== 0) {
+          return rule.direction === 'desc' ? -comparison : comparison;
+        }
+      }
+      
+      // If all sort rules are equal, fall back to row order
+      return a.order - b.order;
+    });
+  }, []);
+
+  // Optimistically apply filtering and sorting without full invalidation
+  const optimisticTableData = useMemo(() => {
+    const baseData = getBaseDataForProcessing();
+    
+    if (!baseData) return undefined;
+    
+    // If we have no processing rules, return base data or server data
+    if (sortRules.length === 0 && filterRules.length === 0) {
+      return serverProcessedTableData ?? baseData;
+    }
+    
+    // If we have server-side processed data that matches current rules, prefer it
+    if (serverProcessedTableData && (sortRules.length > 0 || filterRules.length > 0)) {
+      return serverProcessedTableData;
+    }
+    
+    // Otherwise, create optimistic client-side processed data
+    // Step 1: Apply filters
+    const filteredRows = applyClientSideFilters(baseData.rows, filterRules);
+    
+    // Step 2: Apply sorting
+    const processedRows = applyClientSideSorting(filteredRows, sortRules);
+
+    return {
+      ...baseData,
+      rows: processedRows,
+    };
+  }, [getBaseDataForProcessing, sortRules, filterRules, serverProcessedTableData, applyClientSideFilters, applyClientSideSorting]);
+
+  // Background sync for server-side processed data
+  const handleRulesChange = useCallback(() => {
+    if (selectedTable && (sortRules.length > 0 || filterRules.length > 0)) {
+      // Trigger background fetch of server-side processed data
+      void refetchProcessedData();
+    }
+  }, [selectedTable, sortRules.length, filterRules.length, refetchProcessedData]);
+
+  useEffect(() => {
+    handleRulesChange();
+  }, [handleRulesChange]);
+
+  // Disable background sync temporarily to ensure stable editing
+  // TODO: Implement smarter background sync that detects editing state
+  // useEffect(() => {
+  //   if (!selectedTable) return;
+  //   const interval = setInterval(() => {
+  //     // Background sync logic
+  //   }, 30000);
+  //   return () => clearInterval(interval);
+  // }, [selectedTable]);
 
   // Early return if no session or no selected table
   if (!session || !user) {
@@ -391,8 +766,11 @@ export default function BasePage() {
     );
   }
 
-  // Show loading only if we have a table selected but no data yet
-  if (!selectedTable || !tableData) {
+  // Use optimistic data if available, otherwise fall back to any available data
+  const displayTableData = optimisticTableData ?? tableData ?? lastKnownTableDataRef.current;
+
+  // Show loading only if we have a table selected but absolutely no data available
+  if (!selectedTable || !displayTableData) {
     return (
       <div className="h-screen flex flex-col bg-white">
         <div className="flex-1 flex items-center justify-center">
@@ -434,7 +812,7 @@ export default function BasePage() {
             onSidebarClick={() => {
               setSidebarExpanded(!sidebarExpanded);
             }}
-            columns={tableData?.columns || []}
+            columns={displayTableData?.columns ?? []}
             hiddenColumns={hiddenColumns}
             onToggleColumn={handleToggleColumn}
             onHideAllColumns={handleHideAllColumns}
@@ -443,6 +821,12 @@ export default function BasePage() {
             onUpdateSortRule={handleUpdateSortRule}
             onRemoveSortRule={handleRemoveSortRule}
             onAddSortRule={handleAddSortRule}
+            onUpdateSortRuleField={handleUpdateSortRuleField}
+            filterRules={filterRules}
+            onUpdateFilterRule={handleUpdateFilterRule}
+            onRemoveFilterRule={handleRemoveFilterRule}
+            onAddFilterRule={handleAddFilterRule}
+            onUpdateFilterRuleField={handleUpdateFilterRuleField}
           />
           
           {/* Content area with custom resizable nav and main content */}
@@ -456,6 +840,17 @@ export default function BasePage() {
               onWidthChange={(width) => setSidebarWidth(width)}
               onResizeStart={() => setIsResizing(true)}
               onResizeEnd={() => setIsResizing(false)}
+              selectedTable={selectedTable}
+              currentView={currentViewId}
+              onViewChange={handleViewChange}
+              currentSortRules={sortRules}
+              currentFilterRules={filterRules}
+              currentHiddenColumns={Array.from(hiddenColumns)}
+              views={views}
+              onRefetchViews={() => {
+                // Safe to refetch views immediately - doesn't affect table data
+                void refetchViews();
+              }}
             />
 
             {/* Spacer to push main content when sidebar is visible */}
@@ -470,7 +865,7 @@ export default function BasePage() {
             <div className="flex-1 min-w-0 w-0 overflow-hidden flex flex-col">
               <main className="flex-1 h-full relative bg-[#f6f8fc]">
                 <DataTable 
-                  tableData={tableData}
+                  tableData={displayTableData}
                   onInsertRowAbove={handleInsertRowAbove}
                   onInsertRowBelow={handleInsertRowBelow}
                   onDeleteRow={handleDeleteRow}
@@ -480,10 +875,11 @@ export default function BasePage() {
                   isFetchingNextPage={isFetchingNextPage}
                   hiddenColumns={hiddenColumns}
                   sortRules={sortRules}
+                  filterRules={filterRules}
                 />
               </main>
               <SummaryBar 
-                recordCount={tableData?._count.rows ?? 0} 
+                recordCount={displayTableData?._count.rows ?? 0} 
                 onAddRow={handleAddRow} 
                 onBulkAddRows={handleBulkAddRows}
                 isBulkLoading={isBulkLoading}

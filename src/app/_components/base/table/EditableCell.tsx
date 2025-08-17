@@ -15,9 +15,21 @@ interface EditableCellProps {
   onDeselect?: () => void;
   rowId?: string;
   onContextMenu?: (event: React.MouseEvent, rowId: string) => void;
+  sortRules?: Array<{
+    columnId: string;
+    direction: 'asc' | 'desc';
+  }>;
+  filterRules?: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+  }>;
 }
 
-export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu, sortRules = [], filterRules = [] }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
@@ -25,18 +37,52 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const inputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestValueRef = useRef<string>(initialValue);
+  const [pendingMutation, setPendingMutation] = useState(false);
+  const [editSessionId, setEditSessionId] = useState<string | null>(null);
+  const [pendingValue, setPendingValue] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   
   const utils = api.useUtils();
   const updateCellMutation = api.table.updateCell.useMutation({
     onMutate: async (variables) => {
-      // Cancel any outgoing refetches for this specific table
+      // Determine if we need to update processed query cache
+      const hasProcessingRules = sortRules.length > 0 || filterRules.length > 0;
+      
+      // Cancel outgoing refetches for both base and processed queries
       await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
-      // Snapshot the previous value for error recovery
+      let previousProcessedData;
+      if (hasProcessingRules) {
+        const processedQueryKey = { 
+          tableId, 
+          limit: 100,
+          ...(sortRules.length > 0 && {
+            sortRules: sortRules.map(rule => ({
+              columnId: rule.columnId,
+              direction: rule.direction
+            }))
+          }),
+          ...(filterRules.length > 0 && {
+            filterRules: filterRules.map(rule => ({
+              id: rule.id,
+              columnId: rule.columnId,
+              columnName: rule.columnName,
+              columnType: rule.columnType,
+              operator: rule.operator,
+              value: rule.value
+            }))
+          })
+        };
+        
+        await utils.table.getTableData.cancel(processedQueryKey);
+        previousProcessedData = utils.table.getTableData.getInfiniteData(processedQueryKey);
+      }
+      
+      // Snapshot current data for rollback
       const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
       
-      // Optimistically update the cache immediately for better UX
-      utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
+      // Helper function to update cache data
+      const updateCacheData = (old: typeof previousData) => {
         if (!old) return old;
         
         const updatedPages = old.pages.map(page => ({
@@ -58,58 +104,130 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
           ...old,
           pages: updatedPages,
         };
-      });
+      };
       
-      return { previousData };
+      // Update base query cache
+      utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, updateCacheData);
+      
+      // Update processed query cache if processing rules exist
+      if (hasProcessingRules && previousProcessedData) {
+        const processedQueryKey = { 
+          tableId, 
+          limit: 100,
+          ...(sortRules.length > 0 && {
+            sortRules: sortRules.map(rule => ({
+              columnId: rule.columnId,
+              direction: rule.direction
+            }))
+          }),
+          ...(filterRules.length > 0 && {
+            filterRules: filterRules.map(rule => ({
+              id: rule.id,
+              columnId: rule.columnId,
+              columnName: rule.columnName,
+              columnType: rule.columnType,
+              operator: rule.operator,
+              value: rule.value
+            }))
+          })
+        };
+        
+        utils.table.getTableData.setInfiniteData(processedQueryKey, updateCacheData);
+      }
+      
+      return { previousData, previousProcessedData, hasProcessingRules };
     },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
+    onSuccess: () => {
+      console.log('Cell update successful');
+      setHasLocalChanges(false);
+      setIsSaving(false);
+      setPendingValue(null);
+      setEditSessionId(null);
+      setSaveStatus('saved');
+      // Clear save status after a short delay
+      setTimeout(() => setSaveStatus('idle'), 2000);
+      // Don't invalidate immediately - optimistic update already shows correct data
+    },
+    onError: (error, variables, context) => {
+      console.error('Failed to update cell:', error);
+      // Rollback optimistic updates for both caches
       if (context?.previousData) {
         utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, context.previousData);
       }
-      setValue(initialValue); // Revert local state too
-      setIsSaving(false); // Clear saving state on error
-      console.error('Failed to update cell:', err);
+      
+      if (context?.hasProcessingRules && context?.previousProcessedData) {
+        const processedQueryKey = { 
+          tableId, 
+          limit: 100,
+          ...(sortRules.length > 0 && {
+            sortRules: sortRules.map(rule => ({
+              columnId: rule.columnId,
+              direction: rule.direction
+            }))
+          }),
+          ...(filterRules.length > 0 && {
+            filterRules: filterRules.map(rule => ({
+              id: rule.id,
+              columnId: rule.columnId,
+              columnName: rule.columnName,
+              columnType: rule.columnType,
+              operator: rule.operator,
+              value: rule.value
+            }))
+          })
+        };
+        
+        utils.table.getTableData.setInfiniteData(processedQueryKey, context.previousProcessedData);
+      }
+      
+      setValue(initialValue); // Revert local state
+      setIsSaving(false);
+      setHasLocalChanges(false);
+      setPendingValue(null);
+      setEditSessionId(null);
+      setSaveStatus('error');
     },
     onSettled: () => {
-      // Always refetch to ensure server state after mutation completes
-      void utils.table.getTableData.invalidate({ tableId, limit: 100 });
+      setPendingMutation(false);
+      // No invalidation needed - optimistic updates handle UI consistency
+      // The server save already completed successfully
     },
   });
 
-  // Server save function (just server sync, cache already updated)
+  // Simple save function
   const saveToServer = useCallback((newValue: string) => {
-    if (newValue === initialValue) {
+    if (newValue === initialValue || pendingMutation) {
       setHasLocalChanges(false);
       setIsSaving(false);
       return;
     }
 
-    // Don't set isSaving here - it's already set in handleValueChange
+    setPendingMutation(true);
+    setIsSaving(true);
+    setSaveStatus('saving');
     updateCellMutation.mutate({
       cellId,
       value: newValue,
-    }, {
-      onSuccess: () => {
-        setHasLocalChanges(false);
-        setIsSaving(false);
-      },
-      onError: (error) => {
-        console.error('Failed to update cell:', error);
-        setIsSaving(false);
-        // Keep hasLocalChanges true so user can retry
-      }
     });
-  }, [cellId, initialValue, updateCellMutation]);
+  }, [cellId, initialValue, updateCellMutation, pendingMutation]);
 
 
-  // Update local value when initialValue changes, but only if we don't have pending local changes
+  // Update local value when initialValue changes, but STRONGLY preserve user edits
   useEffect(() => {
-    if (!hasLocalChanges && !isEditing) {
-      setValue(initialValue);
-      latestValueRef.current = initialValue;
+    // Only update if ALL conditions are met:
+    // 1. No local changes
+    // 2. Not actively editing
+    // 3. No pending mutation
+    // 4. No active edit session
+    // 5. No pending value waiting to be saved
+    if (!hasLocalChanges && !isEditing && !pendingMutation && !editSessionId && !pendingValue) {
+      // Additional check: only update if the new value is actually different
+      if (initialValue !== value) {
+        setValue(initialValue);
+        latestValueRef.current = initialValue;
+      }
     }
-  }, [initialValue, hasLocalChanges, isEditing]);
+  }, [initialValue, hasLocalChanges, isEditing, pendingMutation, editSessionId, pendingValue, value]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -124,18 +242,26 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     setValue(newValue);
     setHasLocalChanges(true);
     latestValueRef.current = newValue;
+    setPendingValue(newValue);
     
     // Clear existing timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
+    // Start edit session if not already started
+    if (!editSessionId) {
+      const sessionId = `edit-${cellId}-${Date.now()}`;
+      setEditSessionId(sessionId);
+      console.log('Started edit session:', sessionId);
+    }
+
     // Set new timeout for deferred server save
     saveTimeoutRef.current = setTimeout(() => {
       setIsSaving(true);
       saveToServer(newValue);
-    }, 500); // Delay for server save
-  }, [saveToServer]);
+    }, 500); // Faster response while still allowing smooth typing
+  }, [saveToServer, editSessionId, cellId]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -197,10 +323,17 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       clearTimeout(saveTimeoutRef.current);
     }
     
-    // Save immediately - optimistic update happens in mutation
+    // Save immediately - this is a user-initiated save so it should be immediate
     setIsEditing(false);
     setIsSaving(true);
-    saveToServer(latestValueRef.current);
+    
+    // Use the mutation directly for immediate save
+    setPendingMutation(true);
+    setSaveStatus('saving');
+    updateCellMutation.mutate({
+      cellId,
+      value: latestValueRef.current,
+    });
   };
 
   const handleCancel = () => {
@@ -227,9 +360,14 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     // Exit edit mode immediately for smooth navigation
     setIsEditing(false);
     
-    // Save immediately - optimistic update happens in mutation
+    // Save immediately using direct mutation for reliability
+    setPendingMutation(true);
     setIsSaving(true);
-    saveToServer(latestValueRef.current);
+    setSaveStatus('saving');
+    updateCellMutation.mutate({
+      cellId,
+      value: latestValueRef.current,
+    });
     
     // Navigate immediately after exiting edit mode
     setTimeout(() => onNavigate?.(direction), 0);
@@ -265,18 +403,25 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       setTimeout(() => onDeselect?.(), 0);
       
       // Ensure data persists by updating cache immediately before navigation
-      if (latestValueRef.current !== initialValue) {
+      if (latestValueRef.current !== initialValue && !pendingMutation) {
         // Clear any pending auto-save
         if (saveTimeoutRef.current) {
           clearTimeout(saveTimeoutRef.current);
         }
-        // Save immediately - optimistic update happens in mutation
+        // Save immediately using direct mutation for reliability
+        setPendingMutation(true);
         setIsSaving(true);
-        saveToServer(latestValueRef.current);
+        setSaveStatus('saving');
+        updateCellMutation.mutate({
+          cellId,
+          value: latestValueRef.current,
+        });
       }
     } else {
-      // Normal blur behavior
-      void handleSave();
+      // Normal blur behavior - only save if not already saving
+      if (!pendingMutation) {
+        void handleSave();
+      }
     }
   };
 
@@ -300,9 +445,28 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
             onBlur={handleBlur}
             className={`w-full h-full px-2 py-1 border-none bg-white focus:outline-none text-sm text-gray-900 rounded-sm border ${isSaving ? 'border-yellow-400' : 'border-blue-500'}`}
           />
-          {isSaving && (
+          {/* Save status indicator */}
+          {saveStatus === 'saving' && (
             <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
-              <div className="w-3 h-3 border border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
+              <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" title="Saving..."></div>
+            </div>
+          )}
+          {saveStatus === 'saved' && (
+            <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
+              <div className="w-3 h-3 bg-green-500 rounded-full flex items-center justify-center" title="Saved">
+                <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
+          )}
+          {saveStatus === 'error' && (
+            <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
+              <div className="w-3 h-3 bg-red-500 rounded-full flex items-center justify-center" title="Save failed">
+                <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </div>
             </div>
           )}
         </div>

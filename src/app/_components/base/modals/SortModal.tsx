@@ -28,7 +28,8 @@ interface SortModalProps {
   sortRules: SortRule[];
   onUpdateSortRule: (ruleId: string, direction: SortDirection) => void;
   onRemoveSortRule: (ruleId: string) => void;
-  onAddSort: () => void;
+  onAddSortRule: (columnId: string, columnName: string, columnType: string) => void;
+  onUpdateSortRuleField: (ruleId: string, columnId: string, columnName: string, columnType: string) => void;
 }
 
 export function SortModal({
@@ -36,10 +37,12 @@ export function SortModal({
   sortRules,
   onUpdateSortRule,
   onRemoveSortRule,
-  onAddSort,
+  onAddSortRule,
+  onUpdateSortRuleField,
 }: SortModalProps) {
-  const [hoveredRule, setHoveredRule] = useState<string | null>(null);
+  const [hoveredField, setHoveredField] = useState<string | null>(null);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [openFieldDropdown, setOpenFieldDropdown] = useState<string | null>(null);
 
   const getSortDirectionLabel = useCallback((rule: SortRule) => {
     if (rule.columnType === 'NUMBER') {
@@ -68,9 +71,26 @@ export function SortModal({
     setOpenDropdown(null);
   }, [onUpdateSortRule]);
 
-  const availableColumns = columns.filter(col => 
-    !sortRules.some(rule => rule.columnId === col.id)
-  );
+  const handleFieldSelect = useCallback((column: Column) => {
+    onAddSortRule(column.id, column.name, column.type);
+  }, [onAddSortRule]);
+
+  const handleFieldChange = useCallback((ruleId: string, column: Column) => {
+    onUpdateSortRuleField(ruleId, column.id, column.name, column.type);
+    setOpenFieldDropdown(null);
+  }, [onUpdateSortRuleField]);
+
+  const getSortRuleForColumn = useCallback((columnId: string) => {
+    return sortRules.find(rule => rule.columnId === columnId);
+  }, [sortRules]);
+
+  const getAvailableFieldsForRule = useCallback((currentRuleId: string) => {
+    return columns.filter(col => {
+      // Include current field or fields not used by other rules
+      const rule = sortRules.find(r => r.columnId === col.id);
+      return !rule || rule.id === currentRuleId;
+    });
+  }, [columns, sortRules]);
 
   return (
     <div className="py-3">
@@ -84,104 +104,139 @@ export function SortModal({
         )}
       </div>
 
-      {/* Sort rules list */}
-      <div className="max-h-64 overflow-y-auto">
-        {sortRules.length === 0 ? (
-          <div className="px-4 py-6 text-center">
-            <p className="text-sm text-gray-500">No sort rules applied</p>
-            <p className="text-xs text-gray-400 mt-1">Click &ldquo;Add a sort&rdquo; to get started</p>
-          </div>
-        ) : (
-          sortRules.map((rule, index) => (
-            <div
-              key={rule.id}
-              className={`flex items-center px-4 py-3 border-b border-gray-50 last:border-b-0 transition-colors duration-150 ${
-                hoveredRule === rule.id ? "bg-gray-25" : ""
-              }`}
-              onMouseEnter={() => setHoveredRule(rule.id)}
-              onMouseLeave={() => setHoveredRule(null)}
-            >
-              {/* Sort order indicator */}
-              <div className="flex-shrink-0 mr-3">
-                <div className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">
-                  <span className="text-xs font-medium text-gray-600">{index + 1}</span>
+      {/* Fields list with sort rules */}
+      <div className="max-h-80 overflow-y-auto">
+        {columns.map((column) => {
+          const sortRule = getSortRuleForColumn(column.id);
+          const ruleIndex = sortRule ? sortRules.findIndex(r => r.id === sortRule.id) : -1;
+          
+          return (
+            <div key={column.id} className="border-b border-gray-50 last:border-b-0">
+              {/* Field header - always visible */}
+              <div
+                className={`flex items-center px-4 py-3 cursor-pointer transition-colors duration-150 ${
+                  hoveredField === column.id ? "bg-gray-50" : ""
+                } ${sortRule ? "bg-blue-25" : ""}`}
+                onMouseEnter={() => setHoveredField(column.id)}
+                onMouseLeave={() => setHoveredField(null)}
+                onClick={() => !sortRule && handleFieldSelect(column)}
+              >
+                {/* Sort order indicator (only if sorted) */}
+                {sortRule && (
+                  <div className="flex-shrink-0 mr-3">
+                    <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
+                      <span className="text-xs font-medium text-blue-600">{ruleIndex + 1}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Field name and type */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center">
+                    <span className={`text-sm font-medium truncate ${
+                      sortRule ? 'text-blue-900' : 'text-gray-900'
+                    }`}>
+                      {column.name}
+                    </span>
+                    <span className={`ml-2 text-xs uppercase ${
+                      sortRule ? 'text-blue-600' : 'text-gray-500'
+                    }`}>
+                      {column.type}
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              {/* Column info */}
-              <div className="flex-1 min-w-0 mr-3">
-                <div className="flex items-center">
-                  <span className="text-sm font-medium text-gray-900 truncate">
-                    {rule.columnName}
-                  </span>
-                  <span className="ml-2 text-xs text-gray-500 uppercase">
-                    {rule.columnType}
-                  </span>
-                </div>
-              </div>
-
-              {/* Direction dropdown */}
-              <div className="flex-shrink-0 mr-3 relative">
-                <button
-                  onClick={() => setOpenDropdown(openDropdown === rule.id ? null : rule.id)}
-                  className="flex items-center px-2 py-1 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-                  <span className="mr-1">{getSortDirectionLabel(rule)}</span>
-                  <ChevronDown size={12} color="#6b7280" />
-                </button>
-
-                {/* Dropdown menu */}
-                {openDropdown === rule.id && (
-                  <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-gray-200 rounded-md shadow-lg z-50">
-                    {getSortDirectionOptions(rule.columnType).map((option) => (
-                      <button
-                        key={option.value}
-                        onClick={() => handleDirectionSelect(rule.id, option.value)}
-                        className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
-                          rule.direction === option.value ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
-                        }`}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+                {/* Sort indicator or add indicator */}
+                {sortRule ? (
+                  <div className="flex items-center">
+                    <span className="text-xs text-blue-600 font-medium mr-2">
+                      {getSortDirectionLabel(sortRule)}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center">
+                    <span className="text-xs text-gray-400">Click to sort</span>
                   </div>
                 )}
               </div>
 
-              {/* Remove button */}
-              <div className="flex-shrink-0">
-                <button
-                  onClick={() => onRemoveSortRule(rule.id)}
-                  className={`p-1 rounded-md transition-opacity duration-150 hover:bg-red-50 ${
-                    hoveredRule === rule.id ? 'opacity-100' : 'opacity-0'
-                  }`}
-                >
-                  <Trash size={14} color="#ef4444" />
-                </button>
-              </div>
+              {/* Sort rule configuration (only if sorted) */}
+              {sortRule && (
+                <div className="px-4 pb-3 bg-blue-25 border-t border-blue-100">
+                  <div className="flex items-center gap-2 pt-3">
+                    {/* Field dropdown */}
+                    <div className="flex-1 relative">
+                      <button
+                        onClick={() => setOpenFieldDropdown(openFieldDropdown === sortRule.id ? null : sortRule.id)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                      >
+                        <span className="truncate">{sortRule.columnName}</span>
+                        <ChevronDown size={12} color="#6b7280" />
+                      </button>
+
+                      {/* Field dropdown menu */}
+                      {openFieldDropdown === sortRule.id && (
+                        <div className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
+                          {getAvailableFieldsForRule(sortRule.id).map((field) => (
+                            <button
+                              key={field.id}
+                              onClick={() => handleFieldChange(sortRule.id, field)}
+                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
+                                field.id === sortRule.columnId ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+                              }`}
+                            >
+                              <div className="flex items-center">
+                                <span className="truncate">{field.name}</span>
+                                <span className="ml-2 text-xs text-gray-500 uppercase">{field.type}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Direction dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setOpenDropdown(openDropdown === sortRule.id ? null : sortRule.id)}
+                        className="flex items-center px-3 py-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                      >
+                        <span className="mr-1">{getSortDirectionLabel(sortRule)}</span>
+                        <ChevronDown size={12} color="#6b7280" />
+                      </button>
+
+                      {/* Direction dropdown menu */}
+                      {openDropdown === sortRule.id && (
+                        <div className="absolute right-0 top-full mt-1 w-32 bg-white border border-gray-200 rounded-md shadow-lg z-50">
+                          {getSortDirectionOptions(sortRule.columnType).map((option) => (
+                            <button
+                              key={option.value}
+                              onClick={() => handleDirectionSelect(sortRule.id, option.value)}
+                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
+                                sortRule.direction === option.value ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Remove button */}
+                    <button
+                      onClick={() => onRemoveSortRule(sortRule.id)}
+                      className="p-2 rounded-md hover:bg-red-50 transition-colors duration-150"
+                    >
+                      <Trash size={14} color="#ef4444" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          ))
-        )}
+          );
+        })}
       </div>
-
-      {/* Add sort action */}
-      {availableColumns.length > 0 && (
-        <div className="px-4 pt-3 border-t border-gray-100">
-          <button
-            onClick={onAddSort}
-            className="text-sm text-blue-600 hover:text-blue-700 font-medium focus:outline-none focus:underline"
-          >
-            + Add{sortRules.length > 0 ? ' another' : ' a'} sort
-          </button>
-        </div>
-      )}
-
-      {/* No more fields message */}
-      {availableColumns.length === 0 && sortRules.length > 0 && (
-        <div className="px-4 pt-3 border-t border-gray-100">
-          <p className="text-xs text-gray-500">All fields are already being used for sorting</p>
-        </div>
-      )}
     </div>
   );
 }

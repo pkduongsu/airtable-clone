@@ -1,10 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { CustomResizablePanel } from "../CustomResizablePanel";
+import { ToolbarModal } from "../modals/ToolbarModal";
+import { CreateViewModal, type ViewConfig } from "../modals/CreateViewModal";
 import Plus from "../../icons/Plus";
 import MagnifyingGlass from "../../icons/MagnifyingGlass";
 import Cog from "../../icons/Cog";
 import GridFeature from "../../icons/GridFeature";
+import { api } from "~/trpc/react";
 
 interface ViewSidebarProps {
   isExpanded: boolean;
@@ -14,6 +18,33 @@ interface ViewSidebarProps {
   onWidthChange: (width: number) => void;
   onResizeStart: () => void;
   onResizeEnd: () => void;
+  selectedTable?: string | null;
+  currentView?: string | null;
+  onViewChange?: (viewId: string | null, config: ViewConfig) => void;
+  currentSortRules?: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: string;
+    direction: 'asc' | 'desc';
+  }>;
+  currentFilterRules?: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+  }>;
+  currentHiddenColumns?: string[];
+  views?: Array<{
+    id: string;
+    name: string;
+    config: unknown;
+    isDefault: boolean;
+    createdAt: Date;
+  }>;
+  onRefetchViews?: () => void;
 }
 
 export function ViewSidebar({
@@ -24,7 +55,67 @@ export function ViewSidebar({
   onWidthChange,
   onResizeStart,
   onResizeEnd,
+  selectedTable,
+  currentView,
+  onViewChange,
+  currentSortRules: _currentSortRules = [],
+  currentFilterRules: _currentFilterRules = [],
+  currentHiddenColumns: _currentHiddenColumns = [],
+  views,
+  onRefetchViews,
 }: ViewSidebarProps) {
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createButtonRef, setCreateButtonRef] = useState<HTMLButtonElement | null>(null);
+
+
+  // Get default view name for creating new views
+  const { data: defaultViewName } = api.view.getDefaultViewName.useQuery(
+    { tableId: selectedTable! },
+    { enabled: !!selectedTable && isCreateModalOpen }
+  );
+
+  // Create view mutation
+  const createViewMutation = api.view.create.useMutation({
+    onSuccess: (newView) => {
+      if (onRefetchViews) {
+        onRefetchViews();
+      }
+      setIsCreateModalOpen(false);
+      // Switch to the newly created view
+      if (onViewChange) {
+        onViewChange(newView.id, newView.config as unknown as ViewConfig);
+      }
+    }
+  });
+
+
+
+  const handleCreateView = (name: string) => {
+    if (!selectedTable) return;
+
+    // Create new view with clean state (no sorting, filtering, or hidden columns)
+    const config: ViewConfig = {
+      sortRules: [],
+      filterRules: [],
+      hiddenColumns: [],
+    };
+
+    createViewMutation.mutate({
+      tableId: selectedTable,
+      name,
+      config
+    });
+  };
+
+  const handleViewClick = (view: { id: string; name: string; config: unknown }) => {
+    if (onViewChange) {
+      onViewChange(view.id, view.config as ViewConfig);
+    }
+  };
+
+  const handleCreateNewClick = () => {
+    setIsCreateModalOpen(true);
+  };
   return (
     <div
       className="absolute top-0 left-0 h-full z-10 transition-transform duration-300 ease-in-out"
@@ -49,7 +140,11 @@ export function ViewSidebar({
         >
           <div className="h-full flex flex-col box-border py-2.5 px-2">
             <div className="flex flex-none flex-col justify-start pb-2">
-              <button className="h-[32px] cursor-pointer items-center justify-start box-border focus-visible:-outline rounded-[6px] bg-white hover:bg-[#0000000d] flex w-full px-3 pl-[16px]">
+              <button 
+                ref={setCreateButtonRef}
+                onClick={handleCreateNewClick}
+                className="h-[32px] cursor-pointer items-center justify-start box-border focus-visible:-outline rounded-[6px] bg-white hover:bg-[#0000000d] flex w-full px-3 pl-[16px]"
+              >
                 <Plus size={16} className="flex-none mr-2" color="#1d1f25"/>
                 <span className="truncate font-family-system font-[400] text-[13px] leading-[22px]">Create new...</span>
               </button>
@@ -73,26 +168,74 @@ export function ViewSidebar({
                 <div className="h-full" />
                   <div className="flex flex-col flex-auto w-full min-h-[144px]">
                     <div className="relative flex-auto">
-                      {/* If there are many views, should list all views here -> TODO */}
-                      {/* For now just 1 view card*/}
-                      <button className="rounded-[3px] cursor-pointer flex relative justify-center flex-col pt-2 pb-2 px-3 hover:bg-[#0000000d] w-full">
-                        <div className="flex items-center">
-                          <div className="flex flex-auto items-center">
-                            <span className="flex-inline flex-none items-center mr-2">
-                              <GridFeature size={16} color="#166ee1" className="flex-none" />
-                            </span>
-                            <span className="font-family-system font-[500] text-[13px] leading-[16.25px] truncate text-[#1d1f25]">
-                              Grid view
-                            </span>
+                      {/* Display all views */}
+                      {views?.map((view) => (
+                        <button 
+                          key={view.id}
+                          onClick={() => handleViewClick(view)}
+                          className={`rounded-[3px] cursor-pointer flex relative justify-center flex-col pt-2 pb-2 px-3 hover:bg-[#0000000d] w-full ${
+                            currentView === view.id ? 'bg-[#166ee1]/10' : ''
+                          }`}
+                        >
+                          <div className="flex items-center">
+                            <div className="flex flex-auto items-center">
+                              <span className="flex-inline flex-none items-center mr-2">
+                                <GridFeature 
+                                  size={16} 
+                                  color={currentView === view.id ? "#166ee1" : "#166ee1"} 
+                                  className="flex-none" 
+                                />
+                              </span>
+                              <span className={`font-family-system font-[500] text-[13px] leading-[16.25px] truncate ${
+                                currentView === view.id ? 'text-[#166ee1]' : 'text-[#1d1f25]'
+                              }`}>
+                                {view.name}
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                      </button>
+                        </button>
+                      ))}
+                      
+                      {/* Default view fallback if no views exist */}
+                      {(!views || views.length === 0) && (
+                        <button 
+                          onClick={() => onViewChange?.(null, { sortRules: [], filterRules: [], hiddenColumns: [] })}
+                          className="rounded-[3px] cursor-pointer flex relative justify-center flex-col pt-2 pb-2 px-3 hover:bg-[#0000000d] w-full"
+                        >
+                          <div className="flex items-center">
+                            <div className="flex flex-auto items-center">
+                              <span className="flex-inline flex-none items-center mr-2">
+                                <GridFeature size={16} color="#166ee1" className="flex-none" />
+                              </span>
+                              <span className="font-family-system font-[500] text-[13px] leading-[16.25px] truncate text-[#1d1f25]">
+                                Grid view
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      )}
                     </div>
                   </div>
               </div>
           </div>
         </nav>
       </CustomResizablePanel>
+      
+      {/* Create View Modal */}
+      <ToolbarModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        triggerRef={{ current: createButtonRef }}
+        width={320}
+        maxHeight={300}
+      >
+        <CreateViewModal
+          defaultName={defaultViewName ?? "Grid view"}
+          onSave={handleCreateView}
+          onCancel={() => setIsCreateModalOpen(false)}
+          isCreating={createViewMutation.isPending}
+        />
+      </ToolbarModal>
     </div>
   );
 }

@@ -70,9 +70,17 @@ interface DataTableProps {
   isFetchingNextPage?: boolean;
   hiddenColumns?: Set<string>;
   sortRules?: SortRule[];
+  filterRules?: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+  }>;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [] }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [] }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -92,6 +100,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
   const handleCellDeselection = useCallback(() => {
     setSelectedCell(null);
   }, []);
+
 
   // Handle context menu
   const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
@@ -201,37 +210,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedCell, handleCellNavigation, handleCellDeselection]);
 
-  // Function to apply sorting to table rows
-  const applySorting = useCallback((rows: TableRow[]) => {
-    if (sortRules.length === 0) return rows;
-
-    return [...rows].sort((a, b) => {
-      for (const rule of sortRules) {
-        const aValue = a[rule.columnId] ?? '';
-        const bValue = b[rule.columnId] ?? '';
-        
-        let comparison = 0;
-        
-        if (rule.columnType === 'NUMBER') {
-          const aStr = typeof aValue === 'string' ? aValue : '';
-          const bStr = typeof bValue === 'string' ? bValue : '';
-          const aNum = parseFloat(aStr) || 0;
-          const bNum = parseFloat(bStr) || 0;
-          comparison = aNum - bNum;
-        } else {
-          // Text comparison
-          const aStr = typeof aValue === 'string' ? aValue : '';
-          const bStr = typeof bValue === 'string' ? bValue : '';
-          comparison = aStr.localeCompare(bStr);
-        }
-        
-        if (comparison !== 0) {
-          return rule.direction === 'desc' ? -comparison : comparison;
-        }
-      }
-      return 0;
-    });
-  }, [sortRules]);
+  // Note: Sorting is now handled at the database level
+  // The sortRules prop is kept for UI display purposes only
 
   // Transform the data structure into a format that TanStack Table can use
   const { columns, data } = useMemo(() => {
@@ -316,6 +296,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               onDeselect={handleCellDeselection}
               rowId={row.id}
               onContextMenu={handleContextMenuClick}
+              sortRules={sortRules?.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
+              filterRules={filterRules}
             />
           );
         },
@@ -348,14 +330,12 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       return rowData;
     });
 
-    // Apply sorting to the rows
-    const sortedRows = applySorting(tableData_rows);
-
+    // Data is already sorted at database level
     return {
       columns: allColumns,
-      data: sortedRows,
+      data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, applySorting]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns]);
 
   const table = useReactTable({
     data,

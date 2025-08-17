@@ -47,6 +47,9 @@ model Session {
     userId       String
     expires      DateTime
     user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    
+    @@index([userId])
+    @@index([expires])
 }
 
 model User {
@@ -127,6 +130,8 @@ model Cell {
   
   @@index([value], type: Gin) // For JSONB search
   @@index([columnId]) // Separate B-tree index for columnId
+  @@index([rowId])
+  @@index([rowId, columnId])
 }
 
 model View {
