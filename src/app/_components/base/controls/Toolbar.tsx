@@ -15,7 +15,6 @@ import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { ToolbarModal } from "../modals/ToolbarModal";
 import { HideFieldsModal } from "../modals/HideFieldsModal";
 import { SortModal, type SortRule } from "../modals/SortModal";
-import { AddSortModal } from "../modals/AddSortModal";
 
 interface Column {
   id: string;
@@ -41,6 +40,7 @@ interface ToolbarProps {
   onUpdateSortRule?: (ruleId: string, direction: 'asc' | 'desc') => void;
   onRemoveSortRule?: (ruleId: string) => void;
   onAddSortRule?: (columnId: string, columnName: string, columnType: string) => void;
+  onUpdateSortRuleField?: (ruleId: string, columnId: string, columnName: string, columnType: string) => void;
 }
 
 export default function Toolbar({ 
@@ -57,12 +57,12 @@ export default function Toolbar({
   sortRules = [],
   onUpdateSortRule,
   onRemoveSortRule,
-  onAddSortRule
+  onAddSortRule,
+  onUpdateSortRuleField
 }: ToolbarProps) {
   const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
   const [isHideFieldsModalOpen, setIsHideFieldsModalOpen] = useState(false);
   const [isSortModalOpen, setIsSortModalOpen] = useState(false);
-  const [isAddSortModalOpen, setIsAddSortModalOpen] = useState(false);
   const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   
@@ -83,23 +83,6 @@ export default function Toolbar({
     }
   }, [selectedTable]);
 
-  // Sort modal handlers
-  const handleAddSort = () => {
-    setIsSortModalOpen(false);
-    setIsAddSortModalOpen(true);
-  };
-
-  const handleSelectColumnForSort = (column: Column) => {
-    if (onAddSortRule) {
-      onAddSortRule(column.id, column.name, column.type);
-    }
-    setIsAddSortModalOpen(false);
-    setIsSortModalOpen(true);
-  };
-
-  const availableColumnsForSort = columns.filter(col => 
-    !sortRules.some(rule => rule.columnId === col.id)
-  );
 
   return (
     <TooltipProvider>
@@ -236,6 +219,7 @@ export default function Toolbar({
                   </CleanTooltipContent>
                 </CleanTooltip>
               </div>
+              
               <span className="flex items-center mr-2">
                 <CleanTooltip>
                   <CleanTooltipTrigger asChild>
@@ -308,27 +292,15 @@ export default function Toolbar({
           onRemoveSortRule={onRemoveSortRule ?? (() => {
             // No-op when onRemoveSortRule is not provided
           })}
-          onAddSort={handleAddSort}
+          onAddSortRule={onAddSortRule ?? (() => {
+            // No-op when onAddSortRule is not provided
+          })}
+          onUpdateSortRuleField={onUpdateSortRuleField ?? (() => {
+            // No-op when onUpdateSortRuleField is not provided
+          })}
         />
       </ToolbarModal>
 
-      {/* Add Sort Modal */}
-      <ToolbarModal
-        isOpen={isAddSortModalOpen}
-        onClose={() => setIsAddSortModalOpen(false)}
-        triggerRef={sortButtonRef}
-        width={280}
-        maxHeight={400}
-      >
-        <AddSortModal
-          columns={availableColumnsForSort}
-          onSelectColumn={handleSelectColumnForSort}
-          onClose={() => {
-            setIsAddSortModalOpen(false);
-            setIsSortModalOpen(true);
-          }}
-        />
-      </ToolbarModal>
     </div>
     </TooltipProvider>
   );

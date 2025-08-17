@@ -1,6 +1,6 @@
 "use client";
 
-import { useState,  useEffect, } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 
@@ -57,7 +57,7 @@ export default function BasePage() {
     { enabled: !!baseId }
   );
 
-  // Get detailed table data with rows and cells using infinite query
+  // Get detailed table data with rows and cells using infinite query (stable base query without sorting)
   const {
     data: infiniteTableData,
     fetchNextPage,
@@ -65,18 +65,61 @@ export default function BasePage() {
     isFetchingNextPage,
     refetch: refetchTableData
   } = api.table.getTableData.useInfiniteQuery(
-    { tableId: selectedTable!, limit: 100 },
+    { 
+      tableId: selectedTable!, 
+      limit: 100
+      // Note: No sortRules here - keeping query stable
+    },
     {
       enabled: !!selectedTable,
       getNextPageParam: (lastPage) => lastPage.nextCursor,
     }
   );
 
+  // Background query for server-side sorted data (when sort rules exist)
+  const {
+    data: sortedInfiniteTableData,
+    refetch: refetchSortedData
+  } = api.table.getTableData.useInfiniteQuery(
+    { 
+      tableId: selectedTable!, 
+      limit: 100,
+      sortRules: sortRules.map(rule => ({
+        columnId: rule.columnId,
+        direction: rule.direction
+      }))
+    },
+    {
+      enabled: !!selectedTable && sortRules.length > 0,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+    }
+  );
+
+  // Data persistence to prevent loading states
+  const lastKnownTableDataRef = useRef<typeof tableData>(undefined);
+
   // Flatten the paginated data into a single tableData object
-  const tableData = infiniteTableData?.pages[0] ? {
-    ...infiniteTableData.pages[0], // Get table metadata from first page
-    rows: infiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
-  } : undefined;
+  const tableData = useMemo(() => {
+    const data = infiniteTableData?.pages[0] ? {
+      ...infiniteTableData.pages[0], // Get table metadata from first page
+      rows: infiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
+    } : undefined;
+    
+    // Store the data if it exists
+    if (data) {
+      lastKnownTableDataRef.current = data;
+    }
+    
+    return data;
+  }, [infiniteTableData]);
+
+  // Server-side sorted data (when available)
+  const serverSortedTableData = useMemo(() => {
+    return sortedInfiniteTableData?.pages[0] ? {
+      ...sortedInfiniteTableData.pages[0], // Get table metadata from first page
+      rows: sortedInfiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
+    } : undefined;
+  }, [sortedInfiniteTableData]);
 
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
@@ -86,11 +129,17 @@ export default function BasePage() {
   
   const createRowMutation = api.table.createRow.useMutation({
     onMutate: async ({ tableId }) => {
-      // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId, 
+        limit: 100
+      });
       
       // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
       
       // Generate temporary IDs
       const tempRowId = `temp-row-${Date.now()}`;
@@ -121,7 +170,10 @@ export default function BasePage() {
           };
           
           // Add the new row to the last page (most recent)
-          utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
+          utils.table.getTableData.setInfiniteData({ 
+            tableId, 
+            limit: 100
+          }, (old) => {
             if (!old) return old;
             
             const updatedPages = [...old.pages];
@@ -152,12 +204,20 @@ export default function BasePage() {
     onError: (err, variables, context) => {
       // Revert to the previous value on error
       if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: variables.tableId, 
+          limit: 100
+        }, context.previousData);
       }
     },
     onSettled: (data, error, variables) => {
-      // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+      // Invalidate both base and sorted queries
+      void utils.table.getTableData.invalidate({ 
+        tableId: variables.tableId, 
+        limit: 100
+      });
+      // Also clear persisted data to force fresh load
+      lastKnownTableDataRef.current = undefined;
     }
   });
 
@@ -169,7 +229,10 @@ export default function BasePage() {
       setIsBulkLoading(false);
     },
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+      void utils.table.getTableData.invalidate({ 
+        tableId: variables.tableId, 
+        limit: 100
+      });
     }
   });
 
@@ -252,19 +315,28 @@ export default function BasePage() {
 
   const insertRowAboveMutation = api.table.insertRowAbove.useMutation({
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+      void utils.table.getTableData.invalidate({ 
+        tableId: variables.tableId, 
+        limit: 100
+      });
     }
   });
 
   const insertRowBelowMutation = api.table.insertRowBelow.useMutation({
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+      void utils.table.getTableData.invalidate({ 
+        tableId: variables.tableId, 
+        limit: 100
+      });
     }
   });
 
   const deleteRowMutation = api.table.deleteRow.useMutation({
     onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+      void utils.table.getTableData.invalidate({ 
+        tableId: variables.tableId, 
+        limit: 100
+      });
     }
   });
 
@@ -366,6 +438,14 @@ export default function BasePage() {
     setSortRules(prev => [...prev, newRule]);
   };
 
+  const handleUpdateSortRuleField = (ruleId: string, columnId: string, columnName: string, columnType: string) => {
+    setSortRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
+      )
+    );
+  };
+
   // Select first table when tables are loaded
   useEffect(() => {
     if (tables && tables.length > 0 && !selectedTable) {
@@ -379,6 +459,78 @@ export default function BasePage() {
     setSortRules([]);
   }, [selectedTable]);
 
+  // Get the best available data source for sorting
+  const getBaseDataForSorting = useCallback(() => {
+    // Priority: current tableData > lastKnownTableData > null
+    return tableData ?? lastKnownTableDataRef.current;
+  }, [tableData]);
+
+  // Optimistically apply sorting without full invalidation
+  const optimisticTableData = useMemo(() => {
+    const baseData = getBaseDataForSorting();
+    
+    if (!baseData || !sortRules.length) {
+      // If we have server-side sorted data and no sort rules, prefer server data
+      return serverSortedTableData ?? baseData;
+    }
+    
+    // If we have server-side sorted data that matches current sort rules, use it
+    if (serverSortedTableData && sortRules.length > 0) {
+      return serverSortedTableData;
+    }
+    
+    // Otherwise, create optimistic client-side sorted data
+    const sortedRows = [...baseData.rows].sort((a, b) => {
+      for (const rule of sortRules) {
+        const cellA = a.cells.find(cell => cell.columnId === rule.columnId);
+        const cellB = b.cells.find(cell => cell.columnId === rule.columnId);
+        
+        const valueA = cellA?.value as { text?: string } | null;
+        const valueB = cellB?.value as { text?: string } | null;
+        
+        const textA = valueA?.text ?? '';
+        const textB = valueB?.text ?? '';
+        
+        // Determine column type
+        const column = baseData.columns.find(col => col.id === rule.columnId);
+        const isNumber = column?.type === 'NUMBER';
+        
+        let comparison = 0;
+        
+        if (isNumber) {
+          const numA = parseFloat(textA) || 0;
+          const numB = parseFloat(textB) || 0;
+          comparison = numA - numB;
+        } else {
+          comparison = textA.toLowerCase().localeCompare(textB.toLowerCase());
+        }
+        
+        if (comparison !== 0) {
+          return rule.direction === 'desc' ? -comparison : comparison;
+        }
+      }
+      
+      // If all sort rules are equal, fall back to row order
+      return a.order - b.order;
+    });
+
+    return {
+      ...baseData,
+      rows: sortedRows,
+    };
+  }, [getBaseDataForSorting, sortRules, serverSortedTableData]);
+
+  // Background sync for server-side sorted data
+  const handleSortRulesChange = useCallback(() => {
+    if (selectedTable && sortRules.length > 0) {
+      // Trigger background fetch of server-side sorted data
+      void refetchSortedData();
+    }
+  }, [selectedTable, sortRules.length, refetchSortedData]);
+
+  useEffect(() => {
+    handleSortRulesChange();
+  }, [handleSortRulesChange]);
 
   // Early return if no session or no selected table
   if (!session || !user) {
@@ -391,8 +543,11 @@ export default function BasePage() {
     );
   }
 
-  // Show loading only if we have a table selected but no data yet
-  if (!selectedTable || !tableData) {
+  // Use optimistic data if available, otherwise fall back to any available data
+  const displayTableData = optimisticTableData ?? tableData ?? lastKnownTableDataRef.current;
+
+  // Show loading only if we have a table selected but absolutely no data available
+  if (!selectedTable || !displayTableData) {
     return (
       <div className="h-screen flex flex-col bg-white">
         <div className="flex-1 flex items-center justify-center">
@@ -434,7 +589,7 @@ export default function BasePage() {
             onSidebarClick={() => {
               setSidebarExpanded(!sidebarExpanded);
             }}
-            columns={tableData?.columns || []}
+            columns={displayTableData?.columns ?? []}
             hiddenColumns={hiddenColumns}
             onToggleColumn={handleToggleColumn}
             onHideAllColumns={handleHideAllColumns}
@@ -443,6 +598,7 @@ export default function BasePage() {
             onUpdateSortRule={handleUpdateSortRule}
             onRemoveSortRule={handleRemoveSortRule}
             onAddSortRule={handleAddSortRule}
+            onUpdateSortRuleField={handleUpdateSortRuleField}
           />
           
           {/* Content area with custom resizable nav and main content */}
@@ -470,7 +626,7 @@ export default function BasePage() {
             <div className="flex-1 min-w-0 w-0 overflow-hidden flex flex-col">
               <main className="flex-1 h-full relative bg-[#f6f8fc]">
                 <DataTable 
-                  tableData={tableData}
+                  tableData={displayTableData}
                   onInsertRowAbove={handleInsertRowAbove}
                   onInsertRowBelow={handleInsertRowBelow}
                   onDeleteRow={handleDeleteRow}
@@ -483,7 +639,7 @@ export default function BasePage() {
                 />
               </main>
               <SummaryBar 
-                recordCount={tableData?._count.rows ?? 0} 
+                recordCount={displayTableData?._count.rows ?? 0} 
                 onAddRow={handleAddRow} 
                 onBulkAddRows={handleBulkAddRows}
                 isBulkLoading={isBulkLoading}

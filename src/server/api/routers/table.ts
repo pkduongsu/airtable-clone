@@ -1,5 +1,6 @@
 import z from "zod";
 import { faker } from '@faker-js/faker';
+import type { Prisma } from "@prisma/client";
 
 import {  createTRPCRouter,
   protectedProcedure,
@@ -190,10 +191,14 @@ export const tableRouter = createTRPCRouter({
     .input(z.object({ 
       tableId: z.string(),
       limit: z.number().min(1).max(1000).default(100),
-      cursor: z.number().default(0)
+      cursor: z.number().default(0),
+      sortRules: z.array(z.object({
+        columnId: z.string(),
+        direction: z.enum(['asc', 'desc'])
+      })).optional()
     }))
     .query(async ({ ctx, input }) => {
-      const { tableId, limit, cursor } = input;
+      const { tableId, limit, cursor, sortRules = [] } = input;
       
       // Get table metadata (columns and count)
       const table = await ctx.db.table.findUnique({
@@ -212,20 +217,160 @@ export const tableRouter = createTRPCRouter({
         throw new Error("Table not found");
       }
 
-      // Get paginated rows
-      const rows = await ctx.db.row.findMany({
-        where: { tableId },
+      // Get paginated rows with sorting
+      let rows: Prisma.RowGetPayload<{
         include: {
           cells: {
             include: {
-              column: true,
+              column: true;
+            };
+          };
+        };
+      }>[];
+      
+      if (sortRules.length === 0) {
+        // Default sorting by row order
+        rows = await ctx.db.row.findMany({
+          where: { tableId },
+          include: {
+            cells: {
+              include: {
+                column: true,
+              },
             },
           },
-        },
-        orderBy: { order: "asc" },
-        skip: cursor,
-        take: limit,
-      });
+          orderBy: { order: "asc" },
+          skip: cursor,
+          take: limit,
+        });
+      } else {
+        // Use database-level sorting with proper type handling
+        try {
+          console.log('Executing SQL query with parameters:', { tableId, limit, cursor, sortRules });
+          
+          // Build the SQL query with proper type handling
+          // Include sort expressions in SELECT to satisfy PostgreSQL's DISTINCT requirement
+          const sortExpressions = sortRules.map((rule, index) => {
+            return `(CASE
+              WHEN col${index}.type = 'NUMBER' THEN
+                LPAD(COALESCE(NULLIF(c${index}.value->>'text', ''), '0'), 20, '0')
+              ELSE
+                LOWER(COALESCE(c${index}.value->>'text', ''))
+            END) AS sort_expr_${index}`;
+          });
+          
+          let sqlQuery = `
+            SELECT DISTINCT r.id, r."tableId", r."order"${sortExpressions.length > 0 ? ', ' + sortExpressions.join(', ') : ''}
+            FROM "Row" r`;
+          
+          // Add LEFT JOINs for each sort rule
+          sortRules.forEach((rule, index) => {
+            sqlQuery += `
+            LEFT JOIN "Cell" c${index} ON r.id = c${index}."rowId" AND c${index}."columnId" = '${rule.columnId}'
+            LEFT JOIN "Column" col${index} ON c${index}."columnId" = col${index}.id`;
+          });
+          
+          sqlQuery += `
+            WHERE r."tableId" = $1
+            ORDER BY `;
+          
+          // Build ORDER BY clause using the aliased expressions
+          const orderClauses = sortRules.map((rule, index) => {
+            const direction = rule.direction.toUpperCase();
+            return `sort_expr_${index} ${direction} NULLS LAST`;
+          });
+          
+          sqlQuery += orderClauses.join(', ') + ', r."order" ASC';
+          sqlQuery += `
+            LIMIT $2 OFFSET $3`;
+          
+          console.log('Executing SQL query:', sqlQuery);
+          console.log('With parameters:', { tableId, limit, cursor, sortRules });
+
+          const sortedRowIds = await ctx.db.$queryRawUnsafe<Array<{id: string}>>(
+            sqlQuery,
+            tableId,
+            limit,
+            cursor
+          );
+
+          // Get the full row data for the sorted row IDs
+          if (sortedRowIds.length > 0) {
+            const rowIds = sortedRowIds.map(row => row.id);
+            const rowsWithCells = await ctx.db.row.findMany({
+              where: { id: { in: rowIds } },
+              include: {
+                cells: {
+                  include: {
+                    column: true,
+                  },
+                },
+              },
+            });
+
+            // Maintain the order from the SQL query
+            rows = rowIds.map(id => rowsWithCells.find(row => row.id === id)!).filter(Boolean);
+          } else {
+            rows = [];
+          }
+        } catch (error) {
+          console.error('Error executing sort query:', error);
+          console.log('Sort rules:', JSON.stringify(sortRules, null, 2));
+          
+          // Fallback to client-side sorting
+          console.log('Falling back to client-side sorting');
+          
+          const allRows = await ctx.db.row.findMany({
+            where: { tableId },
+            include: {
+              cells: {
+                include: {
+                  column: true,
+                },
+              },
+            },
+            orderBy: { order: "asc" },
+          });
+        
+          // Sort rows based on sort rules
+          const sortedRows = allRows.sort((a, b) => {
+            for (const rule of sortRules) {
+              const cellA = a.cells.find(cell => cell.columnId === rule.columnId);
+              const cellB = b.cells.find(cell => cell.columnId === rule.columnId);
+              
+              const valueA = cellA?.value as { text?: string } | null;
+              const valueB = cellB?.value as { text?: string } | null;
+              
+              const textA = valueA?.text ?? '';
+              const textB = valueB?.text ?? '';
+              
+              // Determine column type
+              const column = table.columns.find(col => col.id === rule.columnId);
+              const isNumber = column?.type === 'NUMBER';
+              
+              let comparison = 0;
+              
+              if (isNumber) {
+                const numA = parseFloat(textA) || 0;
+                const numB = parseFloat(textB) || 0;
+                comparison = numA - numB;
+              } else {
+                comparison = textA.toLowerCase().localeCompare(textB.toLowerCase());
+              }
+              
+              if (comparison !== 0) {
+                return rule.direction === 'desc' ? -comparison : comparison;
+              }
+            }
+            
+            // If all sort rules are equal, fall back to row order
+            return a.order - b.order;
+          });
+          
+          // Apply pagination to sorted results
+          rows = sortedRows.slice(cursor, cursor + limit);
+        }
+      }
 
       return {
         ...table,
