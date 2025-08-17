@@ -1,6 +1,6 @@
 import z from "zod";
 import { faker } from '@faker-js/faker';
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import {  createTRPCRouter,
   protectedProcedure,
@@ -98,6 +98,20 @@ export const tableRouter = createTRPCRouter({
           data: cells,
         });
       }
+
+      // Create default view for the new table
+      await ctx.db.view.create({
+        data: {
+          tableId: table.id,
+          name: "Grid view",
+          config: {
+            sortRules: [],
+            filterRules: [],
+            hiddenColumns: []
+          },
+          isDefault: true
+        }
+      });
 
       return table;
     }),
@@ -276,9 +290,13 @@ export const tableRouter = createTRPCRouter({
               case 'is_not_empty': 
                 return `(${cellValue} IS NOT NULL AND ${cellValue} != '')`;
               case 'contains': 
-                return `LOWER(COALESCE(${cellValue}, '')) LIKE LOWER($${paramIndex})`;
+                return rule.value !== null && rule.value !== undefined 
+                  ? `LOWER(COALESCE(${cellValue}, '')) LIKE LOWER($${paramIndex})`
+                  : 'FALSE'; // No match if no search value
               case 'not_contains': 
-                return `(${cellValue} IS NULL OR LOWER(COALESCE(${cellValue}, '')) NOT LIKE LOWER($${paramIndex}))`;
+                return rule.value !== null && rule.value !== undefined
+                  ? `(${cellValue} IS NULL OR LOWER(COALESCE(${cellValue}, '')) NOT LIKE LOWER($${paramIndex}))`
+                  : 'TRUE'; // Match all if no search value
               case 'equals': 
                 if (rule.columnType === 'NUMBER') {
                   return `CAST(NULLIF(${cellValue}, '') AS NUMERIC) = $${paramIndex}`;
@@ -302,11 +320,11 @@ export const tableRouter = createTRPCRouter({
             const condition = buildFilterCondition(rule, index, paramIndex);
             filterConditions.push(condition);
             
-            // Add parameter value if needed
-            if (['contains', 'not_contains'].includes(rule.operator) && rule.value !== undefined) {
+            // Add parameter value if needed (skip if value is null or undefined)
+            if (['contains', 'not_contains'].includes(rule.operator) && rule.value !== undefined && rule.value !== null) {
               queryParams.push(`%${rule.value}%`);
               paramIndex++;
-            } else if (['equals', 'greater_than', 'less_than'].includes(rule.operator) && rule.value !== undefined) {
+            } else if (['equals', 'greater_than', 'less_than'].includes(rule.operator) && rule.value !== undefined && rule.value !== null) {
               queryParams.push(rule.value);
               paramIndex++;
             }
@@ -384,11 +402,85 @@ export const tableRouter = createTRPCRouter({
           console.error('Error executing sort query:', error);
           console.log('Sort rules:', JSON.stringify(sortRules, null, 2));
           
-          // Fallback to client-side sorting
+          // Fallback to client-side sorting with pagination
           console.log('Falling back to client-side sorting');
           
+          // For fallback, we need to apply filters first, then sort, then paginate
+          // Build filter conditions for Prisma where clause
+          let whereConditions: Prisma.RowWhereInput = { tableId };
+          
+          if (filterRules.length > 0) {
+            const filterConditions: Prisma.RowWhereInput[] = filterRules.map(rule => {
+              const baseCondition: Prisma.RowWhereInput = {
+                cells: {
+                  some: {
+                    columnId: rule.columnId,
+                  }
+                }
+              };
+              
+              switch (rule.operator) {
+                case 'is_empty':
+                  return {
+                    cells: {
+                      some: {
+                        columnId: rule.columnId,
+                        OR: [
+                          { value: { equals: Prisma.DbNull } },
+                          { value: { path: ['text'], equals: '' } }
+                        ]
+                      }
+                    }
+                  } satisfies Prisma.RowWhereInput;
+                case 'is_not_empty':
+                  return {
+                    cells: {
+                      some: {
+                        columnId: rule.columnId,
+                        AND: [
+                          { value: { not: Prisma.DbNull } },
+                          { value: { path: ['text'], not: '' } }
+                        ]
+                      }
+                    }
+                  } satisfies Prisma.RowWhereInput;
+                case 'contains':
+                  return rule.value ? {
+                    cells: {
+                      some: {
+                        columnId: rule.columnId,
+                        value: { path: ['text'], string_contains: rule.value as string }
+                      }
+                    }
+                  } satisfies Prisma.RowWhereInput : { id: 'no-match' } satisfies Prisma.RowWhereInput;
+                case 'not_contains':
+                  return rule.value ? {
+                    NOT: {
+                      cells: {
+                        some: {
+                          columnId: rule.columnId,
+                          value: { path: ['text'], string_contains: rule.value as string }
+                        }
+                      }
+                    }
+                  } satisfies Prisma.RowWhereInput : { tableId } satisfies Prisma.RowWhereInput;
+                default:
+                  return baseCondition;
+              }
+            });
+            
+            whereConditions = {
+              ...whereConditions,
+              AND: filterConditions
+            };
+          }
+          
+          // Limit fallback query to prevent timeout on large tables
+          // Only fetch what we need for this page plus some buffer for sorting
+          const maxFallbackRows = Math.max(1000, cursor + limit * 3);
+          
           const allRows = await ctx.db.row.findMany({
-            where: { tableId },
+            where: whereConditions,
             include: {
               cells: {
                 include: {
@@ -397,6 +489,7 @@ export const tableRouter = createTRPCRouter({
               },
             },
             orderBy: { order: "asc" },
+            take: maxFallbackRows,
           });
         
           // Sort rows based on sort rules

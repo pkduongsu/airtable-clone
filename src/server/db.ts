@@ -7,6 +7,9 @@ const createPrismaClient = () =>
   new PrismaClient({
     log:
       env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+    transactionOptions: {
+      timeout: 10000, // 10 seconds timeout for transactions
+    },
   }).$extends(withAccelerate());
 
 const globalForPrisma = globalThis as unknown as {

@@ -16,6 +16,7 @@ import { SummaryBar } from "../_components/base/controls/SummaryBar";
 import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
 import { type SortRule } from "../_components/base/modals/SortModal";
 import { type FilterRule } from "../_components/base/modals/FilterModal";
+import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 
 
 export default function BasePage() {
@@ -50,6 +51,10 @@ export default function BasePage() {
 
   // Filter state
   const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
+
+  // View state
+  const [currentViewId, setCurrentViewId] = useState<string | null>(null);
+  const [isViewSwitching, setIsViewSwitching] = useState(false);
 
   const { data: base } = api.base.getById.useQuery(
     { id: baseId },
@@ -502,6 +507,113 @@ export default function BasePage() {
     );
   };
 
+  // Auto-save current view state when changes are made
+  const updateViewMutation = api.view.update.useMutation({
+    onSuccess: () => {
+      console.log('View config saved successfully');
+      // Invalidate views to update UI immediately
+      void utils.view.list.invalidate({ tableId: selectedTable! });
+    },
+    onError: (error) => {
+      console.error('Failed to save view config:', error);
+    }
+  });
+  
+  // Use a ref to store the latest mutation function to avoid dependency issues
+  const updateViewMutationRef = useRef(updateViewMutation.mutate);
+  updateViewMutationRef.current = updateViewMutation.mutate;
+
+  // Get views for selected table
+  const { data: views, refetch: refetchViews } = api.view.list.useQuery(
+    { tableId: selectedTable! },
+    { enabled: !!selectedTable }
+  );
+
+  // Debounced save function using useCallback for stability
+  const debouncedSaveViewConfig = useCallback(
+    (viewId: string, config: ViewConfig) => {
+      console.log('Attempting to save view config for:', viewId, config);
+      
+      // Ensure we have a valid view ID
+      if (!viewId) {
+        console.error('Cannot save: No view ID provided');
+        return;
+      }
+      
+      updateViewMutationRef.current({
+        id: viewId,
+        config
+      });
+    },
+    []
+  );
+
+  // Auto-save effect with more reliable triggering
+  useEffect(() => {
+    if (isViewSwitching) {
+      return;
+    }
+
+    // If we have a view ID, save to that view
+    if (currentViewId) {
+      console.log('Auto-save: Setting timeout for view', currentViewId);
+      
+      const timeoutId = setTimeout(() => {
+        const config: ViewConfig = {
+          sortRules,
+          filterRules,
+          hiddenColumns: Array.from(hiddenColumns),
+        };
+
+        debouncedSaveViewConfig(currentViewId, config);
+      }, 1000); // Reduced to 1 second for faster saving
+
+      return () => {
+        clearTimeout(timeoutId);
+      };
+    }
+    
+    // If no view ID but we have a selected table and changes, try to save to default view
+    if (selectedTable && views && views.length > 0 && (sortRules.length > 0 || filterRules.length > 0 || hiddenColumns.size > 0)) {
+      const defaultView = views.find(view => view.isDefault) ?? views[0];
+      if (defaultView) {
+        console.log('Auto-save: Saving to default view', defaultView.id);
+        
+        const timeoutId = setTimeout(() => {
+          const config: ViewConfig = {
+            sortRules,
+            filterRules,
+            hiddenColumns: Array.from(hiddenColumns),
+          };
+
+          debouncedSaveViewConfig(defaultView.id, config);
+        }, 1000);
+
+        return () => {
+          clearTimeout(timeoutId);
+        };
+      }
+    }
+  }, [currentViewId, selectedTable, sortRules, filterRules, hiddenColumns, isViewSwitching, debouncedSaveViewConfig, views]);
+
+  // View handlers
+  const handleViewChange = useCallback((viewId: string | null, config: ViewConfig) => {
+    console.log('Manual view change to:', viewId);
+    
+    setIsViewSwitching(true);
+    setCurrentViewId(viewId);
+    
+    // Apply the new view configuration
+    setSortRules(config.sortRules);
+    setFilterRules(config.filterRules);
+    setHiddenColumns(new Set(config.hiddenColumns));
+    
+    // Re-enable auto-save after a very short delay
+    setTimeout(() => {
+      setIsViewSwitching(false);
+    }, 50);
+  }, []); // Keep empty dependencies to avoid auto-select loops
+
   // Select first table when tables are loaded
   useEffect(() => {
     if (tables && tables.length > 0 && !selectedTable) {
@@ -509,12 +621,25 @@ export default function BasePage() {
     }
   }, [tables, selectedTable]);
 
-  // Reset hidden columns, sort rules, and filter rules when switching tables
+  // Auto-select default view when table changes or views are loaded (only when no view is selected)
   useEffect(() => {
-    setHiddenColumns(new Set());
-    setSortRules([]);
-    setFilterRules([]);
-  }, [selectedTable]);
+    if (!selectedTable || !views || views.length === 0 || isViewSwitching || currentViewId !== null) return;
+
+    // Only auto-select when we don't have a current view selected
+    const defaultView = views.find(view => view.isDefault) ?? views[0];
+    if (defaultView) {
+      console.log('Auto-selecting default view:', defaultView.name, 'ID:', defaultView.id);
+      handleViewChange(defaultView.id, defaultView.config as unknown as ViewConfig);
+    }
+  }, [selectedTable, views, isViewSwitching, currentViewId, handleViewChange]);
+
+  // Reset view when switching tables and refetch views (will be auto-selected by the effect above)
+  useEffect(() => {
+    setCurrentViewId(null);
+    if (selectedTable) {
+      void refetchViews();
+    }
+  }, [selectedTable, refetchViews]);
 
   // Get the best available data source for processing
   const getBaseDataForProcessing = useCallback(() => {
@@ -727,6 +852,14 @@ export default function BasePage() {
               onWidthChange={(width) => setSidebarWidth(width)}
               onResizeStart={() => setIsResizing(true)}
               onResizeEnd={() => setIsResizing(false)}
+              selectedTable={selectedTable}
+              currentView={currentViewId}
+              onViewChange={handleViewChange}
+              currentSortRules={sortRules}
+              currentFilterRules={filterRules}
+              currentHiddenColumns={Array.from(hiddenColumns)}
+              views={views}
+              onRefetchViews={() => void refetchViews()}
             />
 
             {/* Spacer to push main content when sidebar is visible */}
