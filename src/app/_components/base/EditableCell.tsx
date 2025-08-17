@@ -47,8 +47,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       console.error('Failed to update cell:', err);
     },
     onSettled: () => {
-      // Always refetch to ensure server state after mutation completes
-      void utils.table.getTableData.invalidate({ tableId, limit: 100 });
+      // No invalidation needed - optimistic updates handle UI consistency
     },
   });
 

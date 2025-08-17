@@ -56,6 +56,7 @@ export default function BasePage() {
   const [currentViewId, setCurrentViewId] = useState<string | null>(null);
   const [isViewSwitching, setIsViewSwitching] = useState(false);
 
+
   const { data: base } = api.base.getById.useQuery(
     { id: baseId },
     { enabled: !!baseId }
@@ -231,14 +232,9 @@ export default function BasePage() {
         }, context.previousData);
       }
     },
-    onSettled: (data, error, variables) => {
-      // Invalidate both base and sorted queries
-      void utils.table.getTableData.invalidate({ 
-        tableId: variables.tableId, 
-        limit: 100
-      });
-      // Also clear persisted data to force fresh load
-      lastKnownTableDataRef.current = undefined;
+    onSettled: (_data, _error, _variables) => {
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
     }
   });
 
@@ -249,11 +245,9 @@ export default function BasePage() {
     onSuccess: () => {
       setIsBulkLoading(false);
     },
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ 
-        tableId: variables.tableId, 
-        limit: 100
-      });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation - bulk operations are less frequent
+      // and don't interfere with editing as much, but still avoid disruption
     }
   });
 
@@ -335,29 +329,20 @@ export default function BasePage() {
   };
 
   const insertRowAboveMutation = api.table.insertRowAbove.useMutation({
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ 
-        tableId: variables.tableId, 
-        limit: 100
-      });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation to prevent disrupting edit sessions
     }
   });
 
   const insertRowBelowMutation = api.table.insertRowBelow.useMutation({
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ 
-        tableId: variables.tableId, 
-        limit: 100
-      });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation to prevent disrupting edit sessions
     }
   });
 
   const deleteRowMutation = api.table.deleteRow.useMutation({
-    onSettled: (data, error, variables) => {
-      void utils.table.getTableData.invalidate({ 
-        tableId: variables.tableId, 
-        limit: 100
-      });
+    onSettled: (_data, _error, _variables) => {
+      // Remove immediate invalidation to prevent disrupting edit sessions
     }
   });
 
@@ -423,16 +408,39 @@ export default function BasePage() {
       }
       return newSet;
     });
+    // Trigger immediate save for instant feedback
+    triggerViewSave();
+  };
+
+  // Manual trigger for immediate view saves (separate from auto-save)
+  const triggerViewSave = () => {
+    if (currentViewId) {
+      // Use setTimeout to ensure state updates have been applied
+      setTimeout(() => {
+        const config: ViewConfig = {
+          sortRules,
+          filterRules,
+          hiddenColumns: Array.from(hiddenColumns),
+        };
+        console.log('Manual view save triggered for:', currentViewId);
+        updateViewMutationRef.current({
+          id: currentViewId,
+          config
+        });
+      }, 100);
+    }
   };
 
   const handleHideAllColumns = () => {
     if (tableData?.columns) {
       setHiddenColumns(new Set(tableData.columns.map(col => col.id)));
     }
+    triggerViewSave();
   };
 
   const handleShowAllColumns = () => {
     setHiddenColumns(new Set());
+    triggerViewSave();
   };
 
   // Sort handlers
@@ -442,10 +450,13 @@ export default function BasePage() {
         rule.id === ruleId ? { ...rule, direction } : rule
       )
     );
+    triggerViewSave();
+    // Trigger immediate save for explicit user actions
   };
 
   const handleRemoveSortRule = (ruleId: string) => {
     setSortRules(prev => prev.filter(rule => rule.id !== ruleId));
+    triggerViewSave();
   };
 
   const handleAddSortRule = (columnId: string, columnName: string, columnType: string) => {
@@ -457,6 +468,7 @@ export default function BasePage() {
       columnType,
     };
     setSortRules(prev => [...prev, newRule]);
+    triggerViewSave();
   };
 
   const handleUpdateSortRuleField = (ruleId: string, columnId: string, columnName: string, columnType: string) => {
@@ -465,6 +477,7 @@ export default function BasePage() {
         rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
       )
     );
+    triggerViewSave();
   };
 
   // Filter handlers
@@ -474,10 +487,12 @@ export default function BasePage() {
         rule.id === ruleId ? { ...rule, operator, value } : rule
       )
     );
+    triggerViewSave();
   };
 
   const handleRemoveFilterRule = (ruleId: string) => {
     setFilterRules(prev => prev.filter(rule => rule.id !== ruleId));
+    triggerViewSave();
   };
 
   const handleAddFilterRule = (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
@@ -490,6 +505,7 @@ export default function BasePage() {
       value: undefined,
     };
     setFilterRules(prev => [...prev, newRule]);
+    triggerViewSave();
   };
 
   const handleUpdateFilterRuleField = (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
@@ -505,13 +521,14 @@ export default function BasePage() {
         } : rule
       )
     );
+    triggerViewSave();
   };
 
   // Auto-save current view state when changes are made
   const updateViewMutation = api.view.update.useMutation({
     onSuccess: () => {
       console.log('View config saved successfully');
-      // Invalidate views to update UI immediately
+      // Immediately invalidate view list for instant feedback
       void utils.view.list.invalidate({ tableId: selectedTable! });
     },
     onError: (error) => {
@@ -523,78 +540,40 @@ export default function BasePage() {
   const updateViewMutationRef = useRef(updateViewMutation.mutate);
   updateViewMutationRef.current = updateViewMutation.mutate;
 
+
   // Get views for selected table
   const { data: views, refetch: refetchViews } = api.view.list.useQuery(
     { tableId: selectedTable! },
     { enabled: !!selectedTable }
   );
 
-  // Debounced save function using useCallback for stability
-  const debouncedSaveViewConfig = useCallback(
-    (viewId: string, config: ViewConfig) => {
-      console.log('Attempting to save view config for:', viewId, config);
-      
-      // Ensure we have a valid view ID
-      if (!viewId) {
-        console.error('Cannot save: No view ID provided');
-        return;
-      }
-      
-      updateViewMutationRef.current({
-        id: viewId,
-        config
-      });
-    },
-    []
-  );
 
-  // Auto-save effect with more reliable triggering
+
+
+  // Auto-save view configuration with long debounce to avoid editing interference
   useEffect(() => {
-    if (isViewSwitching) {
+    if (isViewSwitching || !currentViewId) {
       return;
     }
 
-    // If we have a view ID, save to that view
-    if (currentViewId) {
-      console.log('Auto-save: Setting timeout for view', currentViewId);
-      
-      const timeoutId = setTimeout(() => {
-        const config: ViewConfig = {
-          sortRules,
-          filterRules,
-          hiddenColumns: Array.from(hiddenColumns),
-        };
-
-        debouncedSaveViewConfig(currentViewId, config);
-      }, 1000); // Reduced to 1 second for faster saving
-
-      return () => {
-        clearTimeout(timeoutId);
+    const timeoutId = setTimeout(() => {
+      const config: ViewConfig = {
+        sortRules,
+        filterRules,
+        hiddenColumns: Array.from(hiddenColumns),
       };
-    }
-    
-    // If no view ID but we have a selected table and changes, try to save to default view
-    if (selectedTable && views && views.length > 0 && (sortRules.length > 0 || filterRules.length > 0 || hiddenColumns.size > 0)) {
-      const defaultView = views.find(view => view.isDefault) ?? views[0];
-      if (defaultView) {
-        console.log('Auto-save: Saving to default view', defaultView.id);
-        
-        const timeoutId = setTimeout(() => {
-          const config: ViewConfig = {
-            sortRules,
-            filterRules,
-            hiddenColumns: Array.from(hiddenColumns),
-          };
 
-          debouncedSaveViewConfig(defaultView.id, config);
-        }, 1000);
+      console.log('Auto-saving view config for:', currentViewId, config);
+      updateViewMutationRef.current({
+        id: currentViewId,
+        config
+      });
+    }, 1000); // 1 second - much faster response for view changes
 
-        return () => {
-          clearTimeout(timeoutId);
-        };
-      }
-    }
-  }, [currentViewId, selectedTable, sortRules, filterRules, hiddenColumns, isViewSwitching, debouncedSaveViewConfig, views]);
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [sortRules, filterRules, hiddenColumns, isViewSwitching, currentViewId]);
 
   // View handlers
   const handleViewChange = useCallback((viewId: string | null, config: ViewConfig) => {
@@ -633,13 +612,12 @@ export default function BasePage() {
     }
   }, [selectedTable, views, isViewSwitching, currentViewId, handleViewChange]);
 
-  // Reset view when switching tables and refetch views (will be auto-selected by the effect above)
+  // Reset view when switching tables
   useEffect(() => {
     setCurrentViewId(null);
-    if (selectedTable) {
-      void refetchViews();
-    }
-  }, [selectedTable, refetchViews]);
+    // Don't immediately refetch views to avoid disrupting editing
+    // Views will be loaded when needed
+  }, [selectedTable]);
 
   // Get the best available data source for processing
   const getBaseDataForProcessing = useCallback(() => {
@@ -767,6 +745,16 @@ export default function BasePage() {
     handleRulesChange();
   }, [handleRulesChange]);
 
+  // Disable background sync temporarily to ensure stable editing
+  // TODO: Implement smarter background sync that detects editing state
+  // useEffect(() => {
+  //   if (!selectedTable) return;
+  //   const interval = setInterval(() => {
+  //     // Background sync logic
+  //   }, 30000);
+  //   return () => clearInterval(interval);
+  // }, [selectedTable]);
+
   // Early return if no session or no selected table
   if (!session || !user) {
     return (
@@ -859,7 +847,10 @@ export default function BasePage() {
               currentFilterRules={filterRules}
               currentHiddenColumns={Array.from(hiddenColumns)}
               views={views}
-              onRefetchViews={() => void refetchViews()}
+              onRefetchViews={() => {
+                // Safe to refetch views immediately - doesn't affect table data
+                void refetchViews();
+              }}
             />
 
             {/* Spacer to push main content when sidebar is visible */}
@@ -884,6 +875,7 @@ export default function BasePage() {
                   isFetchingNextPage={isFetchingNextPage}
                   hiddenColumns={hiddenColumns}
                   sortRules={sortRules}
+                  filterRules={filterRules}
                 />
               </main>
               <SummaryBar 

@@ -70,9 +70,17 @@ interface DataTableProps {
   isFetchingNextPage?: boolean;
   hiddenColumns?: Set<string>;
   sortRules?: SortRule[];
+  filterRules?: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+  }>;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules: _sortRules = [] }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [] }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -92,6 +100,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
   const handleCellDeselection = useCallback(() => {
     setSelectedCell(null);
   }, []);
+
 
   // Handle context menu
   const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
@@ -287,6 +296,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               onDeselect={handleCellDeselection}
               rowId={row.id}
               onContextMenu={handleContextMenuClick}
+              sortRules={sortRules?.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
+              filterRules={filterRules}
             />
           );
         },
