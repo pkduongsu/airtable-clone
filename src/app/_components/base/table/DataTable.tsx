@@ -335,7 +335,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules]);
 
   const table = useReactTable({
     data,

@@ -73,6 +73,8 @@ export default function BasePage() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    isLoading: isLoadingTableData,
+    isFetching: isFetchingTableData,
     refetch: refetchTableData
   } = api.table.getTableData.useInfiniteQuery(
     { 
@@ -89,6 +91,8 @@ export default function BasePage() {
   // Background query for server-side processed data (when sort or filter rules exist)
   const {
     data: processedInfiniteTableData,
+    isLoading: isLoadingProcessedData,
+    isFetching: isFetchingProcessedData,
     refetch: refetchProcessedData
   } = api.table.getTableData.useInfiniteQuery(
     { 
@@ -769,12 +773,25 @@ export default function BasePage() {
   // Use optimistic data if available, otherwise fall back to any available data
   const displayTableData = optimisticTableData ?? tableData ?? lastKnownTableDataRef.current;
 
-  // Show loading only if we have a table selected but absolutely no data available
-  if (!selectedTable || !displayTableData) {
+  // Determine loading state
+  const isInitialLoading = isLoadingTableData || (
+    !displayTableData && selectedTable && !lastKnownTableDataRef.current
+  );
+  
+  const isTableStabilizing = isFetchingTableData || (
+    (sortRules.length > 0 || filterRules.length > 0) && 
+    (isLoadingProcessedData || isFetchingProcessedData)
+  );
+
+  // Show loading screen for initial load or when no data is available
+  if (!selectedTable || isInitialLoading || !displayTableData) {
     return (
       <div className="h-screen flex flex-col bg-white">
         <div className="flex-1 flex items-center justify-center">
-          <div className="text-gray-500">Loading table data...</div>
+          <div className="flex items-center gap-3">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="text-gray-600 font-medium">Loading table data...</div>
+          </div>
         </div>
       </div>
     );
@@ -864,6 +881,20 @@ export default function BasePage() {
             {/* Main Content Panel */}
             <div className="flex-1 min-w-0 w-0 overflow-hidden flex flex-col">
               <main className="flex-1 h-full relative bg-[#f6f8fc]">
+                {/* Loading overlay for table stabilization */}
+                {isTableStabilizing && (
+                  <div className="absolute top-0 left-0 right-0 z-20 bg-white/80 backdrop-blur-sm border-b border-gray-200">
+                    <div className="flex items-center justify-center py-2 px-4">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 border border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="text-xs text-gray-600 font-medium">
+                          {sortRules.length > 0 || filterRules.length > 0 ? 'Processing filters & sorting...' : 'Refreshing data...'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 <DataTable 
                   tableData={displayTableData}
                   onInsertRowAbove={handleInsertRowAbove}
