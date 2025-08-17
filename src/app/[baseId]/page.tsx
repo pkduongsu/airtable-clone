@@ -15,6 +15,7 @@ import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
 import { SummaryBar } from "../_components/base/controls/SummaryBar";
 import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
 import { type SortRule } from "../_components/base/modals/SortModal";
+import { type FilterRule } from "../_components/base/modals/FilterModal";
 
 
 export default function BasePage() {
@@ -47,6 +48,9 @@ export default function BasePage() {
   // Sort state
   const [sortRules, setSortRules] = useState<SortRule[]>([]);
 
+  // Filter state
+  const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
+
   const { data: base } = api.base.getById.useQuery(
     { id: baseId },
     { enabled: !!baseId }
@@ -76,21 +80,33 @@ export default function BasePage() {
     }
   );
 
-  // Background query for server-side sorted data (when sort rules exist)
+  // Background query for server-side processed data (when sort or filter rules exist)
   const {
-    data: sortedInfiniteTableData,
-    refetch: refetchSortedData
+    data: processedInfiniteTableData,
+    refetch: refetchProcessedData
   } = api.table.getTableData.useInfiniteQuery(
     { 
       tableId: selectedTable!, 
       limit: 100,
-      sortRules: sortRules.map(rule => ({
-        columnId: rule.columnId,
-        direction: rule.direction
-      }))
+      ...(sortRules.length > 0 && {
+        sortRules: sortRules.map(rule => ({
+          columnId: rule.columnId,
+          direction: rule.direction
+        }))
+      }),
+      ...(filterRules.length > 0 && {
+        filterRules: filterRules.map(rule => ({
+          id: rule.id,
+          columnId: rule.columnId,
+          columnName: rule.columnName,
+          columnType: rule.columnType,
+          operator: rule.operator,
+          value: rule.value
+        }))
+      })
     },
     {
-      enabled: !!selectedTable && sortRules.length > 0,
+      enabled: !!selectedTable && (sortRules.length > 0 || filterRules.length > 0),
       getNextPageParam: (lastPage) => lastPage.nextCursor,
     }
   );
@@ -113,13 +129,13 @@ export default function BasePage() {
     return data;
   }, [infiniteTableData]);
 
-  // Server-side sorted data (when available)
-  const serverSortedTableData = useMemo(() => {
-    return sortedInfiniteTableData?.pages[0] ? {
-      ...sortedInfiniteTableData.pages[0], // Get table metadata from first page
-      rows: sortedInfiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
+  // Server-side processed data (when available)
+  const serverProcessedTableData = useMemo(() => {
+    return processedInfiniteTableData?.pages[0] ? {
+      ...processedInfiniteTableData.pages[0], // Get table metadata from first page
+      rows: processedInfiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
     } : undefined;
-  }, [sortedInfiniteTableData]);
+  }, [processedInfiniteTableData]);
 
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
@@ -446,6 +462,46 @@ export default function BasePage() {
     );
   };
 
+  // Filter handlers
+  const handleUpdateFilterRule = (ruleId: string, operator: FilterRule['operator'], value?: string | number) => {
+    setFilterRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, operator, value } : rule
+      )
+    );
+  };
+
+  const handleRemoveFilterRule = (ruleId: string) => {
+    setFilterRules(prev => prev.filter(rule => rule.id !== ruleId));
+  };
+
+  const handleAddFilterRule = (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
+    const newRule: FilterRule = {
+      id: `filter-${Date.now()}-${Math.random()}`,
+      columnId,
+      columnName,
+      columnType,
+      operator: columnType === 'NUMBER' ? 'equals' : 'contains',
+      value: undefined,
+    };
+    setFilterRules(prev => [...prev, newRule]);
+  };
+
+  const handleUpdateFilterRuleField = (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
+    setFilterRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { 
+          ...rule, 
+          columnId, 
+          columnName, 
+          columnType,
+          operator: columnType === 'NUMBER' ? 'equals' : 'contains', // Reset operator when changing field type
+          value: undefined // Reset value when changing field
+        } : rule
+      )
+    );
+  };
+
   // Select first table when tables are loaded
   useEffect(() => {
     if (tables && tables.length > 0 && !selectedTable) {
@@ -453,34 +509,65 @@ export default function BasePage() {
     }
   }, [tables, selectedTable]);
 
-  // Reset hidden columns and sort rules when switching tables
+  // Reset hidden columns, sort rules, and filter rules when switching tables
   useEffect(() => {
     setHiddenColumns(new Set());
     setSortRules([]);
+    setFilterRules([]);
   }, [selectedTable]);
 
-  // Get the best available data source for sorting
-  const getBaseDataForSorting = useCallback(() => {
+  // Get the best available data source for processing
+  const getBaseDataForProcessing = useCallback(() => {
     // Priority: current tableData > lastKnownTableData > null
     return tableData ?? lastKnownTableDataRef.current;
   }, [tableData]);
 
-  // Optimistically apply sorting without full invalidation
-  const optimisticTableData = useMemo(() => {
-    const baseData = getBaseDataForSorting();
-    
-    if (!baseData || !sortRules.length) {
-      // If we have server-side sorted data and no sort rules, prefer server data
-      return serverSortedTableData ?? baseData;
-    }
-    
-    // If we have server-side sorted data that matches current sort rules, use it
-    if (serverSortedTableData && sortRules.length > 0) {
-      return serverSortedTableData;
-    }
-    
-    // Otherwise, create optimistic client-side sorted data
-    const sortedRows = [...baseData.rows].sort((a, b) => {
+  // Define proper row type for client-side processing
+  type TableRow = NonNullable<typeof tableData>['rows'][0];
+
+  // Client-side filtering function
+  const applyClientSideFilters = useCallback((rows: TableRow[], filterRules: FilterRule[]): TableRow[] => {
+    if (filterRules.length === 0) return rows;
+
+    return rows.filter(row => {
+      return filterRules.every(rule => {
+        const cell = row.cells.find(cell => cell.columnId === rule.columnId);
+        const cellValue = cell?.value as { text?: string } | null;
+        const textValue = cellValue?.text ?? '';
+
+        switch (rule.operator) {
+          case 'is_empty':
+            return textValue === '';
+          case 'is_not_empty':
+            return textValue !== '';
+          case 'contains':
+            return textValue.toLowerCase().includes((rule.value as string)?.toLowerCase() ?? '');
+          case 'not_contains':
+            return !textValue.toLowerCase().includes((rule.value as string)?.toLowerCase() ?? '');
+          case 'equals':
+            if (rule.columnType === 'NUMBER') {
+              const numValue = parseFloat(textValue) || 0;
+              return numValue === (rule.value as number);
+            }
+            return textValue.toLowerCase() === ((rule.value as string)?.toLowerCase() ?? '');
+          case 'greater_than':
+            const greaterValue = parseFloat(textValue) || 0;
+            return greaterValue > (rule.value as number);
+          case 'less_than':
+            const lessValue = parseFloat(textValue) || 0;
+            return lessValue < (rule.value as number);
+          default:
+            return true;
+        }
+      });
+    });
+  }, []);
+
+  // Client-side sorting function
+  const applyClientSideSorting = useCallback((rows: TableRow[], sortRules: SortRule[]): TableRow[] => {
+    if (sortRules.length === 0) return rows;
+
+    return [...rows].sort((a, b) => {
       for (const rule of sortRules) {
         const cellA = a.cells.find(cell => cell.columnId === rule.columnId);
         const cellB = b.cells.find(cell => cell.columnId === rule.columnId);
@@ -491,9 +578,8 @@ export default function BasePage() {
         const textA = valueA?.text ?? '';
         const textB = valueB?.text ?? '';
         
-        // Determine column type
-        const column = baseData.columns.find(col => col.id === rule.columnId);
-        const isNumber = column?.type === 'NUMBER';
+        // Determine column type from the first sort rule's column
+        const isNumber = rule.columnType === 'NUMBER';
         
         let comparison = 0;
         
@@ -513,24 +599,48 @@ export default function BasePage() {
       // If all sort rules are equal, fall back to row order
       return a.order - b.order;
     });
+  }, []);
+
+  // Optimistically apply filtering and sorting without full invalidation
+  const optimisticTableData = useMemo(() => {
+    const baseData = getBaseDataForProcessing();
+    
+    if (!baseData) return undefined;
+    
+    // If we have no processing rules, return base data or server data
+    if (sortRules.length === 0 && filterRules.length === 0) {
+      return serverProcessedTableData ?? baseData;
+    }
+    
+    // If we have server-side processed data that matches current rules, prefer it
+    if (serverProcessedTableData && (sortRules.length > 0 || filterRules.length > 0)) {
+      return serverProcessedTableData;
+    }
+    
+    // Otherwise, create optimistic client-side processed data
+    // Step 1: Apply filters
+    const filteredRows = applyClientSideFilters(baseData.rows, filterRules);
+    
+    // Step 2: Apply sorting
+    const processedRows = applyClientSideSorting(filteredRows, sortRules);
 
     return {
       ...baseData,
-      rows: sortedRows,
+      rows: processedRows,
     };
-  }, [getBaseDataForSorting, sortRules, serverSortedTableData]);
+  }, [getBaseDataForProcessing, sortRules, filterRules, serverProcessedTableData, applyClientSideFilters, applyClientSideSorting]);
 
-  // Background sync for server-side sorted data
-  const handleSortRulesChange = useCallback(() => {
-    if (selectedTable && sortRules.length > 0) {
-      // Trigger background fetch of server-side sorted data
-      void refetchSortedData();
+  // Background sync for server-side processed data
+  const handleRulesChange = useCallback(() => {
+    if (selectedTable && (sortRules.length > 0 || filterRules.length > 0)) {
+      // Trigger background fetch of server-side processed data
+      void refetchProcessedData();
     }
-  }, [selectedTable, sortRules.length, refetchSortedData]);
+  }, [selectedTable, sortRules.length, filterRules.length, refetchProcessedData]);
 
   useEffect(() => {
-    handleSortRulesChange();
-  }, [handleSortRulesChange]);
+    handleRulesChange();
+  }, [handleRulesChange]);
 
   // Early return if no session or no selected table
   if (!session || !user) {
@@ -599,6 +709,11 @@ export default function BasePage() {
             onRemoveSortRule={handleRemoveSortRule}
             onAddSortRule={handleAddSortRule}
             onUpdateSortRuleField={handleUpdateSortRuleField}
+            filterRules={filterRules}
+            onUpdateFilterRule={handleUpdateFilterRule}
+            onRemoveFilterRule={handleRemoveFilterRule}
+            onAddFilterRule={handleAddFilterRule}
+            onUpdateFilterRuleField={handleUpdateFilterRuleField}
           />
           
           {/* Content area with custom resizable nav and main content */}

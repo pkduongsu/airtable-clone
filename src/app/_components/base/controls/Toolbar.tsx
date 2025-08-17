@@ -15,6 +15,7 @@ import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { ToolbarModal } from "../modals/ToolbarModal";
 import { HideFieldsModal } from "../modals/HideFieldsModal";
 import { SortModal, type SortRule } from "../modals/SortModal";
+import { FilterModal, type FilterRule } from "../modals/FilterModal";
 
 interface Column {
   id: string;
@@ -41,6 +42,11 @@ interface ToolbarProps {
   onRemoveSortRule?: (ruleId: string) => void;
   onAddSortRule?: (columnId: string, columnName: string, columnType: string) => void;
   onUpdateSortRuleField?: (ruleId: string, columnId: string, columnName: string, columnType: string) => void;
+  filterRules?: FilterRule[];
+  onUpdateFilterRule?: (ruleId: string, operator: FilterRule['operator'], value?: string | number) => void;
+  onRemoveFilterRule?: (ruleId: string) => void;
+  onAddFilterRule?: (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
+  onUpdateFilterRuleField?: (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
 }
 
 export default function Toolbar({ 
@@ -58,13 +64,20 @@ export default function Toolbar({
   onUpdateSortRule,
   onRemoveSortRule,
   onAddSortRule,
-  onUpdateSortRuleField
+  onUpdateSortRuleField,
+  filterRules = [],
+  onUpdateFilterRule,
+  onRemoveFilterRule,
+  onAddFilterRule,
+  onUpdateFilterRuleField
 }: ToolbarProps) {
   const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
   const [isHideFieldsModalOpen, setIsHideFieldsModalOpen] = useState(false);
   const [isSortModalOpen, setIsSortModalOpen] = useState(false);
+  const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
+  const filterButtonRef = useRef<HTMLButtonElement>(null);
   
   useEffect(() => {
     if (selectedTable) {
@@ -83,6 +96,16 @@ export default function Toolbar({
     }
   }, [selectedTable]);
 
+  const getFilterText = (filterRules: FilterRule[]) => {
+    if (filterRules.length === 0) return "Filter";
+    if (filterRules.length <= 4) {
+      const names = filterRules.map(rule => rule.columnName);
+      return `Filtered by ${names.join(', ')}`;
+    }
+    const firstName = filterRules[0]?.columnName ?? '';
+    const otherCount = filterRules.length - 1;
+    return `Filtered by ${firstName} and ${otherCount} other field${otherCount === 1 ? '' : 's'}`;
+  };
 
   return (
     <TooltipProvider>
@@ -157,10 +180,24 @@ export default function Toolbar({
                       </div>
                     </button>
                     {/* Filter button */}
-                    <button className="focus-visible:outline toolbar-button">
+                    <button 
+                      ref={filterButtonRef}
+                      className={`focus-visible:outline toolbar-button mr-2 ${
+                        filterRules.length > 0 ? 'bg-green-50 border border-green-200' : ''
+                      }`}
+                      onClick={() => setIsFilterModalOpen(!isFilterModalOpen)}
+                    >
                       <div className="cursor-pointer flex items-center px-2 py-1">
-                        <FunnelSimple size={16} color="#616670" className="flex-none transition-colors duration-200" />
-                        <div className="max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] text-[#616670] hidden min-[1168px]:block">Filter</div>
+                        <FunnelSimple 
+                          size={16} 
+                          color={filterRules.length > 0 ? "#16a34a" : "#616670"} 
+                          className="flex-none transition-colors duration-200" 
+                        />
+                        <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block ${
+                          filterRules.length > 0 ? 'text-green-700' : 'text-[#616670]'
+                        }`}>
+                          {getFilterText(filterRules)}
+                        </div>
                       </div>
                     </button>
                   </div>
@@ -297,6 +334,32 @@ export default function Toolbar({
           })}
           onUpdateSortRuleField={onUpdateSortRuleField ?? (() => {
             // No-op when onUpdateSortRuleField is not provided
+          })}
+        />
+      </ToolbarModal>
+
+      {/* Filter Modal */}
+      <ToolbarModal
+        isOpen={isFilterModalOpen}
+        onClose={() => setIsFilterModalOpen(false)}
+        triggerRef={filterButtonRef}
+        width={400}
+        maxHeight={500}
+      >
+        <FilterModal
+          columns={columns}
+          filterRules={filterRules}
+          onUpdateFilterRule={onUpdateFilterRule ?? (() => {
+            // No-op when onUpdateFilterRule is not provided
+          })}
+          onRemoveFilterRule={onRemoveFilterRule ?? (() => {
+            // No-op when onRemoveFilterRule is not provided
+          })}
+          onAddFilterRule={onAddFilterRule ?? (() => {
+            // No-op when onAddFilterRule is not provided
+          })}
+          onUpdateFilterRuleField={onUpdateFilterRuleField ?? (() => {
+            // No-op when onUpdateFilterRuleField is not provided
           })}
         />
       </ToolbarModal>
