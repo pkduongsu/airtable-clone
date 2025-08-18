@@ -124,9 +124,9 @@ export function SortModal({
                 {/* Sort order indicator (only if sorted) */}
                 {sortRule && (
                   <div className="flex-shrink-0 mr-3">
-                    <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
-                      <span className="text-xs font-medium text-blue-600">{ruleIndex + 1}</span>
-                    </div>
+                    <span className="text-sm font-medium text-blue-600">
+                      {ruleIndex === 0 ? 'Sort by' : 'then by'}
+                    </span>
                   </div>
                 )}
 

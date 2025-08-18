@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ChevronDown from "../../icons/ChevronDown";
 import AirtableBase from "../../icons/AirtableBase";
 import ClockCounterClockwise from "../../icons/ClockCounterClockwise";
@@ -20,10 +20,28 @@ interface NavBarProps {
       updatedAt: Date;
     }[];
   } | null;
+  isSaving?: boolean;
 }
 
-export function NavBar({ base } : NavBarProps) {
+export function NavBar({ base, isSaving = false } : NavBarProps) {
   const [selectedTab, setSelectedTab] = useState("Data");
+  const [showSaved, setShowSaved] = useState(false);
+  const [wasSaving, setWasSaving] = useState(false);
+  
+  // Handle transition from saving to saved state
+  useEffect(() => {
+    if (wasSaving && !isSaving) {
+      // Just finished saving, show "All changes saved"
+      setShowSaved(true);
+      const timer = setTimeout(() => {
+        setShowSaved(false);
+      }, 5000); // 5 seconds
+      
+      return () => clearTimeout(timer);
+    }
+    
+    setWasSaving(isSaving);
+  }, [isSaving, wasSaving]);
   
   const tabs = ["Data", "Automations", "Interfaces", "Forms"];
   
@@ -76,6 +94,22 @@ export function NavBar({ base } : NavBarProps) {
             {/* History + Share Button */}
             <div className="flex items-center justify-end pr-2 overflow-hidden bg-white">
                 <div className="inline-flex items-center gap-1">
+                    {/* Saving indicator */}
+                    {(isSaving || showSaved) && (
+                        <div className="flex items-center gap-2 mr-2">
+                            {isSaving ? (
+                                <>
+                                    <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+                                    <span className="text-[13px] font-[400] text-[#616670] font-family-system">Saving...</span>
+                                </>
+                            ) : showSaved ? (
+                                <>
+                                    <span className="text-[13px] font-[400] text-[#616670] font-family-system">All changes saved</span>
+                                </>
+                            ) : null}
+                        </div>
+                    )}
+                    
                     <div className="flex-none flex items-center">
                         <button className="cursor-pointer flex justify-center items-center rounded-full mx-2 w-7 h-7 hover:bg-[#E5E9F0]">
                             <ClockCounterClockwise size={16} />

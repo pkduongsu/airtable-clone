@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import ChevronDown from "../../icons/ChevronDown";
 import Trash from "../../icons/Trash";
 import Plus from "../../icons/Plus";
+import Question from "../../icons/Question";
+import DotsSixVertical from "../../icons/DotsSixVertical";
+import { createPortal } from "react-dom";
 
 export interface FilterRule {
   id: string;
@@ -12,6 +15,7 @@ export interface FilterRule {
   columnType: 'TEXT' | 'NUMBER';
   operator: FilterOperator;
   value?: string | number;
+  logicOperator?: 'and' | 'or';
 }
 
 export type FilterOperator = 
@@ -36,6 +40,7 @@ interface FilterModalProps {
   onRemoveFilterRule: (ruleId: string) => void;
   onAddFilterRule: (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
   onUpdateFilterRuleField: (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
+  onUpdateLogicOperator: (ruleId: string, logicOperator: 'and' | 'or') => void;
 }
 
 export function FilterModal({
@@ -45,11 +50,24 @@ export function FilterModal({
   onRemoveFilterRule,
   onAddFilterRule,
   onUpdateFilterRuleField,
+  onUpdateLogicOperator,
 }: FilterModalProps) {
-  const [hoveredField, setHoveredField] = useState<string | null>(null);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [openFieldDropdown, setOpenFieldDropdown] = useState<string | null>(null);
+  const [openLogicDropdown, setOpenLogicDropdown] = useState<string | null>(null);
   const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [inputErrors, setInputErrors] = useState<Record<string, boolean>>({});
+  const [focusedInput, setFocusedInput] = useState<string | null>(null);
+  
+  // Modal positioning state
+  const [fieldModalPosition, setFieldModalPosition] = useState<{top: number, left: number, width: number} | null>(null);
+  const [operatorModalPosition, setOperatorModalPosition] = useState<{top: number, left: number, width: number} | null>(null);
+  const [logicModalPosition, setLogicModalPosition] = useState<{top: number, left: number, width: number} | null>(null);
+  
+  // Refs for button positioning
+  const fieldButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const operatorButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const logicButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const getOperatorLabel = useCallback((operator: FilterOperator, columnType: string) => {
     switch (operator) {
@@ -90,16 +108,32 @@ export function FilterModal({
     setOpenDropdown(null);
   }, [onUpdateFilterRule, inputValues]);
 
+  const validateInput = useCallback((value: string, columnType: 'TEXT' | 'NUMBER') => {
+    if (columnType === 'NUMBER') {
+      // Check if it's a valid number (including empty string which is valid)
+      return value === '' || !isNaN(Number(value));
+    }
+    // Text inputs are always valid
+    return true;
+  }, []);
+
   const handleValueChange = useCallback((ruleId: string, value: string) => {
     setInputValues(prev => ({ ...prev, [ruleId]: value }));
     
     // Find the rule to get its operator and column type
     const rule = filterRules.find(r => r.id === ruleId);
     if (rule) {
-      const processedValue = rule.columnType === 'NUMBER' ? parseFloat(value) || 0 : value;
-      onUpdateFilterRule(ruleId, rule.operator, processedValue);
+      // Validate input
+      const isValid = validateInput(value, rule.columnType);
+      setInputErrors(prev => ({ ...prev, [ruleId]: !isValid }));
+      
+      // Only process valid values
+      if (isValid || value === '') {
+        const processedValue = rule.columnType === 'NUMBER' ? (value === '' ? '' : parseFloat(value) || 0) : value;
+        onUpdateFilterRule(ruleId, rule.operator, processedValue);
+      }
     }
-  }, [onUpdateFilterRule, filterRules]);
+  }, [onUpdateFilterRule, filterRules, validateInput]);
 
   const handleFieldSelect = useCallback((column: Column) => {
     onAddFilterRule(column.id, column.name, column.type as 'TEXT' | 'NUMBER');
@@ -110,9 +144,89 @@ export function FilterModal({
     setOpenFieldDropdown(null);
   }, [onUpdateFilterRuleField]);
 
-  const getFilterRuleForColumn = useCallback((columnId: string) => {
-    return filterRules.find(rule => rule.columnId === columnId);
-  }, [filterRules]);
+  const handleLogicOperatorChange = useCallback((ruleId: string, logicOperator: 'and' | 'or') => {
+    onUpdateLogicOperator(ruleId, logicOperator);
+    setOpenLogicDropdown(null);
+  }, [onUpdateLogicOperator]);
+
+  // Modal positioning functions
+  const openFieldModal = useCallback((ruleId: string) => {
+    const button = fieldButtonRefs.current[ruleId];
+    if (button) {
+      const rect = button.getBoundingClientRect();
+      setFieldModalPosition({
+        top: rect.bottom + window.scrollY + 4,
+        left: rect.left + window.scrollX,
+        width: rect.width,
+      });
+      setOpenFieldDropdown(ruleId);
+    }
+  }, []);
+
+  const openOperatorModal = useCallback((ruleId: string) => {
+    const button = operatorButtonRefs.current[ruleId];
+    if (button) {
+      const rect = button.getBoundingClientRect();
+      setOperatorModalPosition({
+        top: rect.bottom + window.scrollY + 4,
+        left: rect.left + window.scrollX,
+        width: rect.width,
+      });
+      setOpenDropdown(ruleId);
+    }
+  }, []);
+
+  const openLogicModal = useCallback((ruleId: string) => {
+    const button = logicButtonRefs.current[ruleId];
+    if (button) {
+      const rect = button.getBoundingClientRect();
+      setLogicModalPosition({
+        top: rect.bottom + window.scrollY + 4,
+        left: rect.left + window.scrollX,
+        width: rect.width,
+      });
+      setOpenLogicDropdown(ruleId);
+    }
+  }, []);
+
+  const closeAllModals = useCallback(() => {
+    setOpenFieldDropdown(null);
+    setOpenDropdown(null);
+    setOpenLogicDropdown(null);
+    setFieldModalPosition(null);
+    setOperatorModalPosition(null);
+    setLogicModalPosition(null);
+  }, []);
+
+  const closeFieldModal = useCallback(() => {
+    setOpenFieldDropdown(null);
+    setFieldModalPosition(null);
+  }, []);
+
+  const closeOperatorModal = useCallback(() => {
+    setOpenDropdown(null);
+    setOperatorModalPosition(null);
+  }, []);
+
+  const closeLogicModal = useCallback(() => {
+    setOpenLogicDropdown(null);
+    setLogicModalPosition(null);
+  }, []);
+
+  // Handle escape key to close modals
+  useEffect(() => {
+    const handleEscapeKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeAllModals();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscapeKey);
+    return () => {
+      document.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, [closeAllModals]);
+
 
   const getAvailableFieldsForRule = useCallback((currentRuleId: string) => {
     return columns.filter(col => {
@@ -126,198 +240,360 @@ export function FilterModal({
     return !['is_empty', 'is_not_empty'].includes(operator);
   }, []);
 
-  const getFilterText = useCallback((filterRules: FilterRule[]) => {
-    if (filterRules.length === 0) return "Filter";
-    if (filterRules.length <= 4) {
-      const names = filterRules.map(rule => rule.columnName);
-      return `Filtered by ${names.join(', ')}`;
-    }
-    const firstName = filterRules[0]?.columnName ?? '';
-    const otherCount = filterRules.length - 1;
-    return `Filtered by ${firstName} and ${otherCount} other field${otherCount === 1 ? '' : 's'}`;
-  }, []);
+  // Modal components
+  const FieldDropdownModal = ({ 
+    isOpen, 
+    position, 
+    ruleId, 
+    _onClose 
+  }: { 
+    isOpen: boolean; 
+    position: {top: number, left: number, width: number} | null; 
+    ruleId: string; 
+    _onClose: () => void;
+  }) => {
+    if (!isOpen || !position) return null;
+
+    return createPortal(
+      <div 
+        className="fixed inset-0 z-50"
+        onClick={(e) => {
+          e.stopPropagation();
+          closeFieldModal();
+        }}
+      >
+        <div 
+          className="absolute bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-y-auto"
+          style={{
+            top: position.top,
+            left: position.left,
+            width: position.width,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {getAvailableFieldsForRule(ruleId).map((field) => (
+            <button
+              key={field.id}
+              onClick={() => {
+                handleFieldChange(ruleId, field);
+                closeFieldModal();
+              }}
+              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
+                field.id === filterRules.find(r => r.id === ruleId)?.columnId ? 'bg-gray-200 text-gray-700' : 'text-gray-700'
+              }`}
+            >
+              <div className="flex items-center">
+                <span className="truncate">{field.name}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
+  const OperatorDropdownModal = ({ 
+    isOpen, 
+    position, 
+    ruleId, 
+    _onClose 
+  }: { 
+    isOpen: boolean; 
+    position: {top: number, left: number, width: number} | null; 
+    ruleId: string; 
+    _onClose: () => void;
+  }) => {
+    if (!isOpen || !position) return null;
+
+    const rule = filterRules.find(r => r.id === ruleId);
+    if (!rule) return null;
+
+    return createPortal(
+      <div 
+        className="fixed inset-0 z-50"
+        onClick={(e) => {
+          e.stopPropagation();
+          closeOperatorModal();
+        }}
+      >
+        <div 
+          className="absolute bg-white border border-gray-200 rounded-md shadow-lg"
+          style={{
+            top: position.top,
+            left: position.left,
+            width: 192, // w-48 equivalent
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {getOperatorOptions(rule.columnType).map((option) => (
+            <button
+              key={option.value}
+              onClick={() => {
+                handleOperatorSelect(ruleId, option.value);
+                closeOperatorModal();
+              }}
+              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
+                rule.operator === option.value ? 'bg-green-50 text-green-700' : 'text-gray-700'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>,
+      document.body
+    );
+  };
+
+  const LogicDropdownModal = ({ 
+    isOpen, 
+    position, 
+    ruleId, 
+    _onClose 
+  }: { 
+    isOpen: boolean; 
+    position: {top: number, left: number, width: number} | null; 
+    ruleId: string; 
+    _onClose: () => void;
+  }) => {
+    if (!isOpen || !position) return null;
+
+    const rule = filterRules.find(r => r.id === ruleId);
+    if (!rule) return null;
+
+    return createPortal(
+      <div 
+        className="fixed inset-0 z-50"
+        onClick={(e) => {
+          e.stopPropagation();
+          closeLogicModal();
+        }}
+      >
+        <div 
+          className="absolute bg-white border border-gray-200 rounded-md shadow-lg"
+          style={{
+            top: position.top,
+            left: position.left,
+            width: 64, // w-16 equivalent
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              handleLogicOperatorChange(ruleId, 'and');
+              closeLogicModal();
+            }}
+            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md ${
+              (rule.logicOperator ?? 'and') === 'and' ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+            }`}
+          >
+            and
+          </button>
+          <button
+            onClick={() => {
+              handleLogicOperatorChange(ruleId, 'or');
+              closeLogicModal();
+            }}
+            className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 last:rounded-b-md ${
+              rule.logicOperator === 'or' ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
+            }`}
+          >
+            or
+          </button>
+        </div>
+      </div>,
+      document.body
+    );
+  };
 
   return (
-    <div className="py-3">
+    <div className="w-full">
       {/* Header */}
-      <div className="px-4 pb-3 border-b border-gray-100">
-        <h3 className="text-sm font-medium text-gray-900">Filter</h3>
-        {filterRules.length > 0 && (
-          <p className="text-xs text-gray-500 mt-1">
-            {getFilterText(filterRules)}
-          </p>
-        )}
+      <div className="flex px-4 pt-3">
+        {/* Empty state */}
+        {filterRules.length === 0 ? (
+          <div className="flex text-[13px] font-[400] text-[#616670]">
+            No filter conditions are applied
+            <span className="ml-2 flex items-center cursor-pointer">
+              <Question size={16} className="mr-2 text-[#6b7280] hover:text-[#1d1f25]" />
+            </span>
+          </div>
+          
+        ) : (<div className="text-[13px] font-[400] text-[#616670]">In this view, show records</div>)}
       </div>
 
-      {/* Fields list with filter rules */}
-      <div className="max-h-80 overflow-y-auto">
-        {columns.map((column) => {
-          const filterRule = getFilterRuleForColumn(column.id);
-          const ruleIndex = filterRule ? filterRules.findIndex(r => r.id === filterRule.id) : -1;
-          
-          return (
-            <div key={column.id} className="border-b border-gray-50 last:border-b-0">
-              {/* Field header - always visible */}
-              <div
-                className={`flex items-center px-4 py-3 cursor-pointer transition-colors duration-150 ${
-                  hoveredField === column.id ? "bg-gray-50" : ""
-                } ${filterRule ? "bg-green-25" : ""}`}
-                onMouseEnter={() => setHoveredField(column.id)}
-                onMouseLeave={() => setHoveredField(null)}
-                onClick={() => !filterRule && handleFieldSelect(column)}
-              >
-                {/* Filter order indicator (only if filtered) */}
-                {filterRule && (
-                  <div className="flex-shrink-0 mr-3">
-                    <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
-                      <span className="text-xs font-medium text-green-600">{ruleIndex + 1}</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Field name and type */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center">
-                    <span className={`text-sm font-medium truncate ${
-                      filterRule ? 'text-green-900' : 'text-gray-900'
-                    }`}>
-                      {column.name}
-                    </span>
-                    <span className={`ml-2 text-xs uppercase ${
-                      filterRule ? 'text-green-600' : 'text-gray-500'
-                    }`}>
-                      {column.type}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Filter indicator or add indicator */}
-                {filterRule ? (
-                  <div className="flex items-center">
-                    <span className="text-xs text-green-600 font-medium mr-2">
-                      {getOperatorLabel(filterRule.operator, filterRule.columnType)}
-                      {needsValueInput(filterRule.operator) && filterRule.value !== undefined && (
-                        <span className="ml-1">&quot;{filterRule.value}&quot;</span>
-                      )}
-                    </span>
-                  </div>
+      {/* Existing filter rules */}
+      <div className="max-h-[25rem] overflow-auto w-full px-4 pt-3">
+        <div className="mb-2">
+          <div className="relative text-[#1d1f25] font-family-system font-[400] text-[13px] w-[calc(390px + 10.5rem)]">
+        {filterRules.map((filterRule, ruleIndex) => (
+          <div key={filterRule.id} className="h-[2.5rem] transition-transform">
+            <div className="h-[2.5rem] transition-transform ">
+              <div className="flex h-full">
+              {/* Logic indicator */}
+              <div className="flex items-center px-2 w-[4.5rem] pb-[0.5rem]">
+                {ruleIndex === 0 ? (
+                  <div className="flex items-center flex-auto px-2 w-full h-full">Where</div>
                 ) : (
-                  <div className="flex items-center">
-                    <span className="text-xs text-gray-400">Click to filter</span>
+                  <div className="relative">
+                    <button
+                      ref={(el) => { logicButtonRefs.current[filterRule.id] = el; }}
+                      onClick={() => openLogicModal(filterRule.id)}
+                      className="hover:bg-gray-200 px-2 py-1 rounded transition-colors duration-150"
+                    >
+                      {filterRule.logicOperator ?? 'and'}
+                    </button>
                   </div>
                 )}
               </div>
+              
 
-              {/* Filter rule configuration (only if filtered) */}
-              {filterRule && (
-                <div className="px-4 pb-3 bg-green-25 border-t border-green-100">
-                  <div className="flex items-center gap-2 pt-3">
-                    {/* Field dropdown */}
-                    <div className="flex-1 relative">
-                      <button
-                        onClick={() => setOpenFieldDropdown(openFieldDropdown === filterRule.id ? null : filterRule.id)}
-                        className="w-full flex items-center justify-between px-3 py-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                      >
-                        <span className="truncate">{filterRule.columnName}</span>
-                        <ChevronDown size={12} color="#6b7280" />
-                      </button>
-
-                      {/* Field dropdown menu */}
-                      {openFieldDropdown === filterRule.id && (
-                        <div className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
-                          {getAvailableFieldsForRule(filterRule.id).map((field) => (
+              <div className="flex-auto flex items-center pr-[0.5rem] h-[2rem] transition-[height] duration-[200ms]">
+                <div className="flex items-center stretch box-content border border-border-default bg-white rounded-[3px]">
+                  {/* div for name, operator, value */}
+                  <div className="flex-auto flex items-stretch w-[390px] max-w-[390px] h-[30px]">
+                    <div className="flex-none flex items-stretch col-span-12 w-[250px]">
+                      {/* Field dropdown */}
+                      <div className="self-stretch flex items-stretch border-r border-border-default col-span-6 max-w-[125px] w-[125px] overflow-hidden">
+                        <div className="flex flex-auto relative w-full">
                             <button
-                              key={field.id}
-                              onClick={() => handleFieldChange(filterRule.id, field)}
-                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
-                                field.id === filterRule.columnId ? 'bg-green-50 text-green-700' : 'text-gray-700'
-                              }`}
+                              ref={(el) => { fieldButtonRefs.current[filterRule.id] = el; }}
+                              onClick={() => openFieldModal(filterRule.id)}
+                              className="w-full flex items-center px-2 rounded-[3px] cursor-pointer hover:bg-gray-100 min-w-0"
                             >
-                              <div className="flex items-center">
-                                <span className="truncate">{field.name}</span>
-                                <span className="ml-2 text-xs text-gray-500 uppercase">{field.type}</span>
+                              <div className="truncate flex-auto text-left min-w-0 overflow-hidden">{filterRule.columnName}</div>
+                              <div className="flex-none flex items-center ml-1">
+                                <ChevronDown size={16} color="#6b7280" />
                               </div>
                             </button>
-                          ))}
                         </div>
-                      )}
                     </div>
 
-                    {/* Operator dropdown */}
-                    <div className="relative">
-                      <button
-                        onClick={() => setOpenDropdown(openDropdown === filterRule.id ? null : filterRule.id)}
-                        className="flex items-center px-3 py-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 min-w-[120px]"
-                      >
-                        <span className="mr-1 truncate">{getOperatorLabel(filterRule.operator, filterRule.columnType)}</span>
-                        <ChevronDown size={12} color="#6b7280" />
-                      </button>
-
-                      {/* Operator dropdown menu */}
-                      {openDropdown === filterRule.id && (
-                        <div className="absolute right-0 top-full mt-1 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-50">
-                          {getOperatorOptions(filterRule.columnType).map((option) => (
-                            <button
-                              key={option.value}
-                              onClick={() => handleOperatorSelect(filterRule.id, option.value)}
-                              className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 first:rounded-t-md last:rounded-b-md ${
-                                filterRule.operator === option.value ? 'bg-green-50 text-green-700' : 'text-gray-700'
-                              }`}
-                            >
-                              {option.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Value input (if needed) */}
-                    {needsValueInput(filterRule.operator) && (
-                      <div className="flex-1">
-                        <input
-                          type={filterRule.columnType === 'NUMBER' ? 'number' : 'text'}
-                          value={inputValues[filterRule.id] ?? filterRule.value ?? ''}
-                          onChange={(e) => handleValueChange(filterRule.id, e.target.value)}
-                          placeholder={filterRule.columnType === 'NUMBER' ? 'Enter number' : 'Enter text'}
-                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-                        />
-                      </div>
-                    )}
-
-                    {/* Remove button */}
+                {/* Operator dropdown */}
+                <div className="self-stretch flex items-stretch border-r border-border-default col-span-6 max-w-[125px] w-[125px] overflow-hidden">
+                  <div className="flex flex-auto relative">
                     <button
-                      onClick={() => onRemoveFilterRule(filterRule.id)}
-                      className="p-2 rounded-md hover:bg-red-50 transition-colors duration-150"
+                      ref={(el) => { operatorButtonRefs.current[filterRule.id] = el; }}
+                      onClick={() => openOperatorModal(filterRule.id)}
+                      className="flex items-center px-2 rounded-[3px] w-full cursor-pointer hover:bg-gray-100 min-w-0"
                     >
-                      <Trash size={14} color="#ef4444" />
+                      <span className="mr-1 truncate flex-auto min-w-0 overflow-hidden">{getOperatorLabel(filterRule.operator, filterRule.columnType)}</span>
+                      <ChevronDown size={12} color="#6b7280" />
                     </button>
                   </div>
                 </div>
-              )}
+                 </div>
+
+                <div className="flex-auto self-stretch flex items-stretch overflow-hidden border-r border-border-default">
+                  {/* Value input (if needed) */}
+                  {needsValueInput(filterRule.operator) && (
+
+                      <div className="flex flex-col w-full h-full">
+                        <div className="flex-auto relative">
+                          <input
+                            type={filterRule.columnType === 'NUMBER' ? 'number' : 'text'}
+                            value={inputValues[filterRule.id] ?? filterRule.value ?? ''}
+                            onChange={(e) => handleValueChange(filterRule.id, e.target.value)}
+                            onFocus={() => setFocusedInput(filterRule.id)}
+                            onBlur={() => setFocusedInput(null)}
+                            placeholder="Enter a value"
+                            className={`py-1 px-2 h-full border-0 outline-0 ring-0 w-full ${
+                              inputErrors[filterRule.id] 
+                                ? 'ring-2 ring-red-500 ring-inset' 
+                                : focusedInput === filterRule.id 
+                                  ? 'ring-2 ring-blue-500 ring-inset' 
+                                  : ''
+                            }`}
+                          />
+                        </div>
+                      </div>
+                )}
+              </div>
+             </div>
+
+              {/* Remove button + order button */}
+              <div className="flex flex-none self-stretch">
+                <button
+                  onClick={() => onRemoveFilterRule(filterRule.id)}
+                  className="flex-none self-stretch hover:bg-gray-100 justify-center flex items-center focus-visible:outline cursor-pointer border-r border-border-default w-8 h-auto"
+                >
+                  <Trash size={16} color="#1d1f25" />
+                </button>
+                <button
+                  onClick={() => onRemoveFilterRule(filterRule.id)}
+                  className="flex-none self-stretch hover:bg-gray-100 justify-center flex items-center focus-visible:outline cursor-pointer border-r border-border-default w-8 h-auto"
+                >
+                  <DotsSixVertical size={16} color="#1d1f25" />
+                </button>
+              </div>
+              </div>
+              </div>
             </div>
-          );
-        })}
+            </div>
+          </div>
+        ))}
+        </div>
+        </div>
       </div>
 
       {/* Add condition button */}
       {filterRules.length < columns.length && (
-        <div className="px-4 pt-3">
-          <button 
-            onClick={() => {
-              // Find the first unused column
-              const usedColumnIds = new Set(filterRules.map(rule => rule.columnId));
-              const availableColumn = columns.find(col => !usedColumnIds.has(col.id));
-              if (availableColumn) {
-                handleFieldSelect(availableColumn);
-              }
-            }}
-            className="flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors duration-150"
-          >
-            <Plus size={14} color="#6b7280" className="mr-2" />
-            Add condition
-          </button>
+        <div className=" flex items-center justify-between px-4 pb-4">
+          <div className="flex items-center mr-4">
+              <button 
+                onClick={() => {
+                  // Find the first unused column
+                  const usedColumnIds = new Set(filterRules.map(rule => rule.columnId));
+                  const availableColumn = columns.find(col => !usedColumnIds.has(col.id));
+                  if (availableColumn) {
+                    handleFieldSelect(availableColumn);
+                  }
+                }}
+                className="mr-4 group cursor-pointer flex items-center text-[13px] text-[#616670] font-[500] font-family-system hover:text-[#1d1f25] transition-colors duration-150"
+              >
+                <Plus size={12} className="mr-2 text-[#6b7280] group-hover:text-[#1d1f25]" />
+                Add condition
+              </button>
+              <div className="flex items-center">
+                  <button 
+                  className="group cursor-pointer flex items-center text-[13px] text-[#616670] font-[500] font-family-system hover:text-[#1d1f25] transition-colors duration-150"
+                >
+                  <Plus size={12} className="mr-2 text-[#6b7280] group-hover:text-[#1d1f25]" />
+                  Add condition group
+                </button>
+                <span className="ml-2 flex items-center cursor-pointer">
+                  <Question size={16} className="mr-2 text-[#6b7280] hover:text-[#1d1f25]" />
+                </span>
+              </div>
+            </div>
+            <button className="ml-16 cursor-pointer items-center text-[13px] text-[#616670] font-[500] font-family-system hover:text-[#1d1f25] transition-colors duration-150 ">
+                Copy from another view
+            </button>
         </div>
       )}
+      
+      {/* Modal components */}
+      <FieldDropdownModal
+        isOpen={!!openFieldDropdown}
+        position={fieldModalPosition}
+        ruleId={openFieldDropdown ?? ''}
+        _onClose={closeFieldModal}
+      />
+      
+      <OperatorDropdownModal
+        isOpen={!!openDropdown}
+        position={operatorModalPosition}
+        ruleId={openDropdown ?? ''}
+        _onClose={closeOperatorModal}
+      />
+      
+      <LogicDropdownModal
+        isOpen={!!openLogicDropdown}
+        position={logicModalPosition}
+        ruleId={openLogicDropdown ?? ''}
+        _onClose={closeLogicModal}
+      />
     </div>
   );
 }

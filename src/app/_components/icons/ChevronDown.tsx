@@ -4,7 +4,7 @@ interface ChevronDownIconProps {
     color?: string,
 }
 
-export default function Bell({className, size, color} : ChevronDownIconProps) {
+export default function ChevronDown({className, size, color} : ChevronDownIconProps) {
     return (
         <svg 
             width={size} 

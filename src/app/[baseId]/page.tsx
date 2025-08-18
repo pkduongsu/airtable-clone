@@ -8,6 +8,7 @@ import { api } from "~/trpc/react";
 
 import { Sidebar } from "../_components/base/controls/Sidebar";
 import { NavBar } from "../_components/base/controls/NavBar";
+import { useMutationTracker, MutationTrackerProvider } from "../_components/providers/MutationTracker";
 import { TableTabsBar } from "../_components/base/controls/TableTabsBar";
 import  Toolbar  from "../_components/base/controls/Toolbar";
 import { DataTable } from "../_components/base/table/DataTable";
@@ -18,8 +19,18 @@ import { type SortRule } from "../_components/base/modals/SortModal";
 import { type FilterRule } from "../_components/base/modals/FilterModal";
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 
+type SearchResult = {
+  type: 'field' | 'cell';
+  id: string;
+  name: string;
+  columnId: string;
+  columnOrder: number;
+  rowId: string | null;
+  rowOrder: number;
+};
 
-export default function BasePage() {
+
+function BasePageContent() {
   const { data: session } = useSession();
   const params = useParams();
   const baseId = params?.baseId as string;
@@ -55,6 +66,20 @@ export default function BasePage() {
   // View state
   const [currentViewId, setCurrentViewId] = useState<string | null>(null);
   const [isViewSwitching, setIsViewSwitching] = useState(false);
+
+  // Search state
+  const [searchResults, setSearchResults] = useState<Array<{
+    type: 'field' | 'cell';
+    id: string;
+    name: string;
+    columnId: string;
+    columnOrder: number;
+    rowId: string | null;
+    rowOrder: number;
+  }>>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [scrollToRowId, setScrollToRowId] = useState<string | null>(null);
 
 
   const { data: base } = api.base.getById.useQuery(
@@ -528,6 +553,67 @@ export default function BasePage() {
     triggerViewSave();
   };
 
+  const handleUpdateLogicOperator = (ruleId: string, logicOperator: 'and' | 'or') => {
+    setFilterRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, logicOperator } : rule
+      )
+    );
+    triggerViewSave();
+  };
+
+  // Search handlers
+  const handleSearchResultSelected = useCallback((result: SearchResult, index: number) => {
+    setCurrentSearchIndex(index);
+  }, []);
+
+  const handleSearchDataUpdate = useCallback((results: SearchResult[], query: string, currentIndex: number) => {
+    setSearchResults(results);
+    setSearchQuery(query);
+    setCurrentSearchIndex(currentIndex);
+  }, []);
+
+  const handleScrollToSearchResult = useCallback(async (result: SearchResult, _index: number) => {
+    if (result.type !== 'cell' || !result.rowId) return;
+    
+    // Find the row in currently loaded data
+    const allLoadedRows = infiniteTableData?.pages.flatMap(page => page.rows) ?? [];
+    const targetRow = allLoadedRows.find(row => row.id === result.rowId);
+    
+    if (targetRow) {
+      // Row is already loaded, trigger scroll
+      setScrollToRowId(result.rowId);
+      // Clear the scroll target after a brief delay to allow for re-scrolling
+      setTimeout(() => setScrollToRowId(null), 100);
+    } else {
+      // Row is not loaded, need to fetch more data
+      // Keep fetching until we find the row or reach the end
+      let attempts = 0;
+      const maxAttempts = 10; // Prevent infinite loop
+      
+      while (attempts < maxAttempts && hasNextPage && !isFetchingNextPage) {
+        await fetchNextPage();
+        attempts++;
+        
+        // Check if the row is now loaded
+        const updatedRows = infiniteTableData?.pages.flatMap(page => page.rows) ?? [];
+        const foundRow = updatedRows.find(row => row.id === result.rowId);
+        
+        if (foundRow) {
+          // Row found, trigger scroll
+          setScrollToRowId(result.rowId);
+          // Clear the scroll target after a brief delay
+          setTimeout(() => setScrollToRowId(null), 100);
+          break;
+        }
+      }
+      
+      if (attempts >= maxAttempts) {
+        console.warn(`Could not find row ${result.rowId} after ${maxAttempts} attempts`);
+      }
+    }
+  }, [infiniteTableData, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   // Auto-save current view state when changes are made
   const updateViewMutation = api.view.update.useMutation({
     onSuccess: () => {
@@ -543,6 +629,7 @@ export default function BasePage() {
   // Use a ref to store the latest mutation function to avoid dependency issues
   const updateViewMutationRef = useRef(updateViewMutation.mutate);
   updateViewMutationRef.current = updateViewMutation.mutate;
+
 
 
   // Get views for selected table
@@ -759,6 +846,36 @@ export default function BasePage() {
   //   return () => clearInterval(interval);
   // }, [selectedTable]);
 
+  // Track all pending mutations for navbar saving indicator
+  const { isMutating: hasActiveMutations } = useMutationTracker();
+  
+  const isAnythingSaving = useMemo(() => {
+    // Check specific table-level mutations
+    const tableOperationsPending = createTableMutation.isPending ||
+                                  updateTableMutation.isPending ||
+                                  deleteTableMutation.isPending ||
+                                  createRowMutation.isPending ||
+                                  insertRowAboveMutation.isPending ||
+                                  insertRowBelowMutation.isPending ||
+                                  deleteRowMutation.isPending ||
+                                  bulkInsertRowsMutation.isPending ||
+                                  updateViewMutation.isPending;
+    
+    // Check global mutation tracker for cell operations and other tracked mutations
+    return tableOperationsPending || hasActiveMutations;
+  }, [
+    createTableMutation.isPending,
+    updateTableMutation.isPending,
+    deleteTableMutation.isPending,
+    createRowMutation.isPending,
+    insertRowAboveMutation.isPending,
+    insertRowBelowMutation.isPending,
+    deleteRowMutation.isPending,
+    bulkInsertRowsMutation.isPending,
+    updateViewMutation.isPending,
+    hasActiveMutations,
+  ]);
+
   // Early return if no session or no selected table
   if (!session || !user) {
     return (
@@ -774,14 +891,15 @@ export default function BasePage() {
   const displayTableData = optimisticTableData ?? tableData ?? lastKnownTableDataRef.current;
 
   // Determine loading state
-  const isInitialLoading = isLoadingTableData || (
+  const isInitialLoading = Boolean(isLoadingTableData || (
     !displayTableData && selectedTable && !lastKnownTableDataRef.current
-  );
+  ));
   
   const isTableStabilizing = isFetchingTableData || (
     (sortRules.length > 0 || filterRules.length > 0) && 
     (isLoadingProcessedData || isFetchingProcessedData)
   );
+
 
   // Show loading screen for initial load or when no data is available
   if (!selectedTable || isInitialLoading || !displayTableData) {
@@ -804,7 +922,7 @@ export default function BasePage() {
 
       {/* Main Content */}
       <div className="box-border flex flex-col flex-auto h-full [--omni-app-frame-min-width:600px] [--omni-app-frame-transition-duration:300ms] bg-white ">
-        <NavBar base={base} />
+        <NavBar base={base} isSaving={isAnythingSaving} />
 
         <TableTabsBar 
           tables={tables}
@@ -844,6 +962,11 @@ export default function BasePage() {
             onRemoveFilterRule={handleRemoveFilterRule}
             onAddFilterRule={handleAddFilterRule}
             onUpdateFilterRuleField={handleUpdateFilterRuleField}
+            onUpdateLogicOperator={handleUpdateLogicOperator}
+            tableId={selectedTable}
+            onSearchResultSelected={handleSearchResultSelected}
+            onSearchDataUpdate={handleSearchDataUpdate}
+            onScrollToSearchResult={handleScrollToSearchResult}
           />
           
           {/* Content area with custom resizable nav and main content */}
@@ -907,6 +1030,12 @@ export default function BasePage() {
                   hiddenColumns={hiddenColumns}
                   sortRules={sortRules}
                   filterRules={filterRules}
+                  isTableLoading={isInitialLoading}
+                  isTableStabilizing={isTableStabilizing}
+                  searchResults={searchResults}
+                  currentSearchIndex={currentSearchIndex}
+                  searchQuery={searchQuery}
+                  scrollToRowId={scrollToRowId}
                 />
               </main>
               <SummaryBar 
@@ -932,5 +1061,13 @@ export default function BasePage() {
       />
     )}
   </div>
+  );
+}
+
+export default function BasePage() {
+  return (
+    <MutationTrackerProvider>
+      <BasePageContent />
+    </MutationTrackerProvider>
   );
 }
