@@ -193,7 +193,7 @@ export default function Toolbar({
                           className="flex-none transition-colors duration-200" 
                         />
                         <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block
-                          text-[#616670]'
+                          ${hiddenColumns.size > 0 ? 'text-[#1d1f25]' : 'text-[#616670]'}
                         `}>
                           {hiddenColumns.size > 0 
                             ? `${hiddenColumns.size} hidden field${hiddenColumns.size === 1 ? '' : 's'}`
@@ -217,7 +217,7 @@ export default function Toolbar({
                           className="flex-none transition-colors duration-200" 
                         />
                         <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block 
-                          'text-[#616670]'
+                          ${filterRules.length > 0 ? 'text-[#1d1f25]' : 'text-[#616670]'}
                         `}>
                           {getFilterText(filterRules)}
                         </div>
@@ -248,7 +248,7 @@ export default function Toolbar({
                               className="flex-none" 
                             />
                             <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block 
-                            'text-[#616670]'
+                            ${sortRules.length > 0 ? 'text-[#1d1f25]' : 'text-[#616670]'}
                             `}>
                               {sortRules.length > 0 
                                 ? `Sorted by ${sortRules.length} field${sortRules.length === 1 ? '' : 's'}`
