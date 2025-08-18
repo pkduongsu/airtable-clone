@@ -119,7 +119,7 @@ export default function Toolbar({
 
   const getFilterText = (filterRules: FilterRule[]) => {
     if (filterRules.length === 0) return "Filter";
-    if (filterRules.length <= 4) {
+    if (filterRules.length <= 3) {
       const names = filterRules.map(rule => rule.columnName);
       return `Filtered by ${names.join(', ')}`;
     }
@@ -180,19 +180,19 @@ export default function Toolbar({
                     <button 
                       ref={hideFieldsButtonRef}
                       className={`toolbar-button focus-visible:outline mr-2 ${
-                        hiddenColumns.size > 0 ? 'bg-blue-50 border border-blue-200' : ''
+                        hiddenColumns.size > 0 ? '!bg-[#C4ECFF] box-border hover:shadow-[inset_0_0_0_2px_rgba(0,0,0,0.1)]' : ''
                       }`}
                       onClick={() => setIsHideFieldsModalOpen(!isHideFieldsModalOpen)}
                     >
                       <div className="cursor-pointer flex items-center px-2 py-1">
                         <EyeSlash 
                           size={16} 
-                          color={hiddenColumns.size > 0 ? "#2563eb" : "#616670"} 
+                          color={"#616670"} 
                           className="flex-none transition-colors duration-200" 
                         />
-                        <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block ${
-                          hiddenColumns.size > 0 ? 'text-blue-700' : 'text-[#616670]'
-                        }`}>
+                        <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block
+                          text-[#616670]'
+                        `}>
                           {hiddenColumns.size > 0 
                             ? `${hiddenColumns.size} hidden field${hiddenColumns.size === 1 ? '' : 's'}`
                             : 'Hide fields'
@@ -204,19 +204,19 @@ export default function Toolbar({
                     <button 
                       ref={filterButtonRef}
                       className={`focus-visible:outline toolbar-button mr-2 ${
-                        filterRules.length > 0 ? 'bg-green-50 border border-green-200' : ''
+                        filterRules.length > 0 ? '!bg-[#CFF5D1] box-border hover:shadow-[inset_0_0_0_2px_rgba(0,0,0,0.1)]' : ''
                       }`}
                       onClick={() => setIsFilterModalOpen(!isFilterModalOpen)}
                     >
                       <div className="cursor-pointer flex items-center px-2 py-1">
                         <FunnelSimple 
                           size={16} 
-                          color={filterRules.length > 0 ? "#16a34a" : "#616670"} 
+                          color={"#616670"} 
                           className="flex-none transition-colors duration-200" 
                         />
-                        <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block ${
-                          filterRules.length > 0 ? 'text-green-700' : 'text-[#616670]'
-                        }`}>
+                        <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block 
+                          'text-[#616670]'
+                        `}>
                           {getFilterText(filterRules)}
                         </div>
                       </div>
@@ -235,19 +235,19 @@ export default function Toolbar({
                       <button 
                         ref={sortButtonRef}
                         className={`toolbar-button focus-visible:outline mr-2 ${
-                          sortRules.length > 0 ? 'bg-orange-50 border border-orange-200' : ''
+                          sortRules.length > 0 ? '!bg-[#FFE0CC] box-border hover:shadow-[inset_0_0_0_2px_rgba(0,0,0,0.1)]' : ''
                         }`}
                         onClick={() => setIsSortModalOpen(!isSortModalOpen)}
                       >
                         <div className="cursor-pointer flex items-center px-2 py-1">
                             <ArrowsDownUp 
                               size={16} 
-                              color={sortRules.length > 0 ? "#ea580c" : "#616670"} 
+                              color={"#616670"} 
                               className="flex-none" 
                             />
-                            <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block ${
-                              sortRules.length > 0 ? 'text-orange-700' : 'text-[#616670]'
-                            }`}>
+                            <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block 
+                            'text-[#616670]'
+                            `}>
                               {sortRules.length > 0 
                                 ? `Sorted by ${sortRules.length} field${sortRules.length === 1 ? '' : 's'}`
                                 : 'Sort'
