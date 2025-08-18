@@ -63,7 +63,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const mutationTracker = useMutationTracker();
   
   const createCellMutation = api.cell.create.useMutation({
-    onSuccess: (data, variables, context) => {
+    onSuccess: (data, variables, _context) => {
       console.log('Cell created successfully');
       
       // Check if this mutation is for the current cell to prevent stale callbacks
@@ -415,7 +415,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         utils.cell.findByRowColumn.fetch({
           rowId,
           columnId,
-        }).then((existingCell: any) => {
+        }).then((existingCell: { id: string } | null) => {
           if (existingCell) {
             // Cell exists, update it silently in background
             console.log('Background: Found existing cell, updating it:', existingCell.id);
@@ -432,7 +432,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
               value: newValue,
             });
           }
-        }).catch((error: any) => {
+        }).catch((error: unknown) => {
           console.error('Background sync error (non-blocking):', error);
         });
       }
@@ -658,7 +658,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         // The mutations will handle their own cleanup with proper timing
       }
     };
-  }, [cellId, editSessionId, editLock]);
+  }, [cellId, editSessionId, editLock, initialValue, isSaving, pendingMutation, tableId, utils.table.getTableData]);
 
   // Failsafe cleanup for orphaned edit locks
   useEffect(() => {
