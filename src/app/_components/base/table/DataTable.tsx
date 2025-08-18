@@ -78,9 +78,11 @@ interface DataTableProps {
     operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
     value?: string | number;
   }>;
+  isTableLoading?: boolean;
+  isTableStabilizing?: boolean;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [] }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -298,6 +300,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               onContextMenu={handleContextMenuClick}
               sortRules={sortRules?.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
               filterRules={filterRules}
+              isTableLoading={isTableLoading}
+              isTableStabilizing={isTableStabilizing}
             />
           );
         },
@@ -335,7 +339,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules, isTableLoading, isTableStabilizing]);
 
   const table = useReactTable({
     data,

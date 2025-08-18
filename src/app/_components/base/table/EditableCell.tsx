@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { api } from "~/trpc/react";
+import { useMutationTracker } from "../../providers/MutationTracker";
 
 interface EditableCellProps {
   cellId: string;
@@ -27,9 +28,11 @@ interface EditableCellProps {
     operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
     value?: string | number;
   }>;
+  isTableLoading?: boolean;
+  isTableStabilizing?: boolean;
 }
 
-export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu, sortRules = [], filterRules = [] }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu, sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
@@ -44,10 +47,18 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const [editLock, setEditLock] = useState(false);
   const [editLockStartTime, setEditLockStartTime] = useState<number | null>(null);
   const editLockTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [wasEditingBeforeLoading, setWasEditingBeforeLoading] = useState(false);
+  
+  // Determine if editing should be disabled due to loading states
+  const isEditingDisabled = isTableLoading || isTableStabilizing;
   
   const utils = api.useUtils();
+  const mutationTracker = useMutationTracker();
+  
   const updateCellMutation = api.table.updateCell.useMutation({
     onMutate: async (variables) => {
+      // Track mutation start
+      mutationTracker.addMutation(`updateCell-${variables.cellId}`);
       // Determine if we need to update processed query cache
       const hasProcessingRules = sortRules.length > 0 || filterRules.length > 0;
       
@@ -140,7 +151,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       
       return { previousData, previousProcessedData, hasProcessingRules };
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       console.log('Cell update successful');
       setHasLocalChanges(false);
       setIsSaving(false);
@@ -153,12 +164,19 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       setEditLockStartTime(null);
       console.log('Edit lock released for cell:', cellId);
       
+      // Track mutation end
+      mutationTracker.removeMutation(`updateCell-${variables.cellId}`);
+      
       // Clear save status after a short delay
       setTimeout(() => setSaveStatus('idle'), 2000);
       // Don't invalidate immediately - optimistic update already shows correct data
     },
     onError: (error, variables, context) => {
       console.error('Failed to update cell:', error);
+      
+      // Track mutation end (even on error)
+      mutationTracker.removeMutation(`updateCell-${variables.cellId}`);
+      
       // Rollback optimistic updates for both caches
       if (context?.previousData) {
         utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, context.previousData);
@@ -342,7 +360,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
 
   // Auto-focus when shouldFocus prop changes
   useEffect(() => {
-    if (shouldFocus && !isEditing) {
+    if (shouldFocus && !isEditing && !isEditingDisabled) {
       if (isSelected) {
         setIsEditing(true);
         
@@ -361,12 +379,43 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       } else {
         onSelect?.();
       }
+    } else if (shouldFocus && isEditingDisabled) {
+      console.log('Focus editing disabled due to loading state for cell:', cellId);
     }
-  }, [shouldFocus, isEditing, isSelected, onSelect, editSessionId, editLock, cellId]);
+  }, [shouldFocus, isEditing, isSelected, onSelect, editSessionId, editLock, cellId, isEditingDisabled]);
+
+  // Track editing state transitions during loading
+  useEffect(() => {
+    if (isEditingDisabled && isEditing) {
+      // Loading started while editing - remember this state
+      setWasEditingBeforeLoading(true);
+      console.log('Preserving edit state during loading for cell:', cellId);
+    } else if (!isEditingDisabled && wasEditingBeforeLoading) {
+      // Loading completed and we were editing before - restore edit state
+      setWasEditingBeforeLoading(false);
+      console.log('Restoring edit state after loading for cell:', cellId);
+      
+      // Re-focus the input to ensure smooth transition
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          // Restore cursor position to end of text
+          const length = inputRef.current.value.length;
+          inputRef.current.setSelectionRange(length, length);
+        }
+      }, 50); // Small delay to ensure DOM is ready
+    }
+  }, [isEditingDisabled, isEditing, wasEditingBeforeLoading, cellId]);
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    
+    // Prevent editing during loading states
+    if (isEditingDisabled) {
+      console.log('Editing disabled due to loading state for cell:', cellId);
+      return;
+    }
     
     if (isSelected && !isEditing) {
       // Second click on already selected cell - enter edit mode
@@ -400,6 +449,13 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const handleDoubleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    
+    // Prevent editing during loading states
+    if (isEditingDisabled) {
+      console.log('Double-click editing disabled due to loading state for cell:', cellId);
+      return;
+    }
+    
     // Double click always enters edit mode directly
     setIsEditing(true);
     
@@ -572,10 +628,23 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
             onChange={(e) => handleValueChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
-            className={`w-full h-full px-2 py-1 border-none bg-white focus:outline-none text-sm text-gray-900 rounded-sm border ${isSaving ? 'border-yellow-400' : 'border-blue-500'}`}
+            disabled={isEditingDisabled}
+            className={`w-full h-full px-2 py-1 border-none bg-white focus:outline-none text-sm text-gray-900 rounded-sm border ${
+              isEditingDisabled 
+                ? 'border-gray-300 bg-gray-50 cursor-not-allowed' 
+                : isSaving 
+                  ? 'border-yellow-400' 
+                  : 'border-blue-500'
+            }`}
           />
+          {/* Loading state indicator */}
+          {isEditingDisabled && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-50/80">
+              <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" title="Loading..."></div>
+            </div>
+          )}
           {/* Save status indicator */}
-          {saveStatus === 'saving' && (
+          {!isEditingDisabled && saveStatus === 'saving' && (
             <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
               <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" title="Saving..."></div>
             </div>
@@ -589,15 +658,6 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
               </div>
             </div>
           )}
-          {saveStatus === 'error' && (
-            <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
-              <div className="w-3 h-3 bg-red-500 rounded-full flex items-center justify-center" title="Save failed">
-                <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     );
@@ -605,26 +665,36 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
 
   // Determine cell styling based on state
   const getCellClassName = () => {
-    const baseClasses = "w-full h-full px-2 py-1 flex items-center cursor-text text-sm text-gray-900";
+    const baseClasses = "w-full h-full px-2 py-1 flex items-center text-sm text-gray-900";
     
-    if (isSelected) {
-      return `${baseClasses} bg-blue-50 border border-blue-500 border-solid`;
+    if (isEditingDisabled) {
+      return `${baseClasses} cursor-not-allowed bg-gray-50 text-gray-500`;
+    } else if (isSelected) {
+      return `${baseClasses} cursor-text bg-blue-50 border border-blue-500 border-solid`;
     } else {
-      return `${baseClasses} hover:bg-[#f8f8f8]`;
+      return `${baseClasses} cursor-text hover:bg-[#f8f8f8]`;
     }
   };
 
   return (
     <div className={`w-full h-full flex items-center ${className}`}>
-      <div 
-        className={getCellClassName()}
-        onClick={handleClick}
-        onMouseDown={handleMouseDown}
-        onDoubleClick={handleDoubleClick}
-        onContextMenu={handleContextMenu}
-        data-cell="true"
-      >
-        {value}
+      <div className="relative w-full h-full">
+        <div 
+          className={getCellClassName()}
+          onClick={handleClick}
+          onMouseDown={handleMouseDown}
+          onDoubleClick={handleDoubleClick}
+          onContextMenu={handleContextMenu}
+          data-cell="true"
+        >
+          {value}
+        </div>
+        {/* Loading indicator for non-editing state */}
+        {isEditingDisabled && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-50/80">
+            <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" title="Loading..."></div>
+          </div>
+        )}
       </div>
     </div>
   );
