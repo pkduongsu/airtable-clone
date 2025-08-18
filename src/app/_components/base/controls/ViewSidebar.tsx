@@ -4,6 +4,7 @@ import { useState } from "react";
 import { CustomResizablePanel } from "../CustomResizablePanel";
 import { ToolbarModal } from "../modals/ToolbarModal";
 import { CreateViewModal, type ViewConfig } from "../modals/CreateViewModal";
+import { ViewContextMenuModal } from "../modals/ViewContextMenuModal";
 import Plus from "../../icons/Plus";
 import MagnifyingGlass from "../../icons/MagnifyingGlass";
 import Cog from "../../icons/Cog";
@@ -66,6 +67,15 @@ export function ViewSidebar({
 }: ViewSidebarProps) {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createButtonRef, setCreateButtonRef] = useState<HTMLButtonElement | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    isOpen: boolean;
+    position: { x: number; y: number } | null;
+    view: { id: string; name: string; isDefault: boolean } | null;
+  }>({
+    isOpen: false,
+    position: null,
+    view: null,
+  });
 
 
   // Get default view name for creating new views
@@ -84,6 +94,38 @@ export function ViewSidebar({
       // Switch to the newly created view
       if (onViewChange) {
         onViewChange(newView.id, newView.config as unknown as ViewConfig);
+      }
+    }
+  });
+
+  // Rename view mutation
+  const renameViewMutation = api.view.update.useMutation({
+    onSuccess: () => {
+      if (onRefetchViews) {
+        onRefetchViews();
+      }
+    }
+  });
+
+  // Delete view mutation
+  const deleteViewMutation = api.view.delete.useMutation({
+    onSuccess: () => {
+      if (onRefetchViews) {
+        onRefetchViews();
+      }
+      // Switch to default view if current view was deleted
+      if (contextMenu.view && currentView === contextMenu.view.id) {
+        const remainingViews = views?.filter(v => v.id !== contextMenu.view!.id);
+        if (remainingViews && remainingViews.length > 0) {
+          const firstView = remainingViews[0];
+          if (onViewChange && firstView) {
+            onViewChange(firstView.id, firstView.config as ViewConfig);
+          }
+        } else {
+          if (onViewChange) {
+            onViewChange(null, { sortRules: [], filterRules: [], hiddenColumns: [] });
+          }
+        }
       }
     }
   });
@@ -115,6 +157,31 @@ export function ViewSidebar({
 
   const handleCreateNewClick = () => {
     setIsCreateModalOpen(true);
+  };
+
+  const handleViewRightClick = (event: React.MouseEvent, view: { id: string; name: string; isDefault: boolean }) => {
+    event.preventDefault();
+    setContextMenu({
+      isOpen: true,
+      position: { x: event.clientX, y: event.clientY },
+      view,
+    });
+  };
+
+  const handleContextMenuClose = () => {
+    setContextMenu({
+      isOpen: false,
+      position: null,
+      view: null,
+    });
+  };
+
+  const handleViewRename = (viewId: string, newName: string) => {
+    renameViewMutation.mutate({ id: viewId, name: newName });
+  };
+
+  const handleViewDelete = (viewId: string) => {
+    deleteViewMutation.mutate({ id: viewId });
   };
   return (
     <div
@@ -173,6 +240,7 @@ export function ViewSidebar({
                         <button 
                           key={view.id}
                           onClick={() => handleViewClick(view)}
+                          onContextMenu={(e) => handleViewRightClick(e, view)}
                           className={`rounded-[3px] cursor-pointer flex relative justify-center flex-col pt-2 pb-2 px-3 hover:bg-[#0000000d] w-full ${
                             currentView === view.id ? 'bg-[#166ee1]/10' : ''
                           }`}
@@ -236,6 +304,16 @@ export function ViewSidebar({
           isCreating={createViewMutation.isPending}
         />
       </ToolbarModal>
+
+      {/* Context Menu Modal */}
+      <ViewContextMenuModal
+        isOpen={contextMenu.isOpen}
+        position={contextMenu.position}
+        view={contextMenu.view}
+        onClose={handleContextMenuClose}
+        onRename={handleViewRename}
+        onDelete={handleViewDelete}
+      />
     </div>
   );
 }

@@ -15,6 +15,7 @@ import Spinner from "../../icons/Spinner";
 import { TableControls } from "../controls/TableControls";
 import { EditableCell } from "./EditableCell";
 import { type SortRule } from "../modals/SortModal";
+import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
 // Define the types for our table data based on the actual tRPC return type
 type TableData = {
@@ -92,15 +93,22 @@ interface DataTableProps {
   currentSearchIndex?: number;
   searchQuery?: string;
   scrollToRowId?: string | null;
+  onRenameColumn?: (columnId: string, newName: string) => void;
+  onDeleteColumn?: (columnId: string) => void;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery, scrollToRowId }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery, scrollToRowId, onRenameColumn, onDeleteColumn }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const [selectedCell, setSelectedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  const [columnModal, setColumnModal] = useState<{
+    isOpen: boolean;
+    position: { x: number; y: number } | null;
+    column: { id: string; name: string } | null;
+  }>({ isOpen: false, position: null, column: null });
 
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
@@ -328,6 +336,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
 
           return (
             <EditableCell
+              key={`${row.id}-${column.id}`} // Stable key for React tracking
               cellId={cellId}
               tableId={tableData.id}
               initialValue={value ?? ""}
@@ -337,6 +346,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               onSelect={() => handleCellSelection(rowIndex, columnIndex)}
               onDeselect={handleCellDeselection}
               rowId={row.id}
+              columnId={column.id} // Pass the real column ID directly
               onContextMenu={handleContextMenuClick}
               sortRules={sortRules?.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
               filterRules={filterRules}
@@ -504,9 +514,25 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
                               header.getContext()
                             )}
                       </span>
-                      <button className={`ml-1 flex-shrink-0 transition-opacity duration-75 ${hoveredHeader === header.id ? 'opacity-100' : 'opacity-0'}`}>
-                        <ChevronDown size={12} color="#616670"/>
-                      </button>
+                      {header.id !== '__rowNumber' && (
+                        <button 
+                          className={`ml-1 cursor-pointer flex-shrink-0 transition-opacity duration-75 ${hoveredHeader === header.id ? 'opacity-100' : 'opacity-0'}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const column = tableData.columns.find(col => col.id === header.id);
+                            if (column) {
+                              setColumnModal({
+                                isOpen: true,
+                                position: { x: rect.left, y: rect.bottom + 5 },
+                                column: { id: column.id, name: column.name }
+                              });
+                            }
+                          }}
+                        >
+                          <ChevronDown size={16} color="#616670" className="hover:text-[#1d1f25]"/>
+                        </button>
+                      )}
                     </div>
                     {/* Column resize handle */}
                     <div
@@ -594,6 +620,20 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       <TableControls
         tableData={tableData}
         tableTotalWidth={table.getCenterTotalSize()}
+      />
+
+      {/* Column Context Menu Modal */}
+      <ColumnContextMenuModal
+        isOpen={columnModal.isOpen}
+        position={columnModal.position}
+        column={columnModal.column}
+        onClose={() => setColumnModal({ isOpen: false, position: null, column: null })}
+        onRename={(columnId, newName) => {
+          onRenameColumn?.(columnId, newName);
+        }}
+        onDelete={(columnId) => {
+          onDeleteColumn?.(columnId);
+        }}
       />
 
     </div>

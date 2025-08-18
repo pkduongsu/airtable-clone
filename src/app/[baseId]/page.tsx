@@ -178,7 +178,7 @@ function BasePageContent() {
   
   const utils = api.useUtils();
   
-  const createRowMutation = api.table.createRow.useMutation({
+  const createRowMutation = api.row.create.useMutation({
     onMutate: async ({ tableId }) => {
       // Cancel any outgoing refetches for base query
       await utils.table.getTableData.cancel({ 
@@ -267,7 +267,7 @@ function BasePageContent() {
     }
   });
 
-  const bulkInsertRowsMutation = api.table.bulkInsertRows.useMutation({
+  const bulkInsertRowsMutation = api.row.bulkInsert.useMutation({
     onError: () => {
       setIsBulkLoading(false);
     },
@@ -357,26 +357,420 @@ function BasePageContent() {
     }
   };
 
-  const insertRowAboveMutation = api.table.insertRowAbove.useMutation({
+  const insertRowAboveMutation = api.row.insertAbove.useMutation({
+    onMutate: async ({ tableId, targetRowId }) => {
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Generate temporary IDs
+      const tempRowId = `temp-row-above-${Date.now()}`;
+      
+      // Optimistically update the cache
+      if (previousData && previousData.pages.length > 0) {
+        const firstPage = previousData.pages[0];
+        if (firstPage) {
+          // Find the target row to determine its order
+          const targetRow = previousData.pages
+            .flatMap(page => page.rows)
+            .find(row => row.id === targetRowId);
+          
+          if (targetRow) {
+            const newOrder = targetRow.order;
+            
+            // Create empty cells for all existing columns
+            const newCells = firstPage.columns.map(column => ({
+              id: `temp-cell-${tempRowId}-${column.id}`,
+              rowId: tempRowId,
+              columnId: column.id,
+              value: { text: "" },
+              column,
+            }));
+            
+            const newRow = {
+              id: tempRowId,
+              tableId,
+              order: newOrder,
+              cells: newCells,
+            };
+            
+            // Update all pages to insert the row and adjust orders
+            utils.table.getTableData.setInfiniteData({ 
+              tableId, 
+              limit: 100
+            }, (old) => {
+              if (!old) return old;
+              
+              const updatedPages = old.pages.map(page => ({
+                ...page,
+                rows: page.rows.map(row => 
+                  row.order >= newOrder 
+                    ? { ...row, order: row.order + 1 }
+                    : row
+                ).concat(newRow).sort((a, b) => a.order - b.order),
+                _count: {
+                  ...page._count,
+                  rows: page._count.rows + 1,
+                }
+              }));
+              
+              return {
+                ...old,
+                pages: updatedPages,
+              };
+            });
+          }
+        }
+      }
+      
+      return { previousData, tempRowId };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: variables.tableId, 
+          limit: 100
+        }, context.previousData);
+      }
+    },
     onSettled: (_data, _error, _variables) => {
-      // Remove immediate invalidation to prevent disrupting edit sessions
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
     }
   });
 
-  const insertRowBelowMutation = api.table.insertRowBelow.useMutation({
+  const insertRowBelowMutation = api.row.insertBelow.useMutation({
+    onMutate: async ({ tableId, targetRowId }) => {
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Generate temporary IDs
+      const tempRowId = `temp-row-below-${Date.now()}`;
+      
+      // Optimistically update the cache
+      if (previousData && previousData.pages.length > 0) {
+        const firstPage = previousData.pages[0];
+        if (firstPage) {
+          // Find the target row to determine its order
+          const targetRow = previousData.pages
+            .flatMap(page => page.rows)
+            .find(row => row.id === targetRowId);
+          
+          if (targetRow) {
+            const newOrder = targetRow.order + 1;
+            
+            // Create empty cells for all existing columns
+            const newCells = firstPage.columns.map(column => ({
+              id: `temp-cell-${tempRowId}-${column.id}`,
+              rowId: tempRowId,
+              columnId: column.id,
+              value: { text: "" },
+              column,
+            }));
+            
+            const newRow = {
+              id: tempRowId,
+              tableId,
+              order: newOrder,
+              cells: newCells,
+            };
+            
+            // Update all pages to insert the row and adjust orders
+            utils.table.getTableData.setInfiniteData({ 
+              tableId, 
+              limit: 100
+            }, (old) => {
+              if (!old) return old;
+              
+              const updatedPages = old.pages.map(page => ({
+                ...page,
+                rows: page.rows.map(row => 
+                  row.order >= newOrder 
+                    ? { ...row, order: row.order + 1 }
+                    : row
+                ).concat(newRow).sort((a, b) => a.order - b.order),
+                _count: {
+                  ...page._count,
+                  rows: page._count.rows + 1,
+                }
+              }));
+              
+              return {
+                ...old,
+                pages: updatedPages,
+              };
+            });
+          }
+        }
+      }
+      
+      return { previousData, tempRowId };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: variables.tableId, 
+          limit: 100
+        }, context.previousData);
+      }
+    },
     onSettled: (_data, _error, _variables) => {
-      // Remove immediate invalidation to prevent disrupting edit sessions
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
     }
   });
 
-  const deleteRowMutation = api.table.deleteRow.useMutation({
+  const deleteRowMutation = api.row.delete.useMutation({
+    onMutate: async ({ tableId, rowId }) => {
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Optimistically update the cache
+      if (previousData && previousData.pages.length > 0) {
+        // Find the target row to determine its order
+        const targetRow = previousData.pages
+          .flatMap(page => page.rows)
+          .find(row => row.id === rowId);
+        
+        if (targetRow) {
+          const deletedOrder = targetRow.order;
+          
+          // Update all pages to remove the row and adjust orders
+          utils.table.getTableData.setInfiniteData({ 
+            tableId, 
+            limit: 100
+          }, (old) => {
+            if (!old) return old;
+            
+            const updatedPages = old.pages.map(page => ({
+              ...page,
+              rows: page.rows
+                .filter(row => row.id !== rowId)
+                .map(row => 
+                  row.order > deletedOrder 
+                    ? { ...row, order: row.order - 1 }
+                    : row
+                ),
+              _count: {
+                ...page._count,
+                rows: Math.max(0, page._count.rows - 1),
+              }
+            }));
+            
+            return {
+              ...old,
+              pages: updatedPages,
+            };
+          });
+        }
+      }
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: variables.tableId, 
+          limit: 100
+        }, context.previousData);
+      }
+    },
     onSettled: (_data, _error, _variables) => {
-      // Remove immediate invalidation to prevent disrupting edit sessions
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
+    }
+  });
+
+  const renameColumnMutation = api.column.rename.useMutation({
+    onMutate: async ({ columnId, name }) => {
+      if (!selectedTable) return { previousData: undefined };
+
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId: selectedTable, 
+        limit: 100
+      });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId: selectedTable, 
+        limit: 100
+      });
+      
+      // Optimistically update the cache
+      if (previousData && previousData.pages.length > 0) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: selectedTable, 
+          limit: 100
+        }, (old) => {
+          if (!old) return old;
+          
+          const updatedPages = old.pages.map(page => ({
+            ...page,
+            columns: page.columns.map(col => 
+              col.id === columnId ? { ...col, name } : col
+            ),
+            rows: page.rows.map(row => ({
+              ...row,
+              cells: row.cells.map(cell => 
+                cell.columnId === columnId 
+                  ? { ...cell, column: { ...cell.column, name } }
+                  : cell
+              )
+            }))
+          }));
+          
+          return {
+            ...old,
+            pages: updatedPages,
+          };
+        });
+      }
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData && selectedTable) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: selectedTable, 
+          limit: 100
+        }, context.previousData);
+      }
+    },
+    onSettled: (_data, _error, _variables) => {
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
+    }
+  });
+
+  const deleteColumnMutation = api.column.delete.useMutation({
+    onMutate: async ({ columnId }) => {
+      if (!selectedTable) return { previousData: undefined };
+
+      // Cancel any outgoing refetches for base query
+      await utils.table.getTableData.cancel({ 
+        tableId: selectedTable, 
+        limit: 100
+      });
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId: selectedTable, 
+        limit: 100
+      });
+      
+      // Optimistically update the cache
+      if (previousData && previousData.pages.length > 0) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: selectedTable, 
+          limit: 100
+        }, (old) => {
+          if (!old) return old;
+          
+          const updatedPages = old.pages.map(page => ({
+            ...page,
+            columns: page.columns.filter(col => col.id !== columnId),
+            rows: page.rows.map(row => ({
+              ...row,
+              cells: row.cells.filter(cell => cell.columnId !== columnId)
+            }))
+          }));
+          
+          return {
+            ...old,
+            pages: updatedPages,
+          };
+        });
+      }
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData && selectedTable) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId: selectedTable, 
+          limit: 100
+        }, context.previousData);
+      }
+    },
+    onSettled: (_data, _error, _variables) => {
+      // Don't invalidate to prevent editing disruption
+      // Optimistic updates handle UI consistency
     }
   });
 
   const handleInsertRowAbove = async (tableId: string, rowId: string) => {
     try {
+      // Check if this is a temporary row ID from optimistic updates
+      if (rowId.startsWith('temp-row-')) {
+        // For temporary rows, find the closest real row and use its position
+        const currentData = utils.table.getTableData.getInfiniteData({ 
+          tableId, 
+          limit: 100
+        });
+        
+        if (currentData && currentData.pages.length > 0) {
+          const allRows = currentData.pages.flatMap(page => page.rows);
+          const targetRowIndex = allRows.findIndex(row => row.id === rowId);
+          
+          if (targetRowIndex >= 0) {
+            // Find the closest real (non-temporary) row before this position
+            let realRowId = null;
+            for (let i = targetRowIndex - 1; i >= 0; i--) {
+              if (!allRows[i]!.id.startsWith('temp-row-')) {
+                realRowId = allRows[i]!.id;
+                break;
+              }
+            }
+            
+            if (realRowId) {
+              // Insert below the found real row (which will be above the temp row)
+              await insertRowBelowMutation.mutateAsync({ tableId, targetRowId: realRowId });
+              return;
+            } else {
+              // No real rows found above, just create a new row at the end
+              await createRowMutation.mutateAsync({ tableId });
+              return;
+            }
+          }
+        }
+        
+        // Fallback: create a new row at the end if we can't determine position
+        await createRowMutation.mutateAsync({ tableId });
+        return;
+      }
+      
       await insertRowAboveMutation.mutateAsync({ tableId, targetRowId: rowId });
     } catch (error) {
       console.error('Failed to insert row above:', error);
@@ -385,6 +779,45 @@ function BasePageContent() {
 
   const handleInsertRowBelow = async (tableId: string, rowId: string) => {
     try {
+      // Check if this is a temporary row ID from optimistic updates
+      if (rowId.startsWith('temp-row-')) {
+        // For temporary rows, find the closest real row and use its position
+        const currentData = utils.table.getTableData.getInfiniteData({ 
+          tableId, 
+          limit: 100
+        });
+        
+        if (currentData && currentData.pages.length > 0) {
+          const allRows = currentData.pages.flatMap(page => page.rows);
+          const targetRowIndex = allRows.findIndex(row => row.id === rowId);
+          
+          if (targetRowIndex >= 0) {
+            // Find the closest real (non-temporary) row after this position
+            let realRowId = null;
+            for (let i = targetRowIndex + 1; i < allRows.length; i++) {
+              if (!allRows[i]!.id.startsWith('temp-row-')) {
+                realRowId = allRows[i]!.id;
+                break;
+              }
+            }
+            
+            if (realRowId) {
+              // Insert above the found real row (which will be below the temp row)
+              await insertRowAboveMutation.mutateAsync({ tableId, targetRowId: realRowId });
+              return;
+            } else {
+              // No real rows found below, just create a new row at the end
+              await createRowMutation.mutateAsync({ tableId });
+              return;
+            }
+          }
+        }
+        
+        // Fallback: create a new row at the end if we can't determine position
+        await createRowMutation.mutateAsync({ tableId });
+        return;
+      }
+      
       await insertRowBelowMutation.mutateAsync({ tableId, targetRowId: rowId });
     } catch (error) {
       console.error('Failed to insert row below:', error);
@@ -393,9 +826,74 @@ function BasePageContent() {
 
   const handleDeleteRow = async (tableId: string, rowId: string) => {
     try {
+      // Check if this is a temporary row ID from optimistic updates
+      if (rowId.startsWith('temp-row-')) {
+        // For temporary rows, just remove them from the cache without server call
+        const currentData = utils.table.getTableData.getInfiniteData({ 
+          tableId, 
+          limit: 100
+        });
+        
+        if (currentData && currentData.pages.length > 0) {
+          // Find the target row to determine its order
+          const targetRow = currentData.pages
+            .flatMap(page => page.rows)
+            .find(row => row.id === rowId);
+          
+          if (targetRow) {
+            const deletedOrder = targetRow.order;
+            
+            // Update the cache to remove the temporary row
+            utils.table.getTableData.setInfiniteData({ 
+              tableId, 
+              limit: 100
+            }, (old) => {
+              if (!old) return old;
+              
+              const updatedPages = old.pages.map(page => ({
+                ...page,
+                rows: page.rows
+                  .filter(row => row.id !== rowId)
+                  .map(row => 
+                    row.order > deletedOrder 
+                      ? { ...row, order: row.order - 1 }
+                      : row
+                  ),
+                _count: {
+                  ...page._count,
+                  rows: Math.max(0, page._count.rows - 1),
+                }
+              }));
+              
+              return {
+                ...old,
+                pages: updatedPages,
+              };
+            });
+          }
+        }
+        return;
+      }
+      
       await deleteRowMutation.mutateAsync({ tableId, rowId });
     } catch (error) {
       console.error('Failed to delete row:', error);
+    }
+  };
+
+  const handleRenameColumn = async (columnId: string, newName: string) => {
+    try {
+      await renameColumnMutation.mutateAsync({ columnId, name: newName });
+    } catch (error) {
+      console.error('Failed to rename column:', error);
+    }
+  };
+
+  const handleDeleteColumn = async (columnId: string) => {
+    try {
+      await deleteColumnMutation.mutateAsync({ columnId });
+    } catch (error) {
+      console.error('Failed to delete column:', error);
     }
   };
 
@@ -859,7 +1357,9 @@ function BasePageContent() {
                                   insertRowBelowMutation.isPending ||
                                   deleteRowMutation.isPending ||
                                   bulkInsertRowsMutation.isPending ||
-                                  updateViewMutation.isPending;
+                                  updateViewMutation.isPending ||
+                                  renameColumnMutation.isPending ||
+                                  deleteColumnMutation.isPending;
     
     // Check global mutation tracker for cell operations and other tracked mutations
     return tableOperationsPending || hasActiveMutations;
@@ -873,6 +1373,8 @@ function BasePageContent() {
     deleteRowMutation.isPending,
     bulkInsertRowsMutation.isPending,
     updateViewMutation.isPending,
+    renameColumnMutation.isPending,
+    deleteColumnMutation.isPending,
     hasActiveMutations,
   ]);
 
@@ -901,19 +1403,6 @@ function BasePageContent() {
   );
 
 
-  // Show loading screen for initial load or when no data is available
-  if (!selectedTable || isInitialLoading || !displayTableData) {
-    return (
-      <div className="h-screen flex flex-col bg-white">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="flex items-center gap-3">
-            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-            <div className="text-gray-600 font-medium">Loading table data...</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="h-screen flex flex-auto">
@@ -963,7 +1452,7 @@ function BasePageContent() {
             onAddFilterRule={handleAddFilterRule}
             onUpdateFilterRuleField={handleUpdateFilterRuleField}
             onUpdateLogicOperator={handleUpdateLogicOperator}
-            tableId={selectedTable}
+            tableId={selectedTable ?? ''}
             onSearchResultSelected={handleSearchResultSelected}
             onSearchDataUpdate={handleSearchDataUpdate}
             onScrollToSearchResult={handleScrollToSearchResult}
@@ -1017,26 +1506,38 @@ function BasePageContent() {
                     </div>
                   </div>
                 )}
-                
-                <DataTable 
-                  tableData={displayTableData}
-                  onInsertRowAbove={handleInsertRowAbove}
-                  onInsertRowBelow={handleInsertRowBelow}
-                  onDeleteRow={handleDeleteRow}
-                  onContextMenu={handleContextMenu}
-                  fetchNextPage={fetchNextPage}
-                  hasNextPage={hasNextPage}
-                  isFetchingNextPage={isFetchingNextPage}
-                  hiddenColumns={hiddenColumns}
-                  sortRules={sortRules}
-                  filterRules={filterRules}
-                  isTableLoading={isInitialLoading}
-                  isTableStabilizing={isTableStabilizing}
-                  searchResults={searchResults}
-                  currentSearchIndex={currentSearchIndex}
-                  searchQuery={searchQuery}
-                  scrollToRowId={scrollToRowId}
-                />
+
+                {/* Initial loading state - only covers main content */}
+                {(!selectedTable || isInitialLoading || !displayTableData) ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-[#f6f8fc] z-10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                      <div className="text-gray-600 font-medium">Loading table data...</div>
+                    </div>
+                  </div>
+                ) : (
+                  <DataTable 
+                    tableData={displayTableData}
+                    onInsertRowAbove={handleInsertRowAbove}
+                    onInsertRowBelow={handleInsertRowBelow}
+                    onDeleteRow={handleDeleteRow}
+                    onContextMenu={handleContextMenu}
+                    fetchNextPage={fetchNextPage}
+                    hasNextPage={hasNextPage}
+                    isFetchingNextPage={isFetchingNextPage}
+                    hiddenColumns={hiddenColumns}
+                    sortRules={sortRules}
+                    filterRules={filterRules}
+                    isTableLoading={isInitialLoading}
+                    isTableStabilizing={isTableStabilizing}
+                    searchResults={searchResults}
+                    currentSearchIndex={currentSearchIndex}
+                    searchQuery={searchQuery}
+                    scrollToRowId={scrollToRowId}
+                    onRenameColumn={handleRenameColumn}
+                    onDeleteColumn={handleDeleteColumn}
+                  />
+                )}
               </main>
               <SummaryBar 
                 recordCount={displayTableData?._count.rows ?? 0} 

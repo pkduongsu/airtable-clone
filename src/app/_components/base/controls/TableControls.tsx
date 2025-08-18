@@ -28,9 +28,9 @@ export function TableControls({
   
   const utils = api.useUtils();
   
-  const createColumnMutation = api.table.createColumn.useMutation({
+  const createColumnMutation = api.column.create.useMutation({
     onMutate: async ({ tableId, name, type }) => {
-      // Cancel any outgoing refetches
+      // Cancel any outgoing refetches for base query
       await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // Snapshot the previous value
@@ -88,22 +88,31 @@ export function TableControls({
       return { previousData, tempColumnId };
     },
     onSuccess: (newColumn, variables, context) => {
-      // Replace temporary data with real server data for columns
+      // Update column metadata and fix cell columnId references to maintain __cellIds mapping
       if (context?.tempColumnId) {
         const { tableId } = variables;
+        
         utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
           if (!old) return old;
           
           const updatedPages = old.pages.map(page => ({
             ...page,
+            // Update the column metadata
             columns: page.columns.map(col => 
               col.id === context.tempColumnId ? newColumn : col
             ),
+            // Update cell columnId references so __cellIds mapping works correctly
+            // But keep the temporary cell IDs to preserve user data and avoid React remounts
             rows: page.rows.map(row => ({
               ...row,
               cells: row.cells.map(cell =>
                 cell.columnId === context.tempColumnId
-                  ? { ...cell, columnId: newColumn.id, column: newColumn }
+                  ? { 
+                      ...cell, 
+                      columnId: newColumn.id, // Update columnId reference
+                      column: newColumn, // Update column reference
+                      // Keep original cell.id to avoid React remount issues
+                    }
                   : cell
               )
             }))
@@ -122,13 +131,14 @@ export function TableControls({
         utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
       }
     },
-    onSettled: (data, error, variables) => {
-      // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Don't invalidate immediately to avoid disrupting user interaction with the new column
+      // The optimistic update already provides the correct UI state
+      // Server sync happens in the background via the onSuccess handler
     }
   });
   
-  const createRowMutation = api.table.createRow.useMutation({
+  const createRowMutation = api.row.create.useMutation({
     onMutate: async ({ tableId }) => {
       // Cancel any outgoing refetches
       await utils.table.getTableData.cancel({ tableId, limit: 100 });
@@ -205,9 +215,10 @@ export function TableControls({
         utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
       }
     },
-    onSettled: (data, error, variables) => {
-      // Always refetch to ensure server state
-      void utils.table.getTableData.invalidate({ tableId: variables.tableId, limit: 100 });
+    onSettled: (_data, _error, _variables) => {
+      // Don't invalidate immediately to avoid disrupting user interaction with the new row
+      // The optimistic update already provides the correct UI state
+      // Server sync happens naturally without forcing a refetch
     }
   });
 
