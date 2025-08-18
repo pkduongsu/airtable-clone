@@ -79,6 +79,7 @@ function BasePageContent() {
   }>>([]);
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
   const [searchQuery, setSearchQuery] = useState("");
+  const [scrollToRowId, setScrollToRowId] = useState<string | null>(null);
 
 
   const { data: base } = api.base.getById.useQuery(
@@ -563,6 +564,47 @@ function BasePageContent() {
     setCurrentSearchIndex(currentIndex);
   }, []);
 
+  const handleScrollToSearchResult = useCallback(async (result: SearchResult, _index: number) => {
+    if (result.type !== 'cell' || !result.rowId) return;
+    
+    // Find the row in currently loaded data
+    const allLoadedRows = infiniteTableData?.pages.flatMap(page => page.rows) ?? [];
+    const targetRow = allLoadedRows.find(row => row.id === result.rowId);
+    
+    if (targetRow) {
+      // Row is already loaded, trigger scroll
+      setScrollToRowId(result.rowId);
+      // Clear the scroll target after a brief delay to allow for re-scrolling
+      setTimeout(() => setScrollToRowId(null), 100);
+    } else {
+      // Row is not loaded, need to fetch more data
+      // Keep fetching until we find the row or reach the end
+      let attempts = 0;
+      const maxAttempts = 10; // Prevent infinite loop
+      
+      while (attempts < maxAttempts && hasNextPage && !isFetchingNextPage) {
+        await fetchNextPage();
+        attempts++;
+        
+        // Check if the row is now loaded
+        const updatedRows = infiniteTableData?.pages.flatMap(page => page.rows) ?? [];
+        const foundRow = updatedRows.find(row => row.id === result.rowId);
+        
+        if (foundRow) {
+          // Row found, trigger scroll
+          setScrollToRowId(result.rowId);
+          // Clear the scroll target after a brief delay
+          setTimeout(() => setScrollToRowId(null), 100);
+          break;
+        }
+      }
+      
+      if (attempts >= maxAttempts) {
+        console.warn(`Could not find row ${result.rowId} after ${maxAttempts} attempts`);
+      }
+    }
+  }, [infiniteTableData, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
   // Auto-save current view state when changes are made
   const updateViewMutation = api.view.update.useMutation({
     onSuccess: () => {
@@ -914,6 +956,7 @@ function BasePageContent() {
             tableId={selectedTable}
             onSearchResultSelected={handleSearchResultSelected}
             onSearchDataUpdate={handleSearchDataUpdate}
+            onScrollToSearchResult={handleScrollToSearchResult}
           />
           
           {/* Content area with custom resizable nav and main content */}
@@ -982,6 +1025,7 @@ function BasePageContent() {
                   searchResults={searchResults}
                   currentSearchIndex={currentSearchIndex}
                   searchQuery={searchQuery}
+                  scrollToRowId={scrollToRowId}
                 />
               </main>
               <SummaryBar 

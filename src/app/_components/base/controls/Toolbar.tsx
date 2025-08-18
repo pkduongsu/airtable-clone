@@ -61,6 +61,7 @@ interface ToolbarProps {
   tableId?: string;
   onSearchResultSelected?: (result: SearchResult, index: number) => void;
   onSearchDataUpdate?: (results: SearchResult[], query: string, currentIndex: number) => void;
+  onScrollToSearchResult?: (result: SearchResult, index: number) => void;
 }
 
 export default function Toolbar({ 
@@ -86,7 +87,8 @@ export default function Toolbar({
   onUpdateFilterRuleField,
   tableId,
   onSearchResultSelected,
-  onSearchDataUpdate
+  onSearchDataUpdate,
+  onScrollToSearchResult
 }: ToolbarProps) {
   const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
   const [isHideFieldsModalOpen, setIsHideFieldsModalOpen] = useState(false);
@@ -395,6 +397,7 @@ export default function Toolbar({
           tableId={tableId}
           onResultSelected={onSearchResultSelected}
           onSearchDataUpdate={onSearchDataUpdate}
+          onScrollToResult={onScrollToSearchResult}
           triggerRef={searchButtonRef}
         />
       )}

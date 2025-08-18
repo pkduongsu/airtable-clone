@@ -91,9 +91,10 @@ interface DataTableProps {
   }>;
   currentSearchIndex?: number;
   searchQuery?: string;
+  scrollToRowId?: string | null;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery, scrollToRowId }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -409,6 +410,16 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         : undefined,
     overscan: 5,
   });
+
+  // Scroll to specific row when scrollToRowId changes
+  useEffect(() => {
+    if (scrollToRowId) {
+      const rowIndex = data.findIndex(row => row.id === scrollToRowId);
+      if (rowIndex >= 0) {
+        rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
+      }
+    }
+  }, [scrollToRowId, data, rowVirtualizer]);
 
   // Infinite scrolling logic
   useEffect(() => {

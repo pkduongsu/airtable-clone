@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { api } from "~/trpc/react";
+import X from "../../icons/X";
+import ChevronDown from "../../icons/ChevronDown";
+import ChevronUp from "../../icons/ChevronUp";
 
 interface SearchResult {
   type: 'field' | 'cell';
@@ -19,6 +22,7 @@ interface SearchModalProps {
   tableId: string;
   onResultSelected?: (result: SearchResult, index: number) => void;
   onSearchDataUpdate?: (results: SearchResult[], query: string, currentIndex: number) => void;
+  onScrollToResult?: (result: SearchResult, index: number) => void;
   triggerRef: React.RefObject<HTMLElement | null>;
 }
 
@@ -28,6 +32,7 @@ export function SearchModal({
   tableId,
   onResultSelected: _onResultSelected,
   onSearchDataUpdate,
+  onScrollToResult,
   triggerRef,
 }: SearchModalProps) {
   const [query, setQuery] = useState("");
@@ -177,72 +182,63 @@ export function SearchModal({
 
   // Navigate to next/previous result
   const navigateResult = useCallback((direction: 'up' | 'down') => {
-    if (direction === 'up') {
-      setCurrentResultIndex(prev => 
-        prev > 0 ? prev - 1 : Math.max(0, results.length - 1)
-      );
-    } else {
-      setCurrentResultIndex(prev => 
-        prev < results.length - 1 ? prev + 1 : 0
-      );
+    const newIndex = direction === 'up' 
+      ? (currentResultIndex > 0 ? currentResultIndex - 1 : Math.max(0, results.length - 1))
+      : (currentResultIndex < results.length - 1 ? currentResultIndex + 1 : 0);
+    
+    setCurrentResultIndex(newIndex);
+    
+    // Trigger scroll to result if callback is provided
+    if (onScrollToResult && results[newIndex]) {
+      onScrollToResult(results[newIndex], newIndex);
     }
-  }, [results.length]);
+  }, [currentResultIndex, results, onScrollToResult]);
 
   if (!isOpen) return null;
 
   return (
     <div
       ref={modalRef}
-      className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg w-[300px]"
+      className="fixed flex z-50 flex-col mr-2 bg-white border-l-2 rounded-[3px] border-r-2 border-b-2 border-t-0 border-border-default w-[300px] h-[74px]"
       style={{
         transform: isOpen ? "scale(1)" : "scale(0.95)",
         opacity: isOpen ? 1 : 0,
       }}
     >
       {/* Search Input */}
-      <div className="flex items-center px-3 py-2">
+      <div className="flex items-center px-2 border-2-[transparent] border-transparent bg-transparent py-2 h-[38px]">
         <input
           ref={inputRef}
           type="text"
-          placeholder="Search..."
+          placeholder="Find in view"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="flex-1 text-sm outline-none placeholder-gray-500"
+          className="flex-1 text-[13px] placeholder:font-[620] font-[500] text-[#1d1f25] font-family-system outline-none placeholder:text-gray-500"
         />
         
         {/* Navigation and Close */}
-        <div className="flex items-center gap-2 ml-3">
+        <div className="flex items-center pr-2">
           {results.length > 0 && (
             <>
-              <span className="text-xs text-gray-500 whitespace-nowrap">
+              <span className="flex pr-2 items-center text-[11px] opacity-[0.5] font-[400] flex-none text-[#1d1f25] font-family-system whitespace-nowrap">
                 {currentResultIndex + 1} of {results.length}
               </span>
               
               {/* Up/Down arrows */}
-              <div className="flex">
+              <div className="flex py-2">
                 <button
                   onClick={() => navigateResult('up')}
-                  className="p-1 hover:bg-gray-100 rounded"
+                  className="cursor-pointer bg-gray-200 hover:bg-gray-100 rounded-tl-[3px] rounded-bl-[3px] w-[20px] h-[22px] flex items-center justify-center"
                   disabled={results.length === 0}
                 >
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path
-                      d="M6 3.5L2.5 7H9.5L6 3.5Z"
-                      fill={results.length === 0 ? "#ccc" : "#666"}
-                    />
-                  </svg>
+                  <ChevronUp size={16} color={results.length === 0 ? "#ccc" : "#1d1f25"} className="" />
                 </button>
                 <button
                   onClick={() => navigateResult('down')}
-                  className="p-1 hover:bg-gray-100 rounded"
+                  className="cursor-pointer bg-gray-200 hover:bg-gray-100 rounded-tr-[3px] rounded-br-[3px] w-[20px] h-[22px] flex items-center justify-center"
                   disabled={results.length === 0}
                 >
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path
-                      d="M6 8.5L9.5 5H2.5L6 8.5Z"
-                      fill={results.length === 0 ? "#ccc" : "#666"}
-                    />
-                  </svg>
+                  <ChevronDown size={16} color={results.length === 0 ? "#ccc" : "#1d1f25"} />
                 </button>
               </div>
             </>
@@ -258,30 +254,23 @@ export function SearchModal({
           {/* Close button */}
           <button
             onClick={onClose}
-            className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-gray-700"
+            className="p-1 rounded text-gray-500 hover:text-gray-700 cursor-pointer"
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path
-                d="M12 4L4 12M4 4L12 12"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
+            <X size={16} />
           </button>
         </div>
       </div>
 
+      <div className="flex px-3 py-2 border-t border-border-default bg-[#0000000D] h-[34px]">
       {/* Statistics */}
       {debouncedQuery && !isLoading && (
-        <div className="px-3 py-2 border-t border-gray-200 bg-gray-50">
-          <div className="text-xs text-gray-600">
-            Found {statistics.fieldCount} field{statistics.fieldCount === 1 ? '' : 's'} and{' '}
-            {statistics.cellCount} cell{statistics.cellCount === 1 ? '' : 's'}{' '}
-            (within {statistics.recordCount} record{statistics.recordCount === 1 ? '' : 's'})
+          <div className="text-[11px] text-[#1d1f25] font-[400] opacity-[0.75] font-family-system">
+            Found <span className={statistics.fieldCount === 0 ? "font-[400]" : "font-[700]"}>{statistics.fieldCount === 0 ? 'no' : statistics.fieldCount}</span> field{statistics.fieldCount === 1 ? '' : 's'} and{' '}
+            <span className={statistics.cellCount === 0 ? "font-[400]" : "font-[700]"}>{statistics.cellCount}</span> cell{statistics.cellCount === 1 ? '' : 's'}{' '}
+            (within <span className={statistics.recordCount === 0 ? "font-[400]" : "font-[700]"}>{statistics.recordCount}</span> record{statistics.recordCount === 1 ? '' : 's'})
           </div>
-        </div>
       )}
+      </div>
     </div>
   );
 }
