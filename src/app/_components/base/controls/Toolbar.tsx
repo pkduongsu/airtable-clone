@@ -58,6 +58,7 @@ interface ToolbarProps {
   onRemoveFilterRule?: (ruleId: string) => void;
   onAddFilterRule?: (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
   onUpdateFilterRuleField?: (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
+  onUpdateLogicOperator?: (ruleId: string, logicOperator: 'and' | 'or') => void;
   tableId?: string;
   onSearchResultSelected?: (result: SearchResult, index: number) => void;
   onSearchDataUpdate?: (results: SearchResult[], query: string, currentIndex: number) => void;
@@ -85,6 +86,7 @@ export default function Toolbar({
   onRemoveFilterRule,
   onAddFilterRule,
   onUpdateFilterRuleField,
+  onUpdateLogicOperator,
   tableId,
   onSearchResultSelected,
   onSearchDataUpdate,
@@ -368,8 +370,9 @@ export default function Toolbar({
         isOpen={isFilterModalOpen}
         onClose={() => setIsFilterModalOpen(false)}
         triggerRef={filterButtonRef}
-        width={400}
-        maxHeight={500}
+        width={590}
+        maxHeight={519}
+        align="right"
       >
         <FilterModal
           columns={columns}
@@ -385,6 +388,9 @@ export default function Toolbar({
           })}
           onUpdateFilterRuleField={onUpdateFilterRuleField ?? (() => {
             // No-op when onUpdateFilterRuleField is not provided
+          })}
+          onUpdateLogicOperator={onUpdateLogicOperator ?? (() => {
+            // No-op when onUpdateLogicOperator is not provided
           })}
         />
       </ToolbarModal>

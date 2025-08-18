@@ -553,6 +553,15 @@ function BasePageContent() {
     triggerViewSave();
   };
 
+  const handleUpdateLogicOperator = (ruleId: string, logicOperator: 'and' | 'or') => {
+    setFilterRules(prev => 
+      prev.map(rule => 
+        rule.id === ruleId ? { ...rule, logicOperator } : rule
+      )
+    );
+    triggerViewSave();
+  };
+
   // Search handlers
   const handleSearchResultSelected = useCallback((result: SearchResult, index: number) => {
     setCurrentSearchIndex(index);
@@ -953,6 +962,7 @@ function BasePageContent() {
             onRemoveFilterRule={handleRemoveFilterRule}
             onAddFilterRule={handleAddFilterRule}
             onUpdateFilterRuleField={handleUpdateFilterRuleField}
+            onUpdateLogicOperator={handleUpdateLogicOperator}
             tableId={selectedTable}
             onSearchResultSelected={handleSearchResultSelected}
             onSearchDataUpdate={handleSearchDataUpdate}

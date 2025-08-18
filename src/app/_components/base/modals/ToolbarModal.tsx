@@ -11,6 +11,7 @@ interface ToolbarModalProps {
   width?: number;
   maxHeight?: number;
   className?: string;
+  align?: 'left' | 'right';
 }
 
 export function ToolbarModal({
@@ -21,6 +22,7 @@ export function ToolbarModal({
   width = 280,
   maxHeight = 400,
   className = "",
+  align = 'left',
 }: ToolbarModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -33,15 +35,25 @@ export function ToolbarModal({
     
     // Position below the trigger button with a small gap
     let top = triggerRect.bottom + 8;
-    let left = triggerRect.left;
+    let left = align === 'right' 
+      ? triggerRect.right - width  // Right-align: modal's right edge aligns with trigger's right edge
+      : triggerRect.left;          // Left-align: modal's left edge aligns with trigger's left edge
 
     // Ensure the modal stays within the viewport
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     
     // Adjust horizontal position if modal would overflow
-    if (left + width > viewportWidth - 16) {
-      left = viewportWidth - width - 16;
+    if (align === 'right') {
+      // For right-aligned modals, ensure left edge doesn't go off-screen
+      if (left < 16) {
+        left = 16;
+      }
+    } else {
+      // For left-aligned modals, ensure right edge doesn't go off-screen
+      if (left + width > viewportWidth - 16) {
+        left = viewportWidth - width - 16;
+      }
     }
     
     // Adjust vertical position if modal would overflow
@@ -57,7 +69,7 @@ export function ToolbarModal({
     modal.style.left = `${left}px`;
     modal.style.width = `${width}px`;
     modal.style.maxHeight = `${maxHeight}px`;
-  }, [isOpen, width, maxHeight, triggerRef]);
+  }, [isOpen, width, maxHeight, triggerRef, align]);
 
   // Handle outside clicks
   useEffect(() => {
