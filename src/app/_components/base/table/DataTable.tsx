@@ -80,9 +80,20 @@ interface DataTableProps {
   }>;
   isTableLoading?: boolean;
   isTableStabilizing?: boolean;
+  searchResults?: Array<{
+    type: 'field' | 'cell';
+    id: string;
+    name: string;
+    columnId: string;
+    columnOrder: number;
+    rowId: string | null;
+    rowOrder: number;
+  }>;
+  currentSearchIndex?: number;
+  searchQuery?: string;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
@@ -215,6 +226,30 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
   // Note: Sorting is now handled at the database level
   // The sortRules prop is kept for UI display purposes only
 
+  // Calculate search match information
+  const searchMatchInfo = useMemo(() => {
+    if (!searchResults || searchResults.length === 0) {
+      return { cellMatches: new Set(), currentResult: null };
+    }
+
+    const cellMatches = new Set<string>();
+    let currentResult = null;
+
+    // Add all cell search results to matches
+    searchResults.forEach((result, index) => {
+      if (result.type === 'cell' && result.rowId) {
+        const matchKey = `${result.rowId}-${result.columnId}`;
+        cellMatches.add(matchKey);
+        
+        if (index === currentSearchIndex) {
+          currentResult = matchKey;
+        }
+      }
+    });
+
+    return { cellMatches, currentResult };
+  }, [searchResults, currentSearchIndex]);
+
   // Transform the data structure into a format that TanStack Table can use
   const { columns, data } = useMemo(() => {
     // Create row number column
@@ -286,6 +321,10 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
           const cellId = row.__cellIds[column.id]!;
           const rowIndex = info.row.index;
           
+          const matchKey = `${row.id}-${column.id}`;
+          const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
+          const isCurrentSearchResult = searchMatchInfo.currentResult === matchKey;
+
           return (
             <EditableCell
               cellId={cellId}
@@ -302,6 +341,9 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               filterRules={filterRules}
               isTableLoading={isTableLoading}
               isTableStabilizing={isTableStabilizing}
+              searchQuery={searchQuery}
+              isSearchMatch={isSearchMatch}
+              isCurrentSearchResult={isCurrentSearchResult}
             />
           );
         },
@@ -339,7 +381,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules, isTableLoading, isTableStabilizing]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules, isTableLoading, isTableStabilizing, searchMatchInfo, searchQuery]);
 
   const table = useReactTable({
     data,

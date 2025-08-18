@@ -19,6 +19,16 @@ import { type SortRule } from "../_components/base/modals/SortModal";
 import { type FilterRule } from "../_components/base/modals/FilterModal";
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 
+type SearchResult = {
+  type: 'field' | 'cell';
+  id: string;
+  name: string;
+  columnId: string;
+  columnOrder: number;
+  rowId: string | null;
+  rowOrder: number;
+};
+
 
 function BasePageContent() {
   const { data: session } = useSession();
@@ -56,6 +66,19 @@ function BasePageContent() {
   // View state
   const [currentViewId, setCurrentViewId] = useState<string | null>(null);
   const [isViewSwitching, setIsViewSwitching] = useState(false);
+
+  // Search state
+  const [searchResults, setSearchResults] = useState<Array<{
+    type: 'field' | 'cell';
+    id: string;
+    name: string;
+    columnId: string;
+    columnOrder: number;
+    rowId: string | null;
+    rowOrder: number;
+  }>>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const [searchQuery, setSearchQuery] = useState("");
 
 
   const { data: base } = api.base.getById.useQuery(
@@ -529,6 +552,17 @@ function BasePageContent() {
     triggerViewSave();
   };
 
+  // Search handlers
+  const handleSearchResultSelected = useCallback((result: SearchResult, index: number) => {
+    setCurrentSearchIndex(index);
+  }, []);
+
+  const handleSearchDataUpdate = useCallback((results: SearchResult[], query: string, currentIndex: number) => {
+    setSearchResults(results);
+    setSearchQuery(query);
+    setCurrentSearchIndex(currentIndex);
+  }, []);
+
   // Auto-save current view state when changes are made
   const updateViewMutation = api.view.update.useMutation({
     onSuccess: () => {
@@ -877,6 +911,9 @@ function BasePageContent() {
             onRemoveFilterRule={handleRemoveFilterRule}
             onAddFilterRule={handleAddFilterRule}
             onUpdateFilterRuleField={handleUpdateFilterRuleField}
+            tableId={selectedTable}
+            onSearchResultSelected={handleSearchResultSelected}
+            onSearchDataUpdate={handleSearchDataUpdate}
           />
           
           {/* Content area with custom resizable nav and main content */}
@@ -942,6 +979,9 @@ function BasePageContent() {
                   filterRules={filterRules}
                   isTableLoading={isInitialLoading}
                   isTableStabilizing={isTableStabilizing}
+                  searchResults={searchResults}
+                  currentSearchIndex={currentSearchIndex}
+                  searchQuery={searchQuery}
                 />
               </main>
               <SummaryBar 

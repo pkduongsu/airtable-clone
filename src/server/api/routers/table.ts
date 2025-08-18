@@ -906,4 +906,99 @@ export const tableRouter = createTRPCRouter({
 
       return { success: true, insertedCount: count };
     }),
+
+  searchTable: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      query: z.string().min(1),
+    }))
+    .query(async ({ ctx, input }) => {
+      const { tableId, query } = input;
+      
+      // Search for matching column names
+      const matchingColumns = await ctx.db.column.findMany({
+        where: {
+          tableId,
+          name: {
+            contains: query,
+            mode: 'insensitive',
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+          order: true,
+        },
+      });
+
+      // Search for matching cells using raw SQL for case-insensitive search
+      const matchingCells = await ctx.db.$queryRaw<Array<{
+        id: string;
+        value: { text: string } | null;
+        columnId: string;
+        rowId: string;
+        rowOrder: number;
+        columnName: string;
+        columnOrder: number;
+      }>>`
+        SELECT 
+          c.id,
+          c.value,
+          c."columnId",
+          c."rowId",
+          r."order" as "rowOrder",
+          col.name as "columnName",
+          col."order" as "columnOrder"
+        FROM "Cell" c
+        JOIN "Row" r ON c."rowId" = r.id
+        JOIN "Column" col ON c."columnId" = col.id
+        WHERE col."tableId" = ${tableId}
+        AND LOWER(c.value->>'text') LIKE LOWER(${`%${query}%`})
+        ORDER BY r."order" ASC
+      `;
+
+      // Calculate statistics
+      const uniqueRowIds = new Set(matchingCells.map(cell => cell.rowId));
+      const fieldCount = matchingColumns.length;
+      const cellCount = matchingCells.length;
+      const recordCount = uniqueRowIds.size;
+
+      // Combine results and sort by row order (higher rows first means lower order numbers first)
+      const allResults = [
+        ...matchingColumns.map(column => ({
+          type: 'field' as const,
+          id: column.id,
+          name: column.name,
+          columnId: column.id,
+          columnOrder: column.order,
+          rowId: null,
+          rowOrder: -1, // Fields come before cells
+        })),
+        ...matchingCells.map(cell => ({
+          type: 'cell' as const,
+          id: cell.id,
+          name: cell.columnName,
+          columnId: cell.columnId,
+          columnOrder: cell.columnOrder,
+          rowId: cell.rowId,
+          rowOrder: cell.rowOrder,
+        })),
+      ].sort((a, b) => {
+        // Sort by row order first (fields have rowOrder -1, so they come first)
+        if (a.rowOrder !== b.rowOrder) {
+          return a.rowOrder - b.rowOrder;
+        }
+        // Then by column order
+        return a.columnOrder - b.columnOrder;
+      });
+
+      return {
+        results: allResults,
+        statistics: {
+          fieldCount,
+          cellCount,
+          recordCount,
+        },
+      };
+    }),
 });

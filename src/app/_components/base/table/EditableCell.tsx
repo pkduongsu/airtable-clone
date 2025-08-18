@@ -30,9 +30,12 @@ interface EditableCellProps {
   }>;
   isTableLoading?: boolean;
   isTableStabilizing?: boolean;
+  searchQuery?: string;
+  isSearchMatch?: boolean;
+  isCurrentSearchResult?: boolean;
 }
 
-export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu, sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, onContextMenu, sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchQuery, isSearchMatch = false, isCurrentSearchResult = false }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
@@ -663,6 +666,28 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     );
   }
 
+  // Function to highlight search text
+  const highlightSearchText = (text: string, query: string) => {
+    if (!query || !text) return text;
+    
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    const parts = text.split(regex);
+    
+    return parts.map((part, index) => {
+      if (regex.test(part)) {
+        return (
+          <span 
+            key={index} 
+            className={`${isCurrentSearchResult ? 'bg-orange-300' : 'bg-yellow-200'}`}
+          >
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
+  };
+
   // Determine cell styling based on state
   const getCellClassName = () => {
     const baseClasses = "w-full h-full px-2 py-1 flex items-center text-sm text-gray-900";
@@ -671,6 +696,8 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       return `${baseClasses} cursor-not-allowed bg-gray-50 text-gray-500`;
     } else if (isSelected) {
       return `${baseClasses} cursor-text bg-blue-50 border border-blue-500 border-solid`;
+    } else if (isSearchMatch) {
+      return `${baseClasses} cursor-text ${isCurrentSearchResult ? 'bg-orange-100' : 'bg-yellow-100'} hover:bg-[#f8f8f8]`;
     } else {
       return `${baseClasses} cursor-text hover:bg-[#f8f8f8]`;
     }
@@ -687,7 +714,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
           onContextMenu={handleContextMenu}
           data-cell="true"
         >
-          {value}
+          {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
         </div>
         {/* Loading indicator for non-editing state */}
         {isEditingDisabled && (

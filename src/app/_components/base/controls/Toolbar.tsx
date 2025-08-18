@@ -16,6 +16,17 @@ import { ToolbarModal } from "../modals/ToolbarModal";
 import { HideFieldsModal } from "../modals/HideFieldsModal";
 import { SortModal, type SortRule } from "../modals/SortModal";
 import { FilterModal, type FilterRule } from "../modals/FilterModal";
+import { SearchModal } from "../modals/SearchModal";
+
+type SearchResult = {
+  type: 'field' | 'cell';
+  id: string;
+  name: string;
+  columnId: string;
+  columnOrder: number;
+  rowId: string | null;
+  rowOrder: number;
+};
 
 interface Column {
   id: string;
@@ -47,6 +58,9 @@ interface ToolbarProps {
   onRemoveFilterRule?: (ruleId: string) => void;
   onAddFilterRule?: (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
   onUpdateFilterRuleField?: (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => void;
+  tableId?: string;
+  onSearchResultSelected?: (result: SearchResult, index: number) => void;
+  onSearchDataUpdate?: (results: SearchResult[], query: string, currentIndex: number) => void;
 }
 
 export default function Toolbar({ 
@@ -69,15 +83,20 @@ export default function Toolbar({
   onUpdateFilterRule,
   onRemoveFilterRule,
   onAddFilterRule,
-  onUpdateFilterRuleField
+  onUpdateFilterRuleField,
+  tableId,
+  onSearchResultSelected,
+  onSearchDataUpdate
 }: ToolbarProps) {
   const [tabDimensions, setTabDimensions] = useState<{left: number, width: number} | null>(null);
   const [isHideFieldsModalOpen, setIsHideFieldsModalOpen] = useState(false);
   const [isSortModalOpen, setIsSortModalOpen] = useState(false);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
+  const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
   
   useEffect(() => {
     if (selectedTable) {
@@ -277,7 +296,11 @@ export default function Toolbar({
           <div className="flex items-center mr-2">
             <CleanTooltip>
               <CleanTooltipTrigger asChild>
-                <button className="flex items-center justify-center focus-visible:outline cursor-pointer rounded-[6px] hover:bg-gray-100 w-8 h-8">
+                <button 
+                  ref={searchButtonRef}
+                  className="flex items-center justify-center focus-visible:outline cursor-pointer rounded-[6px] hover:bg-gray-100 w-8 h-8"
+                  onClick={() => setIsSearchModalOpen(true)}
+                >
                   <MagnifyingGlass size={16} color="#616670" className="flex-none" />
                 </button>
               </CleanTooltipTrigger>
@@ -363,6 +386,18 @@ export default function Toolbar({
           })}
         />
       </ToolbarModal>
+
+      {/* Search Modal */}
+      {tableId && (
+        <SearchModal
+          isOpen={isSearchModalOpen}
+          onClose={() => setIsSearchModalOpen(false)}
+          tableId={tableId}
+          onResultSelected={onSearchResultSelected}
+          onSearchDataUpdate={onSearchDataUpdate}
+          triggerRef={searchButtonRef}
+        />
+      )}
 
     </div>
     </TooltipProvider>
