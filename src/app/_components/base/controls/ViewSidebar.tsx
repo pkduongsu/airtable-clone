@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CustomResizablePanel } from "../CustomResizablePanel";
+import { CustomResizablePanel } from "../components/CustomResizablePanel";
 import { ToolbarModal } from "../modals/ToolbarModal";
 import { CreateViewModal, type ViewConfig } from "../modals/CreateViewModal";
 import { ViewContextMenuModal } from "../modals/ViewContextMenuModal";
