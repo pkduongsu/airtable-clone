@@ -322,7 +322,8 @@ export default function Toolbar({
         onClose={() => setIsHideFieldsModalOpen(false)}
         triggerRef={hideFieldsButtonRef}
         width={320}
-        maxHeight={400}
+        maxHeight={418}
+        align="right"
       >
         <HideFieldsModal
           columns={columns}
