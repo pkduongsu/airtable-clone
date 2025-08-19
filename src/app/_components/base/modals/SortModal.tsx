@@ -99,13 +99,6 @@ export function SortModal({
     }
   }, []);
 
-  const getSortDirectionLabel = useCallback((rule: SortRule) => {
-    if (rule.columnType === 'NUMBER') {
-      return rule.direction === 'asc' ? 'Increasing' : 'Decreasing';
-    } else {
-      return rule.direction === 'asc' ? 'A → Z' : 'Z → A';
-    }
-  }, []);
 
   // Handle field selection for new rule
   const handleFieldSelect = useCallback((option: { id: string; label: string; subtitle?: string }) => {
@@ -218,7 +211,7 @@ export function SortModal({
           /* Rules state - show sort rules */
           <div className="max-h-64 overflow-y-auto">
             <div className="space-y-2 pt-2">
-              {sortRules.map((rule, index) => {
+              {sortRules.map((rule, _index) => {
                 const availableColumns = getAvailableColumnsForRule(rule.id);
                 const directionOptions = getSortDirectionOptions(rule.columnType);
                 
@@ -297,7 +290,7 @@ export function SortModal({
             <div>
               <Toggle
                 enabled={autoSortEnabled}
-                onToggle={onToggleAutoSort || (() => {})}
+                onToggle={onToggleAutoSort ?? (() => undefined)}
                 label="Automatically sort records"
               />
             </div>
