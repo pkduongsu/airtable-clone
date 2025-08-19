@@ -60,10 +60,10 @@ export function BasesSection({ bases, onDeleteBase, getRelativeTime }: BasesSect
         {viewMode === 'grid' ? (
           <div className="flex flex-wrap gap-[16px] mb-6">
             {bases?.map((base) => (
-              <div key={base.id} className="relative group h-[92px] w-[286px] flex-shrink-0">
+              <div key={base.id} className="relative group h-[92px] w-[300px] flex-shrink-0">
                 <Link href={`/${base.id}`} className="block">
                   <div 
-                    className="relative rounded-[6px] bg-white cursor-pointer shadow-at-main-nav h-[92px] w-[286px]"
+                    className="relative rounded-[6px] bg-white cursor-pointer shadow-at-main-nav h-[92px] w-[300px]"
                   >
                       <div className="flex">
                         <div className="flex items-center justify-center rounded-l-lg relative w-[92px] h-[92px] min-w-[92px]">

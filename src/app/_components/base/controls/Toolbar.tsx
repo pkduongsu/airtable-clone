@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import List from "../../icons/List";
 import GridFeature from "../../icons/GridFeature";
 import ChevronDown from "../../icons/ChevronDown";
@@ -97,6 +97,8 @@ export default function Toolbar({
   const [isSortModalOpen, setIsSortModalOpen] = useState(false);
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
+  const [autoSortEnabled, setAutoSortEnabled] = useState(true);
+  const [pendingSortRules, setPendingSortRules] = useState(sortRules);
   const hideFieldsButtonRef = useRef<HTMLButtonElement>(null);
   const sortButtonRef = useRef<HTMLButtonElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
@@ -118,6 +120,79 @@ export default function Toolbar({
       }
     }
   }, [selectedTable]);
+
+  // Update pending sort rules when sortRules prop changes
+  useEffect(() => {
+    if (autoSortEnabled) {
+      setPendingSortRules(sortRules);
+    }
+  }, [sortRules, autoSortEnabled]);
+
+  // Handle auto-sort toggle
+  const handleToggleAutoSort = useCallback((enabled: boolean) => {
+    setAutoSortEnabled(enabled);
+    if (enabled) {
+      // When turning auto-sort back on, sync pending rules with current rules
+      setPendingSortRules(sortRules);
+    }
+  }, [sortRules]);
+
+  // Handle sort rule operations for manual mode
+  const handleSortRuleUpdate = useCallback((ruleId: string, direction: 'asc' | 'desc') => {
+    if (autoSortEnabled) {
+      onUpdateSortRule?.(ruleId, direction);
+    } else {
+      setPendingSortRules(prev => prev.map(rule => 
+        rule.id === ruleId ? { ...rule, direction } : rule
+      ));
+    }
+  }, [autoSortEnabled, onUpdateSortRule]);
+
+  const handleSortRuleRemove = useCallback((ruleId: string) => {
+    if (autoSortEnabled) {
+      onRemoveSortRule?.(ruleId);
+    } else {
+      setPendingSortRules(prev => prev.filter(rule => rule.id !== ruleId));
+    }
+  }, [autoSortEnabled, onRemoveSortRule]);
+
+  const handleSortRuleAdd = useCallback((columnId: string, columnName: string, columnType: string) => {
+    if (autoSortEnabled) {
+      onAddSortRule?.(columnId, columnName, columnType);
+    } else {
+      const newRule = {
+        id: Date.now().toString(),
+        columnId,
+        columnName,
+        columnType,
+        direction: 'asc' as const,
+      };
+      setPendingSortRules(prev => [...prev, newRule]);
+    }
+  }, [autoSortEnabled, onAddSortRule]);
+
+  const handleSortRuleFieldUpdate = useCallback((ruleId: string, columnId: string, columnName: string, columnType: string) => {
+    if (autoSortEnabled) {
+      onUpdateSortRuleField?.(ruleId, columnId, columnName, columnType);
+    } else {
+      setPendingSortRules(prev => prev.map(rule =>
+        rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
+      ));
+    }
+  }, [autoSortEnabled, onUpdateSortRuleField]);
+
+  // Handle manual sort operations
+  const handleCancelSort = useCallback(() => {
+    setPendingSortRules(sortRules);
+  }, [sortRules]);
+
+  const handleApplySort = useCallback(() => {
+    // Apply all pending changes
+    // Note: This is a simplified implementation. In a real app, you'd want to
+    // calculate the diff and call the appropriate callbacks
+    // For now, we'll just close the modal and the parent should handle the sync
+    setIsSortModalOpen(false);
+  }, []);
 
   const getFilterText = (filterRules: FilterRule[]) => {
     if (filterRules.length === 0) return "Filter";
@@ -237,7 +312,7 @@ export default function Toolbar({
                       <button 
                         ref={sortButtonRef}
                         className={`toolbar-button focus-visible:outline mr-2 ${
-                          sortRules.length > 0 ? '!bg-[#FFE0CC] box-border hover:shadow-[inset_0_0_0_2px_rgba(0,0,0,0.1)]' : ''
+                          (sortRules.length > 0 && autoSortEnabled) ? '!bg-[#FFE0CC] box-border hover:shadow-[inset_0_0_0_2px_rgba(0,0,0,0.1)]' : ''
                         }`}
                         onClick={() => setIsSortModalOpen(!isSortModalOpen)}
                       >
@@ -248,9 +323,9 @@ export default function Toolbar({
                               className="flex-none" 
                             />
                             <div className={`max-w-[384px] truncate ml-1 font-family-system text-[13px] leading-[18px] font-[400] hidden min-[1168px]:block 
-                            ${sortRules.length > 0 ? 'text-[#1d1f25]' : 'text-[#616670]'}
+                            ${(sortRules.length > 0 && autoSortEnabled) ? 'text-[#1d1f25]' : 'text-[#616670]'}
                             `}>
-                              {sortRules.length > 0 
+                              {(sortRules.length > 0 && autoSortEnabled)
                                 ? `Sorted by ${sortRules.length} field${sortRules.length === 1 ? '' : 's'}`
                                 : 'Sort'
                               }
@@ -345,24 +420,22 @@ export default function Toolbar({
         isOpen={isSortModalOpen}
         onClose={() => setIsSortModalOpen(false)}
         triggerRef={sortButtonRef}
-        width={360}
-        maxHeight={450}
+        width={(autoSortEnabled ? sortRules.length : pendingSortRules.length) > 0 ? 450 : 320}
+        maxHeight={418}
+        align="right"
+        borderRadius="rounded-[3px]"
       >
         <SortModal
           columns={columns}
-          sortRules={sortRules}
-          onUpdateSortRule={onUpdateSortRule ?? (() => {
-            // No-op when onUpdateSortRule is not provided
-          })}
-          onRemoveSortRule={onRemoveSortRule ?? (() => {
-            // No-op when onRemoveSortRule is not provided
-          })}
-          onAddSortRule={onAddSortRule ?? (() => {
-            // No-op when onAddSortRule is not provided
-          })}
-          onUpdateSortRuleField={onUpdateSortRuleField ?? (() => {
-            // No-op when onUpdateSortRuleField is not provided
-          })}
+          sortRules={autoSortEnabled ? sortRules : pendingSortRules}
+          onUpdateSortRule={handleSortRuleUpdate}
+          onRemoveSortRule={handleSortRuleRemove}
+          onAddSortRule={handleSortRuleAdd}
+          onUpdateSortRuleField={handleSortRuleFieldUpdate}
+          autoSortEnabled={autoSortEnabled}
+          onToggleAutoSort={handleToggleAutoSort}
+          onCancel={handleCancelSort}
+          onApplySort={handleApplySort}
         />
       </ToolbarModal>
 

@@ -100,13 +100,13 @@ export function ColumnContextMenuModal({
           <>
             <button
               onClick={() => setIsRenaming(true)}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center"
+              className="cursor-pointer w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center"
             >
               Rename column
             </button>
             <button
               onClick={handleDelete}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 text-red-600 flex items-center"
+              className="cursor-pointer w-full px-3 py-2 text-left text-sm hover:bg-gray-50 text-red-600 flex items-center"
             >
               Delete column
             </button>

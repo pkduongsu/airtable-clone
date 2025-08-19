@@ -3,7 +3,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 
-interface ToolbarModalProps {
+interface DropdownModalProps {
   isOpen: boolean;
   onClose: () => void;
   triggerRef: React.RefObject<HTMLElement | null>;
@@ -12,20 +12,18 @@ interface ToolbarModalProps {
   maxHeight?: number;
   className?: string;
   align?: 'left' | 'right';
-  borderRadius?: string;
 }
 
-export function ToolbarModal({
+export function DropdownModal({
   isOpen,
   onClose,
   triggerRef,
   children,
-  width = 280,
-  maxHeight = 400,
+  width = 200,
+  maxHeight = 300,
   className = "",
   align = 'left',
-  borderRadius = 'rounded-lg',
-}: ToolbarModalProps) {
+}: DropdownModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
 
   // Handle positioning
@@ -36,7 +34,7 @@ export function ToolbarModal({
     const modal = modalRef.current;
     
     // Position below the trigger button with a small gap
-    let top = triggerRect.bottom + 8;
+    let top = triggerRect.bottom + 4;
     let left = align === 'right' 
       ? triggerRect.right - width  // Right-align: modal's right edge aligns with trigger's right edge
       : triggerRect.left;          // Left-align: modal's left edge aligns with trigger's left edge
@@ -60,7 +58,7 @@ export function ToolbarModal({
     
     // Adjust vertical position if modal would overflow
     if (top + maxHeight > viewportHeight - 16) {
-      top = triggerRect.top - maxHeight - 8;
+      top = triggerRect.top - maxHeight - 4;
       // If still doesn't fit, position at bottom of viewport
       if (top < 16) {
         top = viewportHeight - maxHeight - 16;
@@ -69,13 +67,8 @@ export function ToolbarModal({
 
     modal.style.top = `${top}px`;
     modal.style.left = `${left}px`;
-    modal.style.maxHeight = `${maxHeight}px`;
-    
-    // Set width with transition support
-    if (!modal.style.transition.includes('width')) {
-      modal.style.transition = modal.style.transition ? `${modal.style.transition}, width 200ms ease-out` : 'width 200ms ease-out';
-    }
     modal.style.width = `${width}px`;
+    modal.style.maxHeight = `${maxHeight}px`;
   }, [isOpen, width, maxHeight, triggerRef, align]);
 
   // Handle outside clicks
@@ -91,14 +84,6 @@ export function ToolbarModal({
         triggerRef.current?.contains(target)
       ) {
         return;
-      }
-
-      // Don't close if clicking on any dropdown modal (which are portaled to document.body)
-      const dropdownModals = document.querySelectorAll('[data-dropdown-modal="true"]');
-      for (const dropdownModal of dropdownModals) {
-        if (dropdownModal.contains(target)) {
-          return;
-        }
       }
       
       onClose();
@@ -138,7 +123,8 @@ export function ToolbarModal({
   return createPortal(
     <div
       ref={modalRef}
-      className={`fixed z-50 bg-white border border-gray-200 ${borderRadius} shadow-lg overflow-hidden transition-all duration-200 ease-out ${className}`}
+      data-dropdown-modal="true"
+      className={`fixed z-[60] bg-white border border-gray-200 rounded-[3px] shadow-lg overflow-hidden transition-all duration-150 ease-out ${className}`}
       style={{
         transform: isOpen ? "scale(1)" : "scale(0.95)",
         opacity: isOpen ? 1 : 0,
