@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
+import Question from "../../icons/Question";
+import TextAlt from "../../icons/TextAlt";
+import HashStraight from "../../icons/HashStraight";
+import DotsSixVertical from "../../icons/DotsSixVertical";
 
 interface Column {
   id: string;
@@ -27,103 +31,133 @@ export function HideFieldsModal({
   onShowAll,
 }: HideFieldsModalProps) {
   const [hoveredColumn, setHoveredColumn] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const handleToggle = useCallback((columnId: string) => {
     onToggleColumn(columnId);
   }, [onToggleColumn]);
 
-  const visibleCount = columns.length - hiddenColumns.size;
+  const filteredColumns = useMemo(() => {
+    if (!searchQuery.trim()) return columns;
+    return columns.filter(column => 
+      column.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [columns, searchQuery]);
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery("");
+  }, []);
+
   const hiddenCount = hiddenColumns.size;
 
   return (
-    <div className="py-3">
+    <div className="rounded-[3px] bg-white shadow-2xl">
       {/* Header */}
-      <div className="px-4 pb-3 border-b border-gray-100">
-        <h3 className="text-sm font-medium text-gray-900">Hide fields</h3>
-        <p className="text-xs text-gray-500 mt-1">
-          {visibleCount} visible, {hiddenCount} hidden
-        </p>
+      <div className="mt-2 mx-4 border-b-[2px] border-border-default flex items-center">        
+        {/* Search bar */}
+          <input
+            type="text"
+            placeholder="Find a field"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-auto px-0 py-2 bg-transparent border-0 rounded-[2px] w-full focus:outline-none font-family-system text-[12px] font-[400] "
+          />
+          <button className="flex items-center cursor-pointer focus-visible:outline ">
+            <Question size={16} color="#616670" />
+          </button>
       </div>
 
       {/* Column list */}
-      <div className="max-h-64 overflow-y-auto">
-        {columns.map((column) => {
-          const isHidden = hiddenColumns.has(column.id);
-          const isHovered = hoveredColumn === column.id;
-
-          return (
-            <div
-              key={column.id}
-              className={`flex items-center px-4 py-2 cursor-pointer transition-colors duration-150 ${
-                isHovered ? "bg-gray-50" : ""
-              }`}
-              onMouseEnter={() => setHoveredColumn(column.id)}
-              onMouseLeave={() => setHoveredColumn(null)}
-              onClick={() => handleToggle(column.id)}
+      <div style={{minHeight: '100px', maxHeight: 'calc(-380px + 100vh)'}} className="overflow-y-auto px-4 py-2">
+        {filteredColumns.length === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <p className="text-sm text-gray-500 mb-4">No columns found</p>
+            <button
+              onClick={clearSearch}
+              className="px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-150"
             >
-              {/* Toggle switch */}
-              <div className="flex-shrink-0 mr-3">
-                <button
-                  className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
-                    !isHidden
-                      ? "bg-blue-600"
-                      : "bg-gray-200"
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggle(column.id);
-                  }}
-                >
-                  <span
-                    className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform duration-200 ${
-                      !isHidden ? "translate-x-3.5" : "translate-x-0.5"
+              Clear
+            </button>
+          </div>
+        ) : (
+          filteredColumns.map((column) => {
+            const isHidden = hiddenColumns.has(column.id);
+            const isHovered = hoveredColumn === column.id;
+
+            return (
+              <div
+                key={column.id}
+                className={`flex items-center mt-2 mb-1 justify-center cursor-pointer transition-colors duration-150 ${
+                  isHovered ? "bg-gray-50" : ""
+                }`}
+                onMouseEnter={() => setHoveredColumn(column.id)}
+                onMouseLeave={() => setHoveredColumn(null)}
+                onClick={() => handleToggle(column.id)}
+              >
+                {/* Toggle switch */}
+                <div className="flex flex-none items-center justify-center">
+                  <button
+                    className={` cursor-pointer relative inline-flex p-[2px] h-[8px] w-[12px] items-center rounded-[9999px] transition-colors duration-200 focus:outline-none border ${
+                      !isHidden
+                        ? "bg-[#048A0E] border-[#048A0E]"
+                        : "bg-[#0000001A] border-[#00000033]"
                     }`}
-                  />
-                </button>
-              </div>
-
-              {/* Column info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center">
-                  <span className="text-sm font-medium text-gray-900 truncate">
-                    {column.name}
-                  </span>
-                  <span className="ml-2 text-xs text-gray-500 uppercase">
-                    {column.type}
-                  </span>
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggle(column.id);
+                    }}
+                  >
+                    <span
+                      className={`inline-block h-1 w-1 transform rounded-full bg-white transition-transform duration-200 ${
+                        !isHidden ? "translate-x-1" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
                 </div>
-              </div>
 
-              {/* Visibility indicator */}
-              <div className="flex-shrink-0 ml-2">
-                {isHidden ? (
-                  <span className="text-xs text-gray-400">Hidden</span>
-                ) : (
-                  <span className="text-xs text-green-600">Visible</span>
-                )}
+                {/* Column info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center">
+                    <div className="ml-4 mr-2 flex-none">
+                      {column.type.toLowerCase() === 'text' ? (
+                        <TextAlt size={16} color="#1d1f25" />
+                      ) : column.type.toLowerCase() === 'number' ? (
+                        <HashStraight size={16} color="#1d1f25" />
+                      ) : (
+                        <TextAlt size={16} color="#1d1f25" />
+                      )}
+                    </div>
+                    <span className="text-[13px] font-family-system font-[400] text-[#1d1f25] truncate">
+                      {column.name}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Drag button */}
+                <button className="flex items-center focus-visible:outline cursor-pointer hover:text-[#1d1f25]">
+                    <DotsSixVertical size={16} color="#616670"  />
+                </button>
+
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
-
-      {/* Actions */}
-      <div className="px-4 pt-3 border-t border-gray-100">
-        <div className="flex space-x-2">
-          <button
-            onClick={onHideAll}
-            className="flex-1 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-150"
-            disabled={hiddenCount === columns.length}
-          >
-            Hide all
-          </button>
-          <button
-            onClick={onShowAll}
-            className="flex-1 px-3 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-150"
-            disabled={hiddenCount === 0}
-          >
-            Show all
-          </button>
+      {/* Hide All/Show All */}
+      <div className="my-2 pb-1">
+        <div className="flex text-[11px] items-center justify-center text-[#1d1f25] opacity-[0.75] font-family-system font-[500] leading-[18px] px-2 my-2">
+            <button 
+              onClick={onHideAll}
+              disabled={hiddenCount === columns.length}
+              className="bg-[#0000000D] flex-1 items-center cursor-pointer focus-visible:outline py-1 mx-2 rounded-[3px]">
+              Hide all
+            </button>
+            <button 
+              onClick={onShowAll}
+              disabled={hiddenCount === 0}
+              className="bg-[#0000000D] flex-1 items-center cursor-pointer focus-visible:outline py-1 mx-2 rounded-[3px]">
+              Show all
+            </button>
         </div>
       </div>
     </div>
