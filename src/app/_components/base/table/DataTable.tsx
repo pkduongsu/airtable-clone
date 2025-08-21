@@ -10,10 +10,11 @@ import {
   type ColumnSizingState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import ChevronDown from "../../icons/ChevronDown";
 import Spinner from "../../icons/Spinner";
-import { TableControls } from "../controls/TableControls";
+import { TableControls } from "./TableControls";
 import { EditableCell } from "./EditableCell";
+import { TableHeader } from "./TableHeader";
+import { RowNumberHeader } from "./RowNumberHeader";
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
@@ -97,9 +98,8 @@ interface DataTableProps {
   onDeleteColumn?: (columnId: string) => void;
 }
 
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery, scrollToRowId, onRenameColumn, onDeleteColumn }: DataTableProps) {
+export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules: _sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery, scrollToRowId, onRenameColumn, onDeleteColumn }: DataTableProps) {
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
-  const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
@@ -124,16 +124,23 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
   }, []);
 
 
-  // Handle context menu
+  // Handle context menu (insert row above/below)
   const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
     event.preventDefault();
     
-    // For fixed positioning, we use clientX/clientY directly
-    // These are already relative to the viewport which is what we want for position: fixed
     if (onContextMenu) {
       onContextMenu({ x: event.clientX, y: event.clientY }, rowId);
     }
   }, [onContextMenu]);
+
+  // Handle column actions (dropdown menu)
+  const handleColumnAction = useCallback((position: { x: number; y: number }, column: { id: string; name: string }) => {
+    setColumnModal({
+      isOpen: true,
+      position,
+      column
+    });
+  }, []);
 
 
   // Handle cell navigation
@@ -187,8 +194,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
 
     if (newRowIndex !== currentRowIndex || newColumnIndex !== currentColumnIndex) {
       setSelectedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
-      // Clear focusedCell to prevent interference
-      setFocusedCell(null);
+      // Set focusedCell to trigger shouldFocus on the new cell
+      setFocusedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
     }
   }, [tableData.rows.length, tableData.columns, hiddenColumns]);
 
@@ -225,6 +232,10 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         handleCellNavigation('right', selectedCell.rowIndex, selectedCell.columnIndex);
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // Start editing on any printable character - don't prevent default
+        // Let the character flow through to the focused input
+        setFocusedCell(selectedCell);
       }
     };
 
@@ -265,20 +276,17 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     const rowNumberColumn: ColumnDef<TableRow, string | undefined> = columnHelper.accessor('__rowNumber', {
       id: '__rowNumber',
       header: () => (
-        <div className="flex items-center justify-center w-full h-full">
-          <input
-            type="checkbox"
-            className="w-4 h-4 flex-shrink-0"
-            checked={selectedRows.size === tableData.rows.length && tableData.rows.length > 0}
-            onChange={(e) => {
-              if (e.target.checked) {
-                setSelectedRows(new Set(tableData.rows.map(row => row.id)));
-              } else {
-                setSelectedRows(new Set());
-              }
-            }}
-          />
-        </div>
+        <RowNumberHeader
+          selectedRows={selectedRows}
+          totalRows={tableData.rows.length}
+          onSelectAll={(checked) => {
+            if (checked) {
+              setSelectedRows(new Set(tableData.rows.map(row => row.id)));
+            } else {
+              setSelectedRows(new Set());
+            }
+          }}
+        />
       ),
       size: 87, // Default width for row number column
       minSize: 87, // Minimum width for row number column
@@ -345,10 +353,10 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
               onSelect={() => handleCellSelection(rowIndex, columnIndex)}
               onDeselect={handleCellDeselection}
+              onFocused={() => setFocusedCell(null)} // Clear focused cell after focus is applied
               rowId={row.id}
               columnId={column.id} // Pass the real column ID directly
               onContextMenu={handleContextMenuClick}
-              sortRules={sortRules?.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
               filterRules={filterRules}
               isTableLoading={isTableLoading}
               isTableStabilizing={isTableStabilizing}
@@ -392,7 +400,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules, isTableLoading, isTableStabilizing, searchMatchInfo, searchQuery]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, filterRules, isTableLoading, isTableStabilizing, searchMatchInfo, searchQuery]);
 
   const table = useReactTable({
     data,
@@ -480,77 +488,11 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         }}
       >
         <table style={{ display: 'grid', width: '100%' }}>
-            <thead
-              style={{
-                display: 'grid',
-                position: 'sticky',
-                top: 0,
-                zIndex: 10,
-              }}
-            >
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr
-                  key={headerGroup.id}
-                  style={{ display: 'flex', width: '100%' }}
-                >
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    className="text-left p-0 text-[#1d1f25] bg-white border-b border-r border-border-default hover:bg-[#f8f8f8] relative"
-                    style={{
-                      display: 'flex',
-                      width: header.getSize(),
-                    }}
-                  >
-                    <div 
-                      className="px-3 py-2 h-[32px] flex items-center justify-between text-xs font-family-system font-[500] text-[13px] leading-[19.5px] w-full"                     
-                      onMouseEnter={() => setHoveredHeader(header.id)}
-                      onMouseLeave={() => setHoveredHeader(null)}
-                    >
-                      <span className="truncate">
-                        {header.isPlaceholder
-                          ? null
-                          : flexRender(
-                              header.column.columnDef.header,
-                              header.getContext()
-                            )}
-                      </span>
-                      {header.id !== '__rowNumber' && (
-                        <button 
-                          className={`ml-1 cursor-pointer flex-shrink-0 transition-opacity duration-75 ${hoveredHeader === header.id ? 'opacity-100' : 'opacity-0'}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const column = tableData.columns.find(col => col.id === header.id);
-                            if (column) {
-                              setColumnModal({
-                                isOpen: true,
-                                position: { x: rect.left, y: rect.bottom + 5 },
-                                column: { id: column.id, name: column.name }
-                              });
-                            }
-                          }}
-                        >
-                          <ChevronDown size={16} color="#616670" className="hover:text-[#1d1f25]"/>
-                        </button>
-                      )}
-                    </div>
-                    {/* Column resize handle */}
-                    <div
-                      {...{
-                        onDoubleClick: () => header.column.resetSize(),
-                        onMouseDown: header.getResizeHandler(),
-                        onTouchStart: header.getResizeHandler(),
-                      }}
-                      className={`absolute right-0 top-[5px] bottom-[5px] w-[1px] rounded-[2px] cursor-col-resize hover:bg-[#166ee1] transition-opacity ${
-                        header.column.getIsResizing() ? 'bg-[#166ee1] opacity-100' : 'opacity-0 hover:opacity-100'
-                      }`}
-                    />
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
+          <TableHeader
+            table={table}
+            tableColumns={tableData.columns}
+            onColumnAction={handleColumnAction}
+          />
           <tbody
             style={{
               display: 'grid',

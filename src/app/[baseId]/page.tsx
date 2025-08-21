@@ -17,9 +17,11 @@ import { DataTable } from "../_components/base/table/DataTable";
 import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
 import { SummaryBar } from "../_components/base/controls/SummaryBar";
 import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
-import { type SortRule } from "../_components/base/modals/SortModal";
 import { type FilterRule } from "../_components/base/modals/FilterModal";
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
+import { useSortManagement } from "../_components/base/hooks/useSortManagement";
+import { useSortDataProcessor } from "../_components/base/hooks/useSortDataProcessor";
+import { useSortViewIntegration } from "../_components/base/hooks/useSortViewIntegration";
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -59,15 +61,110 @@ function BasePageContent() {
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Sort state
-  const [sortRules, setSortRules] = useState<SortRule[]>([]);
-
   // Filter state
   const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
 
   // View state
   const [currentViewId, setCurrentViewId] = useState<string | null>(null);
   const [isViewSwitching, setIsViewSwitching] = useState(false);
+
+  const utils = api.useUtils();
+  const queryClient = useQueryClient();
+  
+  // View update mutation
+  const updateViewMutation = api.view.update.useMutation({
+    onSuccess: () => {
+      // Refresh view list after successful save to ensure latest configs are loaded
+      if (selectedTable) {
+        setTimeout(() => {
+          void utils.view.list.invalidate({ tableId: selectedTable });
+        }, 300);
+      }
+    },
+    onError: (error) => {
+      console.error('Failed to save view config:', error);
+    }
+  });
+  
+  const updateViewMutationRef = useRef(updateViewMutation.mutate);
+  updateViewMutationRef.current = updateViewMutation.mutate;
+
+  // Manual trigger for immediate view saves (view list refresh handled by mutation)
+  const triggerViewSave = useCallback((currentSortRules: any[] = []) => {
+    if (currentViewId) {
+      setTimeout(() => {
+        const config: ViewConfig = {
+          sortRules: currentSortRules,
+          filterRules,
+          hiddenColumns: Array.from(hiddenColumns),
+        };
+        updateViewMutationRef.current({
+          id: currentViewId,
+          config
+        });
+      }, 100);
+    }
+  }, [currentViewId, filterRules, hiddenColumns, updateViewMutationRef]);
+
+  // Specialized function for user-initiated view config updates
+  const triggerViewSaveWithRefresh = () => {
+    triggerViewSave(sortRules);
+  };
+
+  // Sort management hooks with save trigger
+  const {
+    sortRules,
+    handleUpdateSortRule: originalHandleUpdateSortRule,
+    handleRemoveSortRule: originalHandleRemoveSortRule,
+    handleAddSortRule: originalHandleAddSortRule,
+    handleUpdateSortRuleField: originalHandleUpdateSortRuleField,
+    updateSortRules,
+  } = useSortManagement();
+
+  // Wrap sort handlers to include immediate view config saves
+  const handleUpdateSortRule = useCallback((ruleId: string, direction: 'asc' | 'desc') => {
+    originalHandleUpdateSortRule(ruleId, direction);
+    // Use setTimeout to get updated sortRules after state change
+    setTimeout(() => {
+      const updatedSortRules = sortRules.map(rule => 
+        rule.id === ruleId ? { ...rule, direction } : rule
+      );
+      triggerViewSave(updatedSortRules);
+    }, 100);
+  }, [originalHandleUpdateSortRule, sortRules, triggerViewSave]);
+
+  const handleRemoveSortRule = useCallback((ruleId: string) => {
+    originalHandleRemoveSortRule(ruleId);
+    setTimeout(() => {
+      const updatedSortRules = sortRules.filter(rule => rule.id !== ruleId);
+      triggerViewSave(updatedSortRules);
+    }, 100);
+  }, [originalHandleRemoveSortRule, sortRules, triggerViewSave]);
+
+  const handleAddSortRule = useCallback((columnId: string, columnName: string, columnType: string) => {
+    originalHandleAddSortRule(columnId, columnName, columnType);
+    setTimeout(() => {
+      const newRule = {
+        id: `sort-${Date.now()}-${Math.random()}`,
+        columnId,
+        direction: 'asc' as const,
+        columnName,
+        columnType,
+      };
+      const updatedSortRules = [...sortRules, newRule];
+      triggerViewSave(updatedSortRules);
+    }, 100);
+  }, [originalHandleAddSortRule, sortRules, triggerViewSave]);
+
+  const handleUpdateSortRuleField = useCallback((ruleId: string, columnId: string, columnName: string, columnType: string) => {
+    originalHandleUpdateSortRuleField(ruleId, columnId, columnName, columnType);
+    setTimeout(() => {
+      const updatedSortRules = sortRules.map(rule => 
+        rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
+      );
+      triggerViewSave(updatedSortRules);
+    }, 100);
+  }, [originalHandleUpdateSortRuleField, sortRules, triggerViewSave]);
 
   // Search state
   const [searchResults, setSearchResults] = useState<Array<{
@@ -177,9 +274,6 @@ function BasePageContent() {
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
   const deleteTableMutation = api.table.delete.useMutation();
-  
-  const utils = api.useUtils();
-  const queryClient = useQueryClient();
   
   const createRowMutation = api.row.create.useMutation({
     mutationKey: ['row', 'create'],
@@ -1101,7 +1195,7 @@ function BasePageContent() {
     }
   };
 
-  // Column visibility handlers
+  // Column visibility handlers - save immediately on user interaction
   const handleToggleColumn = (columnId: string) => {
     setHiddenColumns(prev => {
       const newSet = new Set(prev);
@@ -1112,91 +1206,42 @@ function BasePageContent() {
       }
       return newSet;
     });
-    // Trigger immediate save for instant feedback
-    triggerViewSave();
+    // Save view config immediately when user toggles column
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
-  // Manual trigger for immediate view saves (separate from auto-save)
-  const triggerViewSave = () => {
-    if (currentViewId) {
-      // Use setTimeout to ensure state updates have been applied
-      setTimeout(() => {
-        const config: ViewConfig = {
-          sortRules,
-          filterRules,
-          hiddenColumns: Array.from(hiddenColumns),
-        };
-        console.log('Manual view save triggered for:', currentViewId);
-        updateViewMutationRef.current({
-          id: currentViewId,
-          config
-        });
-      }, 100);
-    }
-  };
+  // triggerViewSave moved up before sort handlers
 
   const handleHideAllColumns = () => {
     if (tableData?.columns) {
       setHiddenColumns(new Set(tableData.columns.map(col => col.id)));
     }
-    triggerViewSave();
+    // Save view config immediately when user hides all columns
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
   const handleShowAllColumns = () => {
     setHiddenColumns(new Set());
-    triggerViewSave();
+    // Save view config immediately when user shows all columns
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
-  // Sort handlers
-  const handleUpdateSortRule = (ruleId: string, direction: 'asc' | 'desc') => {
-    setSortRules(prev => 
-      prev.map(rule => 
-        rule.id === ruleId ? { ...rule, direction } : rule
-      )
-    );
-    triggerViewSave();
-    // Trigger immediate save for explicit user actions
-  };
 
-  const handleRemoveSortRule = (ruleId: string) => {
-    setSortRules(prev => prev.filter(rule => rule.id !== ruleId));
-    triggerViewSave();
-  };
-
-  const handleAddSortRule = (columnId: string, columnName: string, columnType: string) => {
-    const newRule: SortRule = {
-      id: `sort-${Date.now()}-${Math.random()}`,
-      columnId,
-      direction: 'asc',
-      columnName,
-      columnType,
-    };
-    setSortRules(prev => [...prev, newRule]);
-    triggerViewSave();
-  };
-
-  const handleUpdateSortRuleField = (ruleId: string, columnId: string, columnName: string, columnType: string) => {
-    setSortRules(prev => 
-      prev.map(rule => 
-        rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
-      )
-    );
-    triggerViewSave();
-  };
-
-  // Filter handlers
+  // Filter handlers - save immediately on user interaction
   const handleUpdateFilterRule = (ruleId: string, operator: FilterRule['operator'], value?: string | number) => {
     setFilterRules(prev => 
       prev.map(rule => 
         rule.id === ruleId ? { ...rule, operator, value } : rule
       )
     );
-    triggerViewSave();
+    // Save view config immediately when user updates filter
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
   const handleRemoveFilterRule = (ruleId: string) => {
     setFilterRules(prev => prev.filter(rule => rule.id !== ruleId));
-    triggerViewSave();
+    // Save view config immediately when user removes filter
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
   const handleAddFilterRule = (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
@@ -1209,7 +1254,8 @@ function BasePageContent() {
       value: undefined,
     };
     setFilterRules(prev => [...prev, newRule]);
-    triggerViewSave();
+    // Save view config immediately when user adds filter
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
   const handleUpdateFilterRuleField = (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
@@ -1225,7 +1271,8 @@ function BasePageContent() {
         } : rule
       )
     );
-    triggerViewSave();
+    // Save view config immediately when user updates filter field
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
   const handleUpdateLogicOperator = (ruleId: string, logicOperator: 'and' | 'or') => {
@@ -1234,7 +1281,8 @@ function BasePageContent() {
         rule.id === ruleId ? { ...rule, logicOperator } : rule
       )
     );
-    triggerViewSave();
+    // Save view config immediately when user updates logic operator
+    setTimeout(() => triggerViewSave(sortRules), 100);
   };
 
   // Search handlers
@@ -1289,75 +1337,49 @@ function BasePageContent() {
     }
   }, [infiniteTableData, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  // Auto-save current view state when changes are made
-  const updateViewMutation = api.view.update.useMutation({
-    onSuccess: () => {
-      console.log('View config saved successfully');
-      // Immediately invalidate view list for instant feedback
-      void utils.view.list.invalidate({ tableId: selectedTable! });
-    },
-    onError: (error) => {
-      console.error('Failed to save view config:', error);
-    }
-  });
-  
-  // Use a ref to store the latest mutation function to avoid dependency issues
-  const updateViewMutationRef = useRef(updateViewMutation.mutate);
-  updateViewMutationRef.current = updateViewMutation.mutate;
+  // updateViewMutation moved up before sort handlers
 
 
 
-  // Get views for selected table
+  // Get views for selected table - only called on initial load and explicit user interactions
   const { data: views, refetch: refetchViews } = api.view.list.useQuery(
     { tableId: selectedTable! },
-    { enabled: !!selectedTable }
+    { 
+      enabled: !!selectedTable,
+      // Only refetch when window gains focus if user has been away
+      refetchOnWindowFocus: true,
+      // Don't auto-refetch in background to prevent constant calls
+      refetchInterval: false,
+    }
   );
 
 
 
 
-  // Auto-save view configuration with long debounce to avoid editing interference
-  useEffect(() => {
-    if (isViewSwitching || !currentViewId) {
-      return;
-    }
-
-    const timeoutId = setTimeout(() => {
-      const config: ViewConfig = {
-        sortRules,
-        filterRules,
-        hiddenColumns: Array.from(hiddenColumns),
-      };
-
-      console.log('Auto-saving view config for:', currentViewId, config);
-      updateViewMutationRef.current({
-        id: currentViewId,
-        config
-      });
-    }, 1000); // 1 second - much faster response for view changes
-
-    return () => {
-      clearTimeout(timeoutId);
-    };
-  }, [sortRules, filterRules, hiddenColumns, isViewSwitching, currentViewId]);
+  // NO AUTO-SAVE: View configurations will only be saved on explicit user interactions
 
   // View handlers
   const handleViewChange = useCallback((viewId: string | null, config: ViewConfig) => {
-    console.log('Manual view change to:', viewId);
-    
     setIsViewSwitching(true);
     setCurrentViewId(viewId);
     
     // Apply the new view configuration
-    setSortRules(config.sortRules);
+    updateSortRules(config.sortRules);
     setFilterRules(config.filterRules);
     setHiddenColumns(new Set(config.hiddenColumns));
     
-    // Re-enable auto-save after a very short delay
+    // Refresh view list when switching views with delay to allow saves to complete
+    if (selectedTable) {
+      setTimeout(() => {
+        void utils.view.list.invalidate({ tableId: selectedTable });
+      }, 500);
+    }
+    
+    // Re-enable auto-save after a short delay
     setTimeout(() => {
       setIsViewSwitching(false);
     }, 50);
-  }, []); // Keep empty dependencies to avoid auto-select loops
+  }, [updateSortRules, utils, selectedTable]);
 
   // Select first table when tables are loaded
   useEffect(() => {
@@ -1366,17 +1388,16 @@ function BasePageContent() {
     }
   }, [tables, selectedTable]);
 
-  // Auto-select default view when table changes or views are loaded (only when no view is selected)
+  // Auto-select default view only on initial table load when no view is selected
   useEffect(() => {
     if (!selectedTable || !views || views.length === 0 || isViewSwitching || currentViewId !== null) return;
 
     // Only auto-select when we don't have a current view selected
     const defaultView = views.find(view => view.isDefault) ?? views[0];
     if (defaultView) {
-      console.log('Auto-selecting default view:', defaultView.name, 'ID:', defaultView.id);
       handleViewChange(defaultView.id, defaultView.config as unknown as ViewConfig);
     }
-  }, [selectedTable, views, isViewSwitching, currentViewId, handleViewChange]);
+  }, [selectedTable, views]);
 
   // Reset view when switching tables
   useEffect(() => {
@@ -1432,72 +1453,30 @@ function BasePageContent() {
     });
   }, []);
 
-  // Client-side sorting function
-  const applyClientSideSorting = useCallback((rows: TableRow[], sortRules: SortRule[]): TableRow[] => {
-    if (sortRules.length === 0) return rows;
 
-    return [...rows].sort((a, b) => {
-      for (const rule of sortRules) {
-        const cellA = a.cells.find(cell => cell.columnId === rule.columnId);
-        const cellB = b.cells.find(cell => cell.columnId === rule.columnId);
-        
-        const valueA = cellA?.value as { text?: string } | null;
-        const valueB = cellB?.value as { text?: string } | null;
-        
-        const textA = valueA?.text ?? '';
-        const textB = valueB?.text ?? '';
-        
-        // Determine column type from the first sort rule's column
-        const isNumber = rule.columnType === 'NUMBER';
-        
-        let comparison = 0;
-        
-        if (isNumber) {
-          const numA = parseFloat(textA) || 0;
-          const numB = parseFloat(textB) || 0;
-          comparison = numA - numB;
-        } else {
-          comparison = textA.toLowerCase().localeCompare(textB.toLowerCase());
-        }
-        
-        if (comparison !== 0) {
-          return rule.direction === 'desc' ? -comparison : comparison;
-        }
-      }
-      
-      // If all sort rules are equal, fall back to row order
-      return a.order - b.order;
-    });
-  }, []);
-
-  // Optimistically apply filtering and sorting without full invalidation
-  const optimisticTableData = useMemo(() => {
+  // Process table data with sorting and filtering
+  const baseTableData = useMemo(() => {
     const baseData = getBaseDataForProcessing();
+    if (!baseData) return null;
     
-    if (!baseData) return undefined;
-    
-    // If we have no processing rules, return base data or server data
-    if (sortRules.length === 0 && filterRules.length === 0) {
-      return serverProcessedTableData ?? baseData;
-    }
-    
-    // If we have server-side processed data that matches current rules, prefer it
-    if (serverProcessedTableData && (sortRules.length > 0 || filterRules.length > 0)) {
-      return serverProcessedTableData;
-    }
-    
-    // Otherwise, create optimistic client-side processed data
-    // Step 1: Apply filters
+    // Apply client-side filtering first
     const filteredRows = applyClientSideFilters(baseData.rows, filterRules);
     
-    // Step 2: Apply sorting
-    const processedRows = applyClientSideSorting(filteredRows, sortRules);
-
     return {
       ...baseData,
-      rows: processedRows,
+      rows: filteredRows,
     };
-  }, [getBaseDataForProcessing, sortRules, filterRules, serverProcessedTableData, applyClientSideFilters, applyClientSideSorting]);
+  }, [getBaseDataForProcessing, filterRules, applyClientSideFilters]);
+
+  // Use sort data processor for sorting logic
+  const { processedTableData: optimisticTableData } = useSortDataProcessor({
+    baseData: baseTableData,
+    sortRules,
+    serverProcessedData: serverProcessedTableData,
+  });
+
+  // NO AUTO-SAVE: Sort integration disabled to prevent automatic saves
+  // useSortViewIntegration - DISABLED
 
   // Background sync for server-side processed data
   const handleRulesChange = useCallback(() => {
@@ -1510,16 +1489,6 @@ function BasePageContent() {
   useEffect(() => {
     handleRulesChange();
   }, [handleRulesChange]);
-
-  // Disable background sync temporarily to ensure stable editing
-  // TODO: Implement smarter background sync that detects editing state
-  // useEffect(() => {
-  //   if (!selectedTable) return;
-  //   const interval = setInterval(() => {
-  //     // Background sync logic
-  //   }, 30000);
-  //   return () => clearInterval(interval);
-  // }, [selectedTable]);
 
   // Track all pending mutations for navbar saving indicator
   const { isMutating: hasActiveMutations } = useMutationTracker();
@@ -1676,7 +1645,6 @@ function BasePageContent() {
               currentHiddenColumns={Array.from(hiddenColumns)}
               views={views}
               onRefetchViews={() => {
-                // Safe to refetch views immediately - doesn't affect table data
                 void refetchViews();
               }}
             />
