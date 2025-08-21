@@ -400,6 +400,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     getCoreRowModel: getCoreRowModel(),
     enableColumnResizing: true,
     columnResizeMode: 'onChange',
+    getRowId: (row) => row.id, // Use stable row ID instead of array index
     state: {
       columnSizing,
     },

@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "~/trpc/react";
-import { useMutationTracker } from "../../providers/MutationTracker";
+import { useEditingState } from "../../providers/EditingStateProvider";
+
 
 interface EditableCellProps {
   cellId: string;
@@ -36,12 +38,11 @@ interface EditableCellProps {
   isCurrentSearchResult?: boolean;
 }
 
-export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, columnId, onContextMenu, sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchQuery, isSearchMatch = false, isCurrentSearchResult = false }: EditableCellProps) {
+export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, columnId: _columnId, onContextMenu, sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchQuery, isSearchMatch = false, isCurrentSearchResult = false }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
   const [hasLocalChanges, setHasLocalChanges] = useState(false);
-  const [originalInitialValue] = useState(initialValue); // Capture the very first initialValue to detect user input
   const inputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestValueRef = useRef<string>(initialValue);
@@ -49,6 +50,19 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const [editSessionId, setEditSessionId] = useState<string | null>(null);
   const [pendingValue, setPendingValue] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  
+  // Use refs to avoid adding to useEffect dependencies
+  const isSavingRef = useRef(isSaving);
+  const saveStatusRef = useRef(saveStatus);
+  
+  // Keep refs in sync
+  useEffect(() => {
+    isSavingRef.current = isSaving;
+  }, [isSaving]);
+  
+  useEffect(() => {
+    saveStatusRef.current = saveStatus;
+  }, [saveStatus]);
   const [editLock, setEditLock] = useState(false);
   const [editLockStartTime, setEditLockStartTime] = useState<number | null>(null);
   const editLockTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -60,508 +74,321 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const isEditingDisabled = !isTemporaryCell && (isTableLoading || isTableStabilizing);
   
   const utils = api.useUtils();
-  const mutationTracker = useMutationTracker();
+  const queryClient = useQueryClient();
+  const { startEditingSession, endEditingSession, isCellEditing, isAnyCellEditing, isAnyCellEditingRef } = useEditingState();
   
   const createCellMutation = api.cell.create.useMutation({
-    onSuccess: (data, variables, _context) => {
-      console.log('Cell created successfully');
-      
-      // Check if this mutation is for the current cell to prevent stale callbacks
-      if (variables.rowId !== rowId || variables.columnId !== columnId) {
-        console.log('Ignoring stale createCell callback for different cell');
-        mutationTracker.removeMutation(`createCell-${cellId}`);
-        return;
-      }
-      
-      setHasLocalChanges(false);
-      setIsSaving(false);
-      setPendingValue(null);
-      setEditSessionId(null);
-      setSaveStatus('saved');
-      
-      // Delay edit lock release to avoid interfering with cell navigation
-      setTimeout(() => {
-        setEditLock(false);
-        setEditLockStartTime(null);
-        console.log('Edit lock released for created cell:', cellId);
-      }, 500);
-      
-      // Track mutation end
-      mutationTracker.removeMutation(`createCell-${cellId}`);
-      
-      // Clear save status after a short delay
-      setTimeout(() => setSaveStatus('idle'), 2000);
-    },
-    onError: (error) => {
-      console.error('Failed to create cell:', error);
-      mutationTracker.removeMutation(`createCell-${cellId}`);
-      setValue(initialValue);
-      setIsSaving(false);
-      setHasLocalChanges(false);
-      setPendingValue(null);
-      setEditSessionId(null);
-      setSaveStatus('error');
-      
-      setTimeout(() => {
-        setEditLock(false);
-        setEditLockStartTime(null);
-        console.log('Edit lock released after create error for cell:', cellId);
-      }, 1000);
-    },
-  });
-
-  const updateCellMutation = api.cell.update.useMutation({
-    onMutate: async (variables) => {
-      // Track mutation start
-      mutationTracker.addMutation(`updateCell-${variables.cellId}`);
-      // Determine if we need to update processed query cache
-      const hasProcessingRules = sortRules.length > 0 || filterRules.length > 0;
-      
-      // Cancel outgoing refetches for both base and processed queries
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
-      
-      let previousProcessedData;
-      if (hasProcessingRules) {
-        const processedQueryKey = { 
+    mutationKey: ['cell', 'create'],
+    onMutate: async ({ rowId, columnId, value: newValue }) => {
+      // Cancel any outgoing refetches that could interfere with optimistic updates
+      await Promise.all([
+        utils.table.getTableData.cancel({ 
           tableId, 
-          limit: 100,
-          ...(sortRules.length > 0 && {
-            sortRules: sortRules.map(rule => ({
-              columnId: rule.columnId,
-              direction: rule.direction
-            }))
-          }),
-          ...(filterRules.length > 0 && {
-            filterRules: filterRules.map(rule => ({
-              id: rule.id,
-              columnId: rule.columnId,
-              columnName: rule.columnName,
-              columnType: rule.columnType,
-              operator: rule.operator,
-              value: rule.value
-            }))
-          })
-        };
-        
-        await utils.table.getTableData.cancel(processedQueryKey);
-        previousProcessedData = utils.table.getTableData.getInfiniteData(processedQueryKey);
-      }
+          limit: 100
+        }),
+        // Cancel other cell queries that might interfere
+        queryClient.cancelQueries({ 
+          queryKey: ['trpc', 'cell', 'findByRowColumn']
+        })
+      ]);
       
-      // Snapshot current data for rollback
-      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
       
-      // Helper function to update cache data
-      const updateCacheData = (old: typeof previousData) => {
-        if (!old) return old;
-        
-        const updatedPages = old.pages.map(page => ({
-          ...page,
-          rows: page.rows.map(row => ({
-            ...row,
-            cells: row.cells.map(cell => 
-              cell.id === variables.cellId 
-                ? { 
-                    ...cell, 
-                    value: { text: typeof variables.value === 'string' ? variables.value : JSON.stringify(variables.value) }
-                  }
-                : cell
-            )
-          }))
-        }));
-        
-        return {
-          ...old,
-          pages: updatedPages,
-        };
-      };
-      
-      // Update base query cache
-      utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, updateCacheData);
-      
-      // Update processed query cache if processing rules exist
-      if (hasProcessingRules && previousProcessedData) {
-        const processedQueryKey = { 
-          tableId, 
-          limit: 100,
-          ...(sortRules.length > 0 && {
-            sortRules: sortRules.map(rule => ({
-              columnId: rule.columnId,
-              direction: rule.direction
-            }))
-          }),
-          ...(filterRules.length > 0 && {
-            filterRules: filterRules.map(rule => ({
-              id: rule.id,
-              columnId: rule.columnId,
-              columnName: rule.columnName,
-              columnType: rule.columnType,
-              operator: rule.operator,
-              value: rule.value
-            }))
-          })
-        };
-        
-        utils.table.getTableData.setInfiniteData(processedQueryKey, updateCacheData);
-      }
-      
-      return { previousData, previousProcessedData, hasProcessingRules };
-    },
-    onSuccess: (data, variables) => {
-      console.log('Cell update successful');
-      
-      // Check if this mutation is for the current cell to prevent stale callbacks
-      if (variables.cellId !== cellId) {
-        console.log('Ignoring stale updateCell callback for different cell:', variables.cellId, 'current:', cellId);
-        mutationTracker.removeMutation(`updateCell-${variables.cellId}`);
-        return;
-      }
-      
-      setHasLocalChanges(false);
-      setIsSaving(false);
-      setPendingValue(null);
-      setEditSessionId(null);
-      setSaveStatus('saved');
-      
-      // Delay edit lock release to avoid interfering with subsequent cell edits
-      setTimeout(() => {
-        setEditLock(false);
-        setEditLockStartTime(null);
-        console.log('Edit lock released for cell:', cellId);
-      }, 500);
-      
-      // Track mutation end
-      mutationTracker.removeMutation(`updateCell-${variables.cellId}`);
-      
-      // Clear save status after a short delay
-      setTimeout(() => setSaveStatus('idle'), 2000);
-      // Don't invalidate immediately - optimistic update already shows correct data
-    },
-    onError: (error, variables, context) => {
-      console.error('Failed to update cell:', error);
-      
-      // Track mutation end (even on error)
-      mutationTracker.removeMutation(`updateCell-${variables.cellId}`);
-      
-      // Check if the error is because the cell doesn't exist
-      const errorMessage = error.message || '';
-      if (errorMessage.includes('No record was found') || errorMessage.includes('not found')) {
-        console.log('Cell not found, trying to create it instead');
-        
-        // Try to extract row and column IDs from a real cell ID (not temp)
-        // Real cell IDs should have a format we can parse
-        // For now, we'll try to create the cell using a different approach
-        
-        // Since we can't easily extract row/column from real cell IDs, 
-        // and this error suggests the cell was expected to exist,
-        // we'll just show the error for now
-        console.log('Cannot create cell from updateCell failure - cell ID format unknown');
-      }
-      
-      // Rollback optimistic updates for both caches
-      if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, context.previousData);
-      }
-      
-      if (context?.hasProcessingRules && context?.previousProcessedData) {
-        const processedQueryKey = { 
-          tableId, 
-          limit: 100,
-          ...(sortRules.length > 0 && {
-            sortRules: sortRules.map(rule => ({
-              columnId: rule.columnId,
-              direction: rule.direction
-            }))
-          }),
-          ...(filterRules.length > 0 && {
-            filterRules: filterRules.map(rule => ({
-              id: rule.id,
-              columnId: rule.columnId,
-              columnName: rule.columnName,
-              columnType: rule.columnType,
-              operator: rule.operator,
-              value: rule.value
-            }))
-          })
-        };
-        
-        utils.table.getTableData.setInfiniteData(processedQueryKey, context.previousProcessedData);
-      }
-      
-      setValue(initialValue); // Revert local state
-      setIsSaving(false);
-      setHasLocalChanges(false);
-      setPendingValue(null);
-      setEditSessionId(null);
-      setSaveStatus('error');
-      
-      // Keep edit lock for a short period on error to prevent further overwrites
-      setTimeout(() => {
-        setEditLock(false);
-        setEditLockStartTime(null);
-        console.log('Edit lock released after error for cell:', cellId);
-      }, 1000);
-    },
-    onSettled: () => {
-      setPendingMutation(false);
-      // No invalidation needed - optimistic updates handle UI consistency
-      // The server save already completed successfully
-    },
-  });
-
-  // Simple save function
-  const saveToServer = useCallback((newValue: string) => {
-    if (newValue === initialValue || pendingMutation) {
-      setHasLocalChanges(false);
-      setIsSaving(false);
-      return;
-    }
-    
-    // Safety check for cellId - this should only happen during development/debugging
-    if (!cellId) {
-      console.warn('SaveToServer called with undefined cellId, skipping save');
-      setHasLocalChanges(false);
-      setIsSaving(false);
-      return;
-    }
-
-    // Check if this is a temporary cell ID from optimistic updates
-    if (cellId?.startsWith('temp-cell-')) {
-      // For temporary cells, ALWAYS do optimistic local update first for immediate feedback
-      console.log('Handling temp cell with optimistic update:', { rowId, columnId, cellId });
-      
-      // Update local cache immediately for instant user feedback
-      setHasLocalChanges(false);
-      setIsSaving(false);
-      setSaveStatus('saved');
-      
-      // Update the optimistic cache directly using updater function to avoid race conditions
+      // Optimistically update the cache with new cell
       utils.table.getTableData.setInfiniteData({ 
         tableId, 
         limit: 100
       }, (old) => {
         if (!old) return old;
         
-        const updatedPages = old.pages.map(page => ({
-          ...page,
-          rows: page.rows.map(row => ({
-            ...row,
-            cells: row.cells.map(cell => 
-              cell.id === cellId 
-                ? { ...cell, value: { text: newValue } }
-                : cell
-            )
-          }))
-        }));
-        
         return {
           ...old,
-          pages: updatedPages,
+          pages: old.pages.map(page => ({
+            ...page,
+            rows: page.rows.map(row => {
+              // Find the row that needs this cell
+              if (row.id === rowId) {
+                // Check if cell already exists (shouldn't happen but be safe)
+                const existingCell = row.cells.find(cell => cell.columnId === columnId);
+                if (existingCell) {
+                  // Update existing cell
+                  return {
+                    ...row,
+                    cells: row.cells.map(cell => 
+                      cell.columnId === columnId 
+                        ? { ...cell, value: { text: newValue } }
+                        : cell
+                    )
+                  };
+                } else {
+                  // Add new cell
+                  const column = page.columns.find(col => col.id === columnId);
+                  return {
+                    ...row,
+                    cells: [
+                      ...row.cells,
+                      {
+                        id: `temp-cell-${rowId}-${columnId}`,
+                        rowId,
+                        columnId,
+                        value: { text: newValue },
+                        column: column ?? { id: columnId, name: 'Unknown', type: 'TEXT', order: 0, width: 179, tableId }
+                      }
+                    ]
+                  };
+                }
+              }
+              return row;
+            })
+          }))
         };
       });
       
-      // Also update processed cache if needed
-      const hasProcessingRules = sortRules.length > 0 || filterRules.length > 0;
-      if (hasProcessingRules) {
-        const processedQueryKey = { 
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setInfiniteData({ 
           tableId, 
-          limit: 100,
-          ...(sortRules.length > 0 && {
-            sortRules: sortRules.map(rule => ({
-              columnId: rule.columnId,
-              direction: rule.direction
-            }))
-          }),
-          ...(filterRules.length > 0 && {
-            filterRules: filterRules.map(rule => ({
-              id: rule.id,
-              columnId: rule.columnId,
-              columnName: rule.columnName,
-              columnType: rule.columnType,
-              operator: rule.operator,
-              value: rule.value
-            }))
-          })
-        };
+          limit: 100
+        }, context.previousData);
+      }
+      
+      // Handle UI state
+      setIsSaving(false);
+      setSaveStatus('error');
+    },
+    onSuccess: () => {
+      // Only invalidate if this is the only cell mutation running to prevent over-invalidation
+      const concurrentMutations = queryClient.isMutating({ mutationKey: ['cell', 'create'] });
+      if (concurrentMutations === 1) {
+        // Safe to invalidate related queries
+        void utils.table.getTableData.invalidate({ tableId });
+      }
+      
+      setIsSaving(false);
+      setSaveStatus('saved');
+      setHasLocalChanges(false);
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    }
+  });
+
+  const updateCellMutation = api.cell.update.useMutation({
+    mutationKey: ['cell', 'update'],
+    onMutate: async ({ cellId, value: newValue }) => {      
+      // Cancel any outgoing refetches that could interfere with optimistic updates
+      await Promise.all([
+        utils.table.getTableData.cancel({ 
+          tableId, 
+          limit: 100
+        }),
+        // Cancel any other table-related queries that might conflict
+        queryClient.cancelQueries({ 
+          queryKey: ['trpc', 'table', 'getTableData'],
+          predicate: (query) => {
+            const queryData = query.queryKey[2] as { input?: { tableId?: string } } | undefined;
+            return queryData?.input?.tableId === tableId;
+          }
+        })
+      ]);
+      
+      // Snapshot the previous value
+      const previousData = utils.table.getTableData.getInfiniteData({ 
+        tableId, 
+        limit: 100
+      });
+      
+      // Optimistically update the cache with targeted cell update
+      utils.table.getTableData.setInfiniteData({ 
+        tableId, 
+        limit: 100
+      }, (old) => {
+        if (!old) return old;
         
-        // Update processed cache directly using updater function to avoid race conditions
-        utils.table.getTableData.setInfiniteData(processedQueryKey, (old) => {
-          if (!old) return old;
-          
-          const updatedPages = old.pages.map(page => ({
+        return {
+          ...old,
+          pages: old.pages.map(page => ({
             ...page,
-            rows: page.rows.map(row => ({
-              ...row,
-              cells: row.cells.map(cell => 
-                cell.id === cellId 
-                  ? { ...cell, value: { text: newValue } }
-                  : cell
-              )
-            }))
-          }));
+            rows: page.rows.map(row => {
+              // Find the row containing this cell
+              const targetCell = row.cells.find(cell => cell.id === cellId);
+              if (!targetCell) return row;
+              
+              // Update only the specific cell value
+              return {
+                ...row,
+                cells: row.cells.map(cell => 
+                  cell.id === cellId 
+                    ? { ...cell, value: { text: newValue } }
+                    : cell
+                )
+              };
+            })
+          }))
+        };
+      });
+      
+      return { previousData };
+    },
+    onError: (err, variables, context) => {
+      // Revert to the previous value on error
+      if (context?.previousData) {
+        utils.table.getTableData.setInfiniteData({ 
+          tableId, 
+          limit: 100
+        }, context.previousData);
+      }
+      
+      // Handle UI state
+      setIsSaving(false);
+      setSaveStatus('error');
+      setValue(initialValue);
+      setHasLocalChanges(false);
+    },
+    onSuccess: () => {
+      // Only invalidate queries if this is the only mutation running to prevent over-invalidation
+      const concurrentMutations = queryClient.isMutating({ mutationKey: ['cell', 'update'] });
+      if (concurrentMutations === 1) {
+        // This is the last cell mutation completing, safe to invalidate related queries
+        void utils.table.getTableData.invalidate({ tableId });
+      }
+      
+      setIsSaving(false);
+      setSaveStatus('saved');
+      setHasLocalChanges(false);
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    }
+  });
+
+  // Save function using optimistic mutations
+  const saveToServer = useCallback((newValue: string) => {
+    if (newValue === initialValue) {
+      return;
+    }
+    
+    if (!cellId) {
+      return;
+    }
+
+    
+    // Check if this is a temporary cell ID
+    if (cellId.startsWith('temp-cell-')) {
+      // For temporary cells, we need to check if the cell exists and create/update accordingly
+      if (rowId && _columnId) {
+        setIsSaving(true);
+        setSaveStatus('saving');
+        setHasLocalChanges(false);
+        
+        // First show optimistic update immediately
+        utils.table.getTableData.setInfiniteData({ 
+          tableId, 
+          limit: 100
+        }, (old) => {
+          if (!old) return old;
           
           return {
             ...old,
-            pages: updatedPages,
+            pages: old.pages.map(page => ({
+              ...page,
+              rows: page.rows.map(row => {
+                // Find the row containing this cell (could be temporary row ID)
+                const targetCell = row.cells.find(cell => cell.id === cellId);
+                if (!targetCell) return row;
+                
+                return {
+                  ...row,
+                  cells: row.cells.map(cell => 
+                    cell.id === cellId 
+                      ? { ...cell, value: { text: newValue } }
+                      : cell
+                  )
+                };
+              })
+            }))
           };
         });
-      }
-      
-      // After optimistic update, try background sync for real entities
-      if (rowId && columnId && !rowId.startsWith('temp-') && !columnId.startsWith('temp-')) {
-        // Background sync for real row/column - don't block user interaction
-        console.log('Starting background sync for real entities');
         
-        // Look up existing cell in background
+        // Check if rowId or columnId are temporary (newly created row/column)
+        const isTemporaryRow = rowId.startsWith('temp-row-');
+        const isTemporaryColumn = _columnId.startsWith('temp-column-');
+        
+        if (isTemporaryRow || isTemporaryColumn) {
+          // Skip server call for temporary row/column IDs, just show optimistic update
+          setIsSaving(false);
+          setSaveStatus('saved');
+          setHasLocalChanges(false);
+          setTimeout(() => setSaveStatus('idle'), 2000);
+          return;
+        }
+        
+        // For real IDs, try to find if the cell exists on server
         utils.cell.findByRowColumn.fetch({
           rowId,
-          columnId,
-        }).then((existingCell: { id: string } | null) => {
+          columnId: _columnId,
+        }).then((existingCell) => {
           if (existingCell) {
-            // Cell exists, update it silently in background
-            console.log('Background: Found existing cell, updating it:', existingCell.id);
+            // Cell exists, update it
             updateCellMutation.mutate({
               cellId: existingCell.id,
               value: newValue,
             });
           } else {
-            // Cell doesn't exist, create it silently in background
-            console.log('Background: Cell not found, creating new cell');
+            // Cell doesn't exist, create it
             createCellMutation.mutate({
               rowId,
-              columnId,
+              columnId: _columnId,
               value: newValue,
             });
           }
-        }).catch((error: unknown) => {
-          console.error('Background sync error (non-blocking):', error);
+        }).catch(() => {
+          // If find fails, assume cell doesn't exist and create it
+          createCellMutation.mutate({
+            rowId,
+            columnId: _columnId,
+            value: newValue,
+          });
         });
       }
-      
-      // Clear save status after showing feedback
-      setTimeout(() => setSaveStatus('idle'), 1000);
       return;
     }
-
-    // For regular cells, ALSO do immediate cache update first for true optimistic experience
-    console.log('Updating regular cell with immediate cache update:', { cellId, newValue });
     
-    // Update local cache immediately before database mutation
-    // Use the updater function directly to avoid race conditions between multiple cell edits
-    utils.table.getTableData.setInfiniteData({ 
-      tableId, 
-      limit: 100
-    }, (old) => {
-      if (!old) return old;
-      
-      const updatedPages = old.pages.map(page => ({
-        ...page,
-        rows: page.rows.map(row => ({
-          ...row,
-          cells: row.cells.map(cell => 
-            cell.id === cellId 
-              ? { ...cell, value: { text: newValue } }
-              : cell
-          )
-        }))
-      }));
-      
-      return {
-        ...old,
-        pages: updatedPages,
-      };
-    });
-    
-    // Also update processed cache if needed
-    const hasProcessingRules = sortRules.length > 0 || filterRules.length > 0;
-    if (hasProcessingRules) {
-      const processedQueryKey = { 
-        tableId, 
-        limit: 100,
-        ...(sortRules.length > 0 && {
-          sortRules: sortRules.map(rule => ({
-            columnId: rule.columnId,
-            direction: rule.direction
-          }))
-        }),
-        ...(filterRules.length > 0 && {
-          filterRules: filterRules.map(rule => ({
-            id: rule.id,
-            columnId: rule.columnId,
-            columnName: rule.columnName,
-            columnType: rule.columnType,
-            operator: rule.operator,
-            value: rule.value
-          }))
-        })
-      };
-      
-      // Update processed cache directly using updater function to avoid race conditions
-      utils.table.getTableData.setInfiniteData(processedQueryKey, (old) => {
-        if (!old) return old;
-        
-        const updatedPages = old.pages.map(page => ({
-          ...page,
-          rows: page.rows.map(row => ({
-            ...row,
-            cells: row.cells.map(cell => 
-              cell.id === cellId 
-                ? { ...cell, value: { text: newValue } }
-                : cell
-            )
-          }))
-        }));
-        
-        return {
-          ...old,
-          pages: updatedPages,
-        };
-      });
-    }
-    
-    // Show immediate feedback to user
-    setIsSaving(true);
-    setSaveStatus('saving');
-    
-    // Now start the database mutation (onMutate will also update cache as backup)
-    setPendingMutation(true);
+    // For regular cells, use optimistic mutation
     updateCellMutation.mutate({
       cellId,
       value: newValue,
     });
-  }, [cellId, initialValue, updateCellMutation, pendingMutation, tableId, utils, sortRules, filterRules, createCellMutation, columnId, rowId]);
+    
+    setIsSaving(true);
+    setSaveStatus('saving');
+    setHasLocalChanges(false);
+  }, [cellId, initialValue, updateCellMutation, createCellMutation, utils, tableId, rowId, _columnId]);
 
 
-  // Update local value when initialValue changes, but STRONGLY preserve user edits
+  // Update local value when initialValue changes, but preserve user edits
   useEffect(() => {
-    // Only update if ALL conditions are met:
-    // 1. No local changes
-    // 2. Not actively editing  
-    // 3. No pending mutation
-    // 4. No active edit session
-    // 5. No pending value waiting to be saved
-    // 6. No active edit lock
-    // 7. If edit lock exists, ensure minimum grace period has passed
-    // 8. For temporary cells, be even more conservative to prevent data loss during column creation
-    // 9. NEVER override user input during active editing sessions (additional safety)
-    const additionalGracePeriod = isTemporaryCell ? 5000 : 0; // Extra 5 seconds for temporary cells
-    const extendedEditLockActive = editLock || (editLockStartTime && Date.now() - editLockStartTime < (2000 + additionalGracePeriod));
+    // Only update if not actively editing and no pending changes
+    // Additionally, don't update if a mutation is in flight to prevent disrupting optimistic updates
+    const isMutationInProgress = updateCellMutation.isPending;
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+    const hasActiveEditingState = isEditing || hasLocalChanges || pendingMutation || editSessionId || pendingValue || editLock;
+    const isCellCurrentlyEditing = isCellEditing(cellId);
     
-    // Extra safety: if user has typed anything different from the ORIGINAL initialValue, preserve it
-    // This prevents cache updates from other cells from overriding user input
-    const hasUserInput = value !== originalInitialValue;
-    const isActivelyEditing = isEditing || hasLocalChanges || !!editSessionId || !!pendingValue;
-    
-    if (!hasLocalChanges && !isEditing && !pendingMutation && !editSessionId && !pendingValue && !extendedEditLockActive && !isActivelyEditing) {
-      // Additional check: only update if the new value is actually different and user hasn't typed anything
-      if (initialValue !== value && !hasUserInput) {
-        console.log('Updating initialValue for cell:', cellId, 'from', value, 'to', initialValue);
+    // Prevent updates during any active editing state
+    // Also prevent updates if there are pending save operations
+    const hasPendingSave = isSavingRef.current || saveStatusRef.current === 'saving';
+    if (!hasActiveEditingState && !isMutationInProgress && !isCellCurrentlyEditing && !hasPendingSave) {
+      if (initialValue !== value) {
         setValue(initialValue);
         latestValueRef.current = initialValue;
-      } else if (hasUserInput) {
-        console.log('Preserving user input for cell:', cellId, 'user value:', value, 'original:', originalInitialValue, 'new initialValue:', initialValue);
       }
+    } else if (isMutationInProgress || hasActiveEditingState || isCellCurrentlyEditing || hasPendingSave) {
     }
-  }, [initialValue, hasLocalChanges, isEditing, pendingMutation, editSessionId, pendingValue, value, editLock, editLockStartTime, isTemporaryCell, cellId, originalInitialValue]);
+  }, [initialValue, isEditing, hasLocalChanges, pendingMutation, editSessionId, pendingValue, editLock, value, cellId, updateCellMutation.isPending, isCellEditing]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -571,30 +398,28 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     }
   }, [isEditing]);
 
-  // Handle value changes with deferred optimistic update
+  // Handle value changes with 500ms save delay after stopping typing
   const handleValueChange = useCallback((newValue: string) => {
     setValue(newValue);
     setHasLocalChanges(true);
     latestValueRef.current = newValue;
     setPendingValue(newValue);
     
-    // Clear existing timeout
+    // Clear existing save timeout
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
 
-    // Immediately start edit session and edit lock on first keystroke
+    // Start edit session and edit lock on first keystroke
     if (!editSessionId) {
       const sessionId = `edit-${cellId}-${Date.now()}`;
       setEditSessionId(sessionId);
-      console.log('Started edit session:', sessionId);
+      startEditingSession(cellId, sessionId);
     }
     
-    // Immediately activate edit lock to prevent external overwrites
     if (!editLock) {
       setEditLock(true);
       setEditLockStartTime(Date.now());
-      console.log('Edit lock activated for cell:', cellId);
     }
     
     // Clear any existing edit lock timeout
@@ -602,63 +427,24 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       clearTimeout(editLockTimeoutRef.current);
     }
 
-    // Set new timeout for deferred server save
+    // Set 500ms timeout to save after user stops typing
     saveTimeoutRef.current = setTimeout(() => {
-      setIsSaving(true);
       saveToServer(newValue);
-    }, 500); // Faster response while still allowing smooth typing
-  }, [saveToServer, editSessionId, cellId, editLock]);
+    }, 500);
+  }, [saveToServer, cellId]);
 
-  // Cleanup timeouts on unmount and handle orphaned edit sessions
+  // Cleanup timeouts on unmount
   useEffect(() => {
     return () => {
-      // Always clear timeouts to prevent memory leaks
+      // Clear timeouts to prevent memory leaks
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
       if (editLockTimeoutRef.current) {
         clearTimeout(editLockTimeoutRef.current);
       }
-      
-      // Log cleanup for debugging, but don't interfere with ongoing mutations
-      if (editSessionId || editLock) {
-        console.log('Cleaning up edit session and lock on unmount for cell:', cellId);
-        
-        // If we have unsaved changes and no pending mutation, trigger a final save
-        if (latestValueRef.current !== initialValue && !pendingMutation && !isSaving) {
-          console.log('Final save on unmount for cell:', cellId, 'value:', latestValueRef.current);
-          
-          // Perform immediate cache update to ensure data persistence
-          utils.table.getTableData.setInfiniteData({ 
-            tableId, 
-            limit: 100
-          }, (old) => {
-            if (!old) return old;
-            
-            const updatedPages = old.pages.map(page => ({
-              ...page,
-              rows: page.rows.map(row => ({
-                ...row,
-                cells: row.cells.map(cell => 
-                  cell.id === cellId 
-                    ? { ...cell, value: { text: latestValueRef.current } }
-                    : cell
-                )
-              }))
-            }));
-            
-            return {
-              ...old,
-              pages: updatedPages,
-            };
-          });
-        }
-        
-        // Don't clear edit locks/sessions on unmount if there are pending mutations
-        // The mutations will handle their own cleanup with proper timing
-      }
     };
-  }, [cellId, editSessionId, editLock, initialValue, isSaving, pendingMutation, tableId, utils.table.getTableData]);
+  }, []);
 
   // Failsafe cleanup for orphaned edit locks
   useEffect(() => {
@@ -668,13 +454,11 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       const elapsed = Date.now() - editLockStartTime;
       
       if (elapsed >= maxLockDuration) {
-        console.warn('Edit lock exceeded maximum duration, clearing lock for cell:', cellId);
         setEditLock(false);
         setEditLockStartTime(null);
       } else {
         // Set timeout for remaining time
         editLockTimeoutRef.current = setTimeout(() => {
-          console.warn('Edit lock timeout reached, clearing lock for cell:', cellId);
           setEditLock(false);
           setEditLockStartTime(null);
         }, maxLockDuration - elapsed);
@@ -688,6 +472,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     };
   }, [editLock, editLockStartTime, cellId]);
 
+
   // Auto-focus when shouldFocus prop changes
   useEffect(() => {
     if (shouldFocus && !isEditing && !isEditingDisabled) {
@@ -698,19 +483,17 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         if (!editSessionId) {
           const sessionId = `edit-${cellId}-${Date.now()}`;
           setEditSessionId(sessionId);
-          console.log('Started edit session on focus:', sessionId);
+          startEditingSession(cellId, sessionId);
         }
         
         if (!editLock) {
           setEditLock(true);
           setEditLockStartTime(Date.now());
-          console.log('Edit lock activated on focus for cell:', cellId);
         }
       } else {
         onSelect?.();
       }
     } else if (shouldFocus && isEditingDisabled) {
-      console.log('Focus editing disabled due to loading state for cell:', cellId);
     }
   }, [shouldFocus, isEditing, isSelected, onSelect, editSessionId, editLock, cellId, isEditingDisabled]);
 
@@ -719,11 +502,9 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     if (isEditingDisabled && isEditing) {
       // Loading started while editing - remember this state
       setWasEditingBeforeLoading(true);
-      console.log('Preserving edit state during loading for cell:', cellId);
     } else if (!isEditingDisabled && wasEditingBeforeLoading) {
       // Loading completed and we were editing before - restore edit state
       setWasEditingBeforeLoading(false);
-      console.log('Restoring edit state after loading for cell:', cellId);
       
       // Re-focus the input to ensure smooth transition
       setTimeout(() => {
@@ -743,7 +524,6 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     
     // Prevent editing during loading states
     if (isEditingDisabled) {
-      console.log('Editing disabled due to loading state for cell:', cellId);
       return;
     }
     
@@ -755,13 +535,12 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       if (!editSessionId) {
         const sessionId = `edit-${cellId}-${Date.now()}`;
         setEditSessionId(sessionId);
-        console.log('Started edit session on click:', sessionId);
+        startEditingSession(cellId, sessionId);
       }
       
       if (!editLock) {
         setEditLock(true);
         setEditLockStartTime(Date.now());
-        console.log('Edit lock activated on click for cell:', cellId);
       }
     } else if (!isSelected) {
       // First click - select the cell
@@ -782,9 +561,9 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     
     // Prevent editing during loading states
     if (isEditingDisabled) {
-      console.log('Double-click editing disabled due to loading state for cell:', cellId);
       return;
     }
+    
     
     // Double click always enters edit mode directly
     setIsEditing(true);
@@ -793,13 +572,12 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     if (!editSessionId) {
       const sessionId = `edit-${cellId}-${Date.now()}`;
       setEditSessionId(sessionId);
-      console.log('Started edit session on double-click:', sessionId);
+      startEditingSession(cellId, sessionId);
     }
     
     if (!editLock) {
       setEditLock(true);
       setEditLockStartTime(Date.now());
-      console.log('Edit lock activated on double-click for cell:', cellId);
     }
   };
 
@@ -810,6 +588,12 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       setIsEditing(false);
       setEditLock(false);
       setEditLockStartTime(null);
+      
+      // End editing session
+      if (editSessionId) {
+        endEditingSession(cellId, editSessionId);
+        setEditSessionId(null);
+      }
       return;
     }
 
@@ -834,6 +618,11 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     // Clear edit locks and session on cancel
     setEditLock(false);
     setEditLockStartTime(null);
+    
+    // End editing session
+    if (editSessionId) {
+      endEditingSession(cellId, editSessionId);
+    }
     setEditSessionId(null);
     setPendingValue(null);
     
@@ -853,6 +642,13 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       setIsEditing(false);
       setEditLock(false);
       setEditLockStartTime(null);
+      
+      // End editing session
+      if (editSessionId) {
+        endEditingSession(cellId, editSessionId);
+        setEditSessionId(null);
+      }
+      
       // Use setTimeout to ensure the input loses focus before navigation
       setTimeout(() => onNavigate?.(direction), 0);
       return;
@@ -890,44 +686,39 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const handleBlur = (e: React.FocusEvent) => {
     // Check if we're blurring to focus on another editable cell
     const relatedTarget = e.relatedTarget as HTMLElement;
-    const isClickingOnAnotherCell = relatedTarget && 
+    const isMovingToAnotherCell = relatedTarget && 
       (relatedTarget.closest('[data-cell]') !== null ||
        relatedTarget.closest('td') !== null ||
        relatedTarget.classList.contains('cursor-text'));
     
-    if (isClickingOnAnotherCell) {
-      // If clicking on another cell, exit edit mode immediately and save in background
+    if (isMovingToAnotherCell) {
+      // User is navigating to another cell - exit edit mode and save immediately
       setIsEditing(false);
+      onDeselect?.();
       
-      // Immediately deselect this cell to allow the new cell to be selected
-      // Use setTimeout to ensure this happens after the current event loop
-      setTimeout(() => onDeselect?.(), 0);
-      
-      // Ensure data persists by updating cache immediately before navigation
+      // Save changes immediately when navigating to another cell
       if (latestValueRef.current !== initialValue) {
-        console.log('Navigation blur: ensuring data persistence for value:', latestValueRef.current);
-        
-        // Clear any pending auto-save
+        // Clear the 500ms auto-save timeout since we're saving immediately
         if (saveTimeoutRef.current) {
           clearTimeout(saveTimeoutRef.current);
         }
         
-        // ALWAYS save on navigation, even if pendingMutation exists
-        // The immediate cache update in saveToServer ensures data persistence
-        setIsSaving(true);
         saveToServer(latestValueRef.current);
-        
-        // DON'T clear edit lock immediately - let the mutation callback handle it with delay
-        // This prevents the race condition where the lock is cleared before navigation completes
-      } else {
-        // No changes, but still delay edit lock release to prevent navigation interference
-        setTimeout(() => {
-          setEditLock(false);
-          setEditLockStartTime(null);
-        }, 300);
       }
+      
+      // Release edit lock quickly to allow new cell to function
+      setTimeout(() => {
+        setEditLock(false);
+        setEditLockStartTime(null);
+        
+        // End editing session when moving to another cell
+        if (editSessionId) {
+          endEditingSession(cellId, editSessionId);
+          setEditSessionId(null);
+        }
+      }, 50);
     } else {
-      // Normal blur behavior - only save if not already saving
+      // Normal blur behavior (clicking outside table, etc.) - save normally
       if (!pendingMutation) {
         void handleSave();
       }
@@ -953,6 +744,8 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
             onKeyDown={handleKeyDown}
             onBlur={handleBlur}
             disabled={isEditingDisabled}
+            data-cell="true"
+            data-cell-id={cellId}
             className={`w-full h-full px-2 py-1 border-none bg-white focus:outline-none text-sm text-gray-900 rounded-sm border ${
               isEditingDisabled 
                 ? 'border-gray-300 bg-gray-50 cursor-not-allowed' 
@@ -965,21 +758,6 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
           {isEditingDisabled && (
             <div className="absolute inset-0 flex items-center justify-center bg-gray-50/80">
               <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" title="Loading..."></div>
-            </div>
-          )}
-          {/* Save status indicator */}
-          {!isEditingDisabled && saveStatus === 'saving' && (
-            <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
-              <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" title="Saving..."></div>
-            </div>
-          )}
-          {saveStatus === 'saved' && (
-            <div className="absolute right-1 top-1/2 transform -translate-y-1/2">
-              <div className="w-3 h-3 bg-green-500 rounded-full flex items-center justify-center" title="Saved">
-                <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              </div>
             </div>
           )}
         </div>
@@ -1034,6 +812,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
           onDoubleClick={handleDoubleClick}
           onContextMenu={handleContextMenu}
           data-cell="true"
+          data-cell-id={cellId}
         >
           {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
         </div>

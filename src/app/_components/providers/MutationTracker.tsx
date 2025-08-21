@@ -1,39 +1,27 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 
 interface MutationTrackerContextType {
-  activeMutations: Set<string>;
-  addMutation: (id: string) => void;
-  removeMutation: (id: string) => void;
   isMutating: boolean;
+  isMutatingByKey: (mutationKey: string[]) => number;
 }
 
 const MutationTrackerContext = createContext<MutationTrackerContextType | undefined>(undefined);
 
 export function MutationTrackerProvider({ children }: { children: ReactNode }) {
-  const [activeMutations, setActiveMutations] = useState<Set<string>>(new Set());
-
-  const addMutation = useCallback((id: string) => {
-    setActiveMutations(prev => new Set(prev).add(id));
-  }, []);
-
-  const removeMutation = useCallback((id: string) => {
-    setActiveMutations(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(id);
-      return newSet;
-    });
-  }, []);
-
-  const isMutating = activeMutations.size > 0;
+  // Use React Query's built-in mutation tracking - single subscription for better performance  
+  const totalMutations = useIsMutating();
+  const isMutating = totalMutations > 0;
+  
+  // For compatibility with existing code that checks specific mutation keys
+  const isMutatingByKey = () => 0; // Not used in the optimized version
 
   return (
     <MutationTrackerContext.Provider value={{
-      activeMutations,
-      addMutation,
-      removeMutation,
       isMutating,
+      isMutatingByKey,
     }}>
       {children}
     </MutationTrackerContext.Provider>
@@ -45,10 +33,8 @@ export function useMutationTracker() {
   if (context === undefined) {
     // Return a safe default instead of throwing
     return {
-      activeMutations: new Set<string>(),
-      addMutation: () => { /* no-op */ },
-      removeMutation: () => { /* no-op */ },
       isMutating: false,
+      isMutatingByKey: () => 0,
     };
   }
   return context;

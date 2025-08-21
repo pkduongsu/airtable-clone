@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import Plus from "../../icons/Plus";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import { api } from "~/trpc/react";
@@ -27,11 +28,19 @@ export function TableControls({
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
   
   const utils = api.useUtils();
+  const queryClient = useQueryClient();
   
   const createColumnMutation = api.column.create.useMutation({
+    mutationKey: ['column', 'create'],
     onMutate: async ({ tableId, name, type }) => {
-      // Cancel any outgoing refetches for base query
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
+      // Cancel any outgoing refetches that could interfere with optimistic updates
+      await Promise.all([
+        utils.table.getTableData.cancel({ tableId, limit: 100 }),
+        // Cancel cell queries that might interfere with column creation
+        queryClient.cancelQueries({ 
+          queryKey: ['trpc', 'cell', 'findByRowColumn']
+        })
+      ]);
       
       // Snapshot the previous value
       const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
@@ -124,24 +133,34 @@ export function TableControls({
           };
         });
       }
+      
+      // Only invalidate if there are concurrent mutations as a fallback
+      const concurrentMutations = queryClient.isMutating({ mutationKey: ['column', 'create'] });
+      if (concurrentMutations > 1) {
+        // There are other mutations running, invalidate to ensure consistency
+        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      }
     },
     onError: (err, variables, context) => {
+      console.error('Failed to create column:', err);
       // Revert to the previous value on error
       if (context?.previousData) {
         utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
       }
-    },
-    onSettled: (_data, _error, _variables) => {
-      // Don't invalidate immediately to avoid disrupting user interaction with the new column
-      // The optimistic update already provides the correct UI state
-      // Server sync happens in the background via the onSuccess handler
     }
   });
   
   const createRowMutation = api.row.create.useMutation({
+    mutationKey: ['row', 'create'],
     onMutate: async ({ tableId }) => {
-      // Cancel any outgoing refetches
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
+      // Cancel any outgoing refetches that could interfere with optimistic updates
+      await Promise.all([
+        utils.table.getTableData.cancel({ tableId, limit: 100 }),
+        // Cancel cell queries that might interfere
+        queryClient.cancelQueries({ 
+          queryKey: ['trpc', 'cell', 'findByRowColumn']
+        })
+      ]);
       
       // Snapshot the previous value
       const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
@@ -203,22 +222,57 @@ export function TableControls({
       
       return { previousData, tempRowId };
     },
-    onSuccess: (_newRow, _variables, _context) => {
-      // Since the server doesn't return the full row with cells,
-      // we'll let the invalidate in onSettled handle the final update
-      // The optimistic update provides immediate feedback, and
-      // the invalidate ensures we have the correct server state
+    onSuccess: (newRow, variables, context) => {
+      // Update the temporary row ID with the real server ID
+      if (context?.tempRowId && newRow) {
+        const { tableId } = variables;
+        
+        utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
+          if (!old) return old;
+          
+          const updatedPages = old.pages.map(page => ({
+            ...page,
+            rows: page.rows.map(row => {
+              if (row.id === context.tempRowId) {
+                // Update the row with the real server ID
+                return {
+                  ...row,
+                  id: newRow.id,
+                  // Update all cell rowId references to use the real row ID
+                  cells: row.cells.map(cell => ({
+                    ...cell,
+                    rowId: newRow.id,
+                    // Update cell ID to reference the real row ID if it was temporary
+                    id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
+                      ? `temp-cell-${newRow.id}-${cell.columnId}`
+                      : cell.id
+                  }))
+                };
+              }
+              return row;
+            })
+          }));
+          
+          return {
+            ...old,
+            pages: updatedPages,
+          };
+        });
+      }
+      
+      // Only invalidate if there are concurrent mutations as a fallback
+      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'create'] });
+      if (concurrentMutations > 1) {
+        // There are other mutations running, invalidate to ensure consistency
+        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      }
     },
     onError: (err, variables, context) => {
+      console.error('Failed to create row:', err);
       // Revert to the previous value on error
       if (context?.previousData) {
         utils.table.getTableData.setInfiniteData({ tableId: variables.tableId, limit: 100 }, context.previousData);
       }
-    },
-    onSettled: (_data, _error, _variables) => {
-      // Don't invalidate immediately to avoid disrupting user interaction with the new row
-      // The optimistic update already provides the correct UI state
-      // Server sync happens naturally without forcing a refetch
     }
   });
 
