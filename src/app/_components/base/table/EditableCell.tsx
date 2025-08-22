@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { api } from "~/trpc/react";
 import { useMutationTracker } from "../../providers/MutationTracker";
+import {useQueryClient} from "@tanstack/react-query";
 
 interface EditableCellProps {
   cellId: string;
@@ -61,6 +62,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   
   const utils = api.useUtils();
   const mutationTracker = useMutationTracker();
+  const queryClient = useQueryClient();
   
   const createCellMutation = api.cell.create.useMutation({
     onSuccess: (data, variables, _context) => {
@@ -111,6 +113,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   });
 
   const updateCellMutation = api.cell.update.useMutation({
+    mutationKey: ['cell.update'],
     onMutate: async (variables) => {
       // Track mutation start
       mutationTracker.addMutation(`updateCell-${variables.cellId}`);
@@ -302,9 +305,11 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       }, 1000);
     },
     onSettled: () => {
-      setPendingMutation(false);
-      // No invalidation needed - optimistic updates handle UI consistency
-      // The server save already completed successfully
+      if (queryClient.isMutating() === 1) {
+        queryClient.invalidateQueries({
+          queryKey: ['table.getTableData', { tableId, limit: 100 }],
+        })
+      }
     },
   });
 

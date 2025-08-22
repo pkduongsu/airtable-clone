@@ -18,6 +18,9 @@ import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
 import { type SortRule } from "../_components/base/modals/SortModal";
 import { type FilterRule } from "../_components/base/modals/FilterModal";
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCreateRowMutation } from "../_components/base/mutations/rowMutations";
+
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -37,6 +40,7 @@ function BasePageContent() {
   
   
   const user = session?.user;
+  const queryClient = useQueryClient();
   
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
@@ -178,95 +182,8 @@ function BasePageContent() {
   
   const utils = api.useUtils();
   
-  const createRowMutation = api.row.create.useMutation({
-    onMutate: async ({ tableId }) => {
-      // Cancel any outgoing refetches for base query
-      await utils.table.getTableData.cancel({ 
-        tableId, 
-        limit: 100
-      });
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ 
-        tableId, 
-        limit: 100
-      });
-      
-      // Generate temporary IDs
-      const tempRowId = `temp-row-${Date.now()}`;
-      
-      // Optimistically update the cache
-      if (previousData && previousData.pages.length > 0) {
-        const firstPage = previousData.pages[0];
-        if (firstPage) {
-          // Find the maximum order across all pages
-          const allOrders = previousData.pages.flatMap(page => page.rows.map(row => row.order));
-          const maxOrder = Math.max(...allOrders, -1);
-          const nextOrder = maxOrder + 1;
-          
-          // Create empty cells for all existing columns
-          const newCells = firstPage.columns.map(column => ({
-            id: `temp-cell-${tempRowId}-${column.id}`,
-            rowId: tempRowId,
-            columnId: column.id,
-            value: { text: "" },
-            column,
-          }));
-          
-          const newRow = {
-            id: tempRowId,
-            tableId,
-            order: nextOrder,
-            cells: newCells,
-          };
-          
-          // Add the new row to the last page (most recent)
-          utils.table.getTableData.setInfiniteData({ 
-            tableId, 
-            limit: 100
-          }, (old) => {
-            if (!old) return old;
-            
-            const updatedPages = [...old.pages];
-            const lastPageIndex = updatedPages.length - 1;
-            
-            if (lastPageIndex >= 0 && updatedPages[lastPageIndex]) {
-              const lastPage = updatedPages[lastPageIndex];
-              updatedPages[lastPageIndex] = {
-                ...lastPage,
-                rows: [...lastPage.rows, newRow],
-                _count: {
-                  ...lastPage._count,
-                  rows: lastPage._count.rows + 1,
-                }
-              };
-            }
-            
-            return {
-              ...old,
-              pages: updatedPages,
-            };
-          });
-        }
-      }
-      
-      return { previousData, tempRowId };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, context.previousData);
-      }
-    },
-    onSettled: (_data, _error, _variables) => {
-      // Don't invalidate to prevent editing disruption
-      // Optimistic updates handle UI consistency
-    }
-  });
-
+  const createRowMutation = useCreateRowMutation();
+  
   const bulkInsertRowsMutation = api.row.bulkInsert.useMutation({
     onError: () => {
       setIsBulkLoading(false);
