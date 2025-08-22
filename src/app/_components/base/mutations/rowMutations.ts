@@ -38,9 +38,9 @@ export const useCreateRowMutation = () => {
           const maxOrder = Math.max(...allOrders, -1);
           const nextOrder = maxOrder + 1;
           
-          // Create empty cells for all existing columns
+          // Create empty cells for all existing columns using composite key approach
           const newCells = firstPage.columns.map(column => ({
-            id: `temp-cell-${tempRowId}-${column.id}`,
+            id: `temp-cell-${tempRowId}-${column.id}`, // Keep ID for UI consistency
             rowId: tempRowId,
             columnId: column.id,
             value: { text: "" },
@@ -117,10 +117,6 @@ export const useCreateRowMutation = () => {
                       cells: row.cells.map(cell => ({
                         ...cell,
                         rowId: data.id,
-                        // Update cell ID to reference the real row ID if it was temporary
-                        id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
-                          ? `temp-cell-${data.id}-${cell.columnId}`
-                          : cell.id
                       }))
                     }
                   : row
@@ -186,9 +182,9 @@ export const useInsertRowAboveMutation = () => {
           if (targetRow) {
             const newOrder = targetRow.order;
             
-            // Create empty cells for all existing columns
+            // Create empty cells for all existing columns using composite key approach
             const newCells = firstPage.columns.map(column => ({
-              id: `temp-cell-${tempRowId}-${column.id}`,
+              id: `temp-cell-${tempRowId}-${column.id}`, // Keep ID for UI consistency
               rowId: tempRowId,
               columnId: column.id,
               value: { text: "" },
@@ -264,10 +260,6 @@ export const useInsertRowAboveMutation = () => {
                       cells: row.cells.map(cell => ({
                         ...cell,
                         rowId: data.id,
-                        // Update cell ID if it was temporary
-                        id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
-                          ? `temp-cell-${data.id}-${cell.columnId}`
-                          : cell.id
                       }))
                     }
                   : row
@@ -326,9 +318,9 @@ export const useInsertRowBelowMutation = () => {
           if (targetRow) {
             const newOrder = targetRow.order + 1;
             
-            // Create empty cells for all existing columns
+            // Create empty cells for all existing columns using composite key approach
             const newCells = firstPage.columns.map(column => ({
-              id: `temp-cell-${tempRowId}-${column.id}`,
+              id: `temp-cell-${tempRowId}-${column.id}`, // Keep ID for UI consistency
               rowId: tempRowId,
               columnId: column.id,
               value: { text: "" },
@@ -404,10 +396,6 @@ export const useInsertRowBelowMutation = () => {
                       cells: row.cells.map(cell => ({
                         ...cell,
                         rowId: data.id,
-                        // Update cell ID if it was temporary
-                        id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
-                          ? `temp-cell-${data.id}-${cell.columnId}`
-                          : cell.id
                       }))
                     }
                   : row

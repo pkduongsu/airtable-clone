@@ -7,7 +7,7 @@ import { useEditingState } from "../../providers/EditingStateProvider";
 
 
 interface EditableCellProps {
-  cellId: string;
+  cellId?: string; // Made optional since we use composite key now
   tableId: string;
   initialValue: string;
   className?: string;
@@ -16,8 +16,8 @@ interface EditableCellProps {
   isSelected?: boolean;
   onSelect?: () => void;
   onDeselect?: () => void;
-  rowId?: string;
-  columnId?: string; // Add columnId prop for direct access
+  rowId: string; // Required for composite key
+  columnId: string; // Required for composite key (renamed from columnId?)
   onContextMenu?: (event: React.MouseEvent, rowId: string) => void;
   sortRules?: Array<{
     columnId: string;
@@ -38,7 +38,7 @@ interface EditableCellProps {
   isCurrentSearchResult?: boolean;
 }
 
-export function EditableCell({ cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, columnId: _columnId, onContextMenu, sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchQuery, isSearchMatch = false, isCurrentSearchResult = false }: EditableCellProps) {
+export function EditableCell({ cellId: _cellId, tableId, initialValue, className = "", onNavigate, shouldFocus, isSelected, onSelect, onDeselect, rowId, columnId, onContextMenu, sortRules: _sortRules = [], filterRules: _filterRules = [], isTableLoading = false, isTableStabilizing = false, searchQuery, isSearchMatch = false, isCurrentSearchResult = false }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
@@ -68,13 +68,15 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const [wasEditingBeforeLoading, setWasEditingBeforeLoading] = useState(false);
   
   // Determine if editing should be disabled due to loading states
-  // Allow editing for temporary cells even during loading to enable optimistic updates
-  const isTemporaryCell = cellId?.startsWith('temp-cell-') ?? false;
+  // Allow editing for temporary rows/columns even during loading to enable optimistic updates
+  const isTemporaryRow = rowId.startsWith('temp-row-');
+  const isTemporaryColumn = columnId.startsWith('temp-column-');
+  const isTemporaryCell = isTemporaryRow || isTemporaryColumn;
   const isEditingDisabled = !isTemporaryCell && (isTableLoading || isTableStabilizing);
   
   const utils = api.useUtils();
   const queryClient = useQueryClient();
-  const { startEditingSession, endEditingSession, isCellEditing, isAnyCellEditing, isAnyCellEditingRef } = useEditingState();
+  const { startEditingSession, endEditingSession, isCellEditing } = useEditingState();
   
   const createCellMutation = api.cell.create.useMutation({
     mutationKey: ['cell', 'create'],
@@ -179,7 +181,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
 
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update'],
-    onMutate: async ({ cellId, value: newValue }) => {      
+    onMutate: async ({ rowId: mutationRowId, columnId: mutationColumnId, value: newValue }) => {      
       // Cancel any outgoing refetches that could interfere with optimistic updates
       await Promise.all([
         utils.table.getTableData.cancel({ 
@@ -214,15 +216,18 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
           pages: old.pages.map(page => ({
             ...page,
             rows: page.rows.map(row => {
-              // Find the row containing this cell
-              const targetCell = row.cells.find(cell => cell.id === cellId);
+              // Find the row containing this cell using composite key
+              if (row.id !== mutationRowId) return row;
+              
+              // Find the specific cell by columnId
+              const targetCell = row.cells.find(cell => cell.columnId === mutationColumnId);
               if (!targetCell) return row;
               
               // Update only the specific cell value
               return {
                 ...row,
                 cells: row.cells.map(cell => 
-                  cell.id === cellId 
+                  cell.rowId === mutationRowId && cell.columnId === mutationColumnId
                     ? { ...cell, value: { text: newValue } }
                     : cell
                 )
@@ -270,102 +275,84 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       return;
     }
     
-    if (!cellId) {
-      return;
-    }
-
-    
-    // Check if this is a temporary cell ID
-    if (cellId.startsWith('temp-cell-')) {
-      // For temporary cells, we need to check if the cell exists and create/update accordingly
-      if (rowId && _columnId) {
-        setIsSaving(true);
-        setSaveStatus('saving');
-        setHasLocalChanges(false);
-        
-        // First show optimistic update immediately
-        utils.table.getTableData.setInfiniteData({ 
-          tableId, 
-          limit: 100
-        }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            pages: old.pages.map(page => ({
-              ...page,
-              rows: page.rows.map(row => {
-                // Find the row containing this cell (could be temporary row ID)
-                const targetCell = row.cells.find(cell => cell.id === cellId);
-                if (!targetCell) return row;
-                
-                return {
-                  ...row,
-                  cells: row.cells.map(cell => 
-                    cell.id === cellId 
-                      ? { ...cell, value: { text: newValue } }
-                      : cell
-                  )
-                };
-              })
-            }))
-          };
-        });
-        
-        // Check if rowId or columnId are temporary (newly created row/column)
-        const isTemporaryRow = rowId.startsWith('temp-row-');
-        const isTemporaryColumn = _columnId.startsWith('temp-column-');
-        
-        if (isTemporaryRow || isTemporaryColumn) {
-          // Skip server call for temporary row/column IDs, just show optimistic update
-          setIsSaving(false);
-          setSaveStatus('saved');
-          setHasLocalChanges(false);
-          setTimeout(() => setSaveStatus('idle'), 2000);
-          return;
-        }
-        
-        // For real IDs, try to find if the cell exists on server
-        utils.cell.findByRowColumn.fetch({
-          rowId,
-          columnId: _columnId,
-        }).then((existingCell) => {
-          if (existingCell) {
-            // Cell exists, update it
-            updateCellMutation.mutate({
-              cellId: existingCell.id,
-              value: newValue,
-            });
-          } else {
-            // Cell doesn't exist, create it
-            createCellMutation.mutate({
-              rowId,
-              columnId: _columnId,
-              value: newValue,
-            });
-          }
-        }).catch(() => {
-          // If find fails, assume cell doesn't exist and create it
-          createCellMutation.mutate({
-            rowId,
-            columnId: _columnId,
-            value: newValue,
-          });
-        });
-      }
-      return;
-    }
-    
-    // For regular cells, use optimistic mutation
-    updateCellMutation.mutate({
-      cellId,
-      value: newValue,
-    });
-    
+    // For all cells, use rowId + columnId to determine if cell exists
     setIsSaving(true);
     setSaveStatus('saving');
     setHasLocalChanges(false);
-  }, [cellId, initialValue, updateCellMutation, createCellMutation, utils, tableId, rowId, _columnId]);
+    
+    // First show optimistic update immediately
+    utils.table.getTableData.setInfiniteData({ 
+      tableId, 
+      limit: 100
+    }, (old) => {
+      if (!old) return old;
+      
+      return {
+        ...old,
+        pages: old.pages.map(page => ({
+          ...page,
+          rows: page.rows.map(row => {
+            // Find the row containing this cell using composite key
+            if (row.id !== rowId) return row;
+            
+            const targetCell = row.cells.find(cell => cell.columnId === columnId);
+            if (!targetCell) return row;
+            
+            return {
+              ...row,
+              cells: row.cells.map(cell => 
+                cell.rowId === rowId && cell.columnId === columnId
+                  ? { ...cell, value: { text: newValue } }
+                  : cell
+              )
+            };
+          })
+        }))
+      };
+    });
+    
+    // Check if rowId or columnId are temporary (newly created row/column)
+    const isTemporaryRow = rowId.startsWith('temp-row-');
+    const isTemporaryColumn = columnId.startsWith('temp-column-');
+    
+    if (isTemporaryRow || isTemporaryColumn) {
+      // Skip server call for temporary row/column IDs, just show optimistic update
+      setIsSaving(false);
+      setSaveStatus('saved');
+      setHasLocalChanges(false);
+      setTimeout(() => setSaveStatus('idle'), 2000);
+      return;
+    }
+    
+    // For real IDs, try to find if the cell exists on server
+    utils.cell.findByRowColumn.fetch({
+      rowId,
+      columnId: columnId,
+    }).then((existingCell) => {
+      if (existingCell) {
+        // Cell exists, update it using composite key
+        updateCellMutation.mutate({
+          rowId,
+          columnId: columnId,
+          value: newValue,
+        });
+      } else {
+        // Cell doesn't exist, create it
+        createCellMutation.mutate({
+          rowId,
+          columnId: columnId,
+          value: newValue,
+        });
+      }
+    }).catch(() => {
+      // If find fails, assume cell doesn't exist and create it
+      createCellMutation.mutate({
+        rowId,
+        columnId: columnId,
+        value: newValue,
+      });
+    });
+  }, [initialValue, updateCellMutation, createCellMutation, utils, tableId, rowId, columnId]);
 
 
   // Update local value when initialValue changes, but preserve user edits
@@ -375,7 +362,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     const isMutationInProgress = updateCellMutation.isPending;
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
     const hasActiveEditingState = isEditing || hasLocalChanges || editSessionId || pendingValue || editLock;
-    const isCellCurrentlyEditing = isCellEditing(cellId);
+    const isCellCurrentlyEditing = isCellEditing(`${rowId}-${columnId}`);
     
     // Prevent updates during any active editing state
     // Also prevent updates if there are pending save operations
@@ -387,7 +374,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       }
     } else if (isMutationInProgress || hasActiveEditingState || isCellCurrentlyEditing || hasPendingSave) {
     }
-  }, [initialValue, isEditing, hasLocalChanges, editSessionId, pendingValue, editLock, value, cellId, updateCellMutation.isPending, isCellEditing]);
+  }, [initialValue, isEditing, hasLocalChanges, editSessionId, pendingValue, editLock, value, rowId, columnId, updateCellMutation.isPending, isCellEditing]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -411,9 +398,9 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
 
     // Start edit session and edit lock on first keystroke
     if (!editSessionId) {
-      const sessionId = `edit-${cellId}-${Date.now()}`;
+      const sessionId = `edit-${rowId}-${columnId}-${Date.now()}`;
       setEditSessionId(sessionId);
-      startEditingSession(cellId, sessionId);
+      startEditingSession(`${rowId}-${columnId}`, sessionId);
     }
     
     if (!editLock) {
@@ -430,7 +417,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     saveTimeoutRef.current = setTimeout(() => {
       saveToServer(newValue);
     }, 500);
-  }, [saveToServer, cellId]);
+  }, [saveToServer, rowId, columnId]);
 
   // Cleanup timeouts on unmount
   useEffect(() => {
@@ -469,7 +456,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         clearTimeout(editLockTimeoutRef.current);
       }
     };
-  }, [editLock, editLockStartTime, cellId]);
+  }, [editLock, editLockStartTime, rowId, columnId]);
 
 
   // Auto-focus when shouldFocus prop changes
@@ -480,9 +467,9 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         
         // Immediately start edit session and lock when entering edit mode via keyboard
         if (!editSessionId) {
-          const sessionId = `edit-${cellId}-${Date.now()}`;
+          const sessionId = `edit-${rowId}-${columnId}-${Date.now()}`;
           setEditSessionId(sessionId);
-          startEditingSession(cellId, sessionId);
+          startEditingSession(`${rowId}-${columnId}`, sessionId);
         }
         
         if (!editLock) {
@@ -494,7 +481,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       }
     } else if (shouldFocus && isEditingDisabled) {
     }
-  }, [shouldFocus, isEditing, isSelected, onSelect, editSessionId, editLock, cellId, isEditingDisabled]);
+  }, [shouldFocus, isEditing, isSelected, onSelect, editSessionId, editLock, rowId, columnId, isEditingDisabled]);
 
   // Track editing state transitions during loading
   useEffect(() => {
@@ -515,7 +502,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         }
       }, 50); // Small delay to ensure DOM is ready
     }
-  }, [isEditingDisabled, isEditing, wasEditingBeforeLoading, cellId]);
+  }, [isEditingDisabled, isEditing, wasEditingBeforeLoading, rowId, columnId]);
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -531,10 +518,10 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       setIsEditing(true);
       
       // Immediately start edit session and lock to prevent data loss
-      if (!editSessionId) {
-        const sessionId = `edit-${cellId}-${Date.now()}`;
+      if (!editSessionId && rowId && columnId) {
+        const sessionId = `edit-${rowId}-${columnId}-${Date.now()}`;
         setEditSessionId(sessionId);
-        startEditingSession(cellId, sessionId);
+        startEditingSession(`${rowId}-${columnId}`, sessionId);
       }
       
       if (!editLock) {
@@ -568,10 +555,10 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     setIsEditing(true);
     
     // Immediately start edit session and lock to prevent data loss
-    if (!editSessionId) {
-      const sessionId = `edit-${cellId}-${Date.now()}`;
+    if (!editSessionId && rowId && columnId) {
+      const sessionId = `edit-${rowId}-${columnId}-${Date.now()}`;
       setEditSessionId(sessionId);
-      startEditingSession(cellId, sessionId);
+      startEditingSession(`${rowId}-${columnId}`, sessionId);
     }
     
     if (!editLock) {
@@ -590,7 +577,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       
       // End editing session
       if (editSessionId) {
-        endEditingSession(cellId, editSessionId);
+        endEditingSession(`${rowId}-${columnId}`, editSessionId);
         setEditSessionId(null);
       }
       return;
@@ -620,7 +607,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     
     // End editing session
     if (editSessionId) {
-      endEditingSession(cellId, editSessionId);
+      endEditingSession(`${rowId}-${columnId}`, editSessionId);
     }
     setEditSessionId(null);
     setPendingValue(null);
@@ -644,7 +631,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       
       // End editing session
       if (editSessionId) {
-        endEditingSession(cellId, editSessionId);
+        endEditingSession(`${rowId}-${columnId}`, editSessionId);
         setEditSessionId(null);
       }
       
@@ -712,7 +699,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
         
         // End editing session when moving to another cell
         if (editSessionId) {
-          endEditingSession(cellId, editSessionId);
+          endEditingSession(`${rowId}-${columnId}`, editSessionId);
           setEditSessionId(null);
         }
       }, 50);
@@ -744,7 +731,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
             onBlur={handleBlur}
             disabled={isEditingDisabled}
             data-cell="true"
-            data-cell-id={cellId}
+            data-cell-id={`${rowId}-${columnId}`}
             className={`w-full h-full px-2 py-1 border-none bg-white focus:outline-none text-sm text-gray-900 rounded-sm border ${
               isEditingDisabled 
                 ? 'border-gray-300 bg-gray-50 cursor-not-allowed' 
@@ -811,7 +798,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
           onDoubleClick={handleDoubleClick}
           onContextMenu={handleContextMenu}
           data-cell="true"
-          data-cell-id={cellId}
+          data-cell-id={`${rowId}-${columnId}`}
         >
           {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
         </div>

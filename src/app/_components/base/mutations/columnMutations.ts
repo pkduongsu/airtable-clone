@@ -51,7 +51,7 @@ export const useCreateColumnMutation = () => {
                 cells: [
                   ...row.cells,
                   {
-                    id: `temp-cell-${row.id}-${tempColumnId}`,
+                    id: `temp-cell-${row.id}-${tempColumnId}`, // Keep ID for UI consistency
                     rowId: row.id,
                     columnId: tempColumnId,
                     value: { text: "" },
@@ -85,8 +85,7 @@ export const useCreateColumnMutation = () => {
             columns: page.columns.map(col => 
               col.id === context.tempColumnId ? newColumn : col
             ),
-            // Update cell columnId references so __cellIds mapping works correctly
-            // But keep the temporary cell IDs to preserve user data and avoid React remounts
+            // Update cell columnId references using composite key approach
             rows: page.rows.map(row => ({
               ...row,
               cells: row.cells.map(cell =>
@@ -95,7 +94,6 @@ export const useCreateColumnMutation = () => {
                       ...cell, 
                       columnId: newColumn.id, // Update columnId reference
                       column: newColumn, // Update column reference
-                      // Keep original cell.id to avoid React remount issues
                     }
                   : cell
               )
