@@ -192,7 +192,12 @@ export function SearchModal({
     if (onScrollToResult && results[newIndex]) {
       onScrollToResult(results[newIndex], newIndex);
     }
-  }, [currentResultIndex, results, onScrollToResult]);
+    
+    // Notify parent of the current index change
+    if (onSearchDataUpdate) {
+      onSearchDataUpdate(results, debouncedQuery, newIndex);
+    }
+  }, [currentResultIndex, results, onScrollToResult, onSearchDataUpdate, debouncedQuery]);
 
   if (!isOpen) return null;
 

@@ -18,12 +18,13 @@ const createDebouncedTableInvalidation = (utils: any, tableId: string) => {
     // Set new timer
     const timer = setTimeout(() => {
       requestAnimationFrame(() => {
-        // Check if any table cell is focused OR if focus moved to toolbar/search elements
+        // Universal detection: any table cell OR any modal/input context
         const anyCellFocused = document.querySelector('input[data-cell]:focus');
-        const searchBarFocused = document.querySelector('input[type="search"]:focus, input[placeholder*="search" i]:focus, input[placeholder*="Search" i]:focus');
-        const toolbarFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
+        const anyModalOpen = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="Modal"]');
+        const anyModalInputFocused = document.querySelector('[role="dialog"] input:focus, [aria-modal="true"] input:focus, [class*="Modal"] input:focus');
+        const anyToolbarInputFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
         
-        if (!anyCellFocused && !searchBarFocused && !toolbarFocused) {
+        if (!anyCellFocused && !anyModalOpen && !anyModalInputFocused && !anyToolbarInputFocused) {
           void utils.table.getTableData.invalidate({ tableId });
         }
       });
@@ -229,23 +230,27 @@ export function EditableCell({
   // Focus cell when it becomes selected (click) or when shouldFocus is set (keyboard)
   useEffect(() => {
     if (isSelected && inputRef.current && !isFocused) {
-      // Don't auto-focus if user is interacting with toolbar elements
-      const activeElement = document.activeElement;
-      const isToolbarFocused = activeElement && (
-        activeElement.matches('input[type="search"], input[placeholder*="search" i], input[placeholder*="Search" i]') ||
-        activeElement.closest('[role="toolbar"], [data-toolbar]')
-      );
-      
-      if (!isToolbarFocused) {
-        if (shouldFocus) {
-          // Keyboard navigation - select all text
-          inputRef.current.focus();
-          inputRef.current.select();
-        } else {
-          // Click navigation - just focus
-          inputRef.current.focus();
+      // Use requestAnimationFrame to ensure DOM has settled after potential modal opening
+      requestAnimationFrame(() => {
+        // Universal modal detection - don't auto-focus if any modal is open or modal input is focused
+        const anyModalOpen = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="Modal"]');
+        const anyModalInputFocused = document.querySelector('[role="dialog"] input:focus, [aria-modal="true"] input:focus, [class*="Modal"] input:focus');
+        const anyToolbarInputFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
+        const activeElement = document.activeElement;
+        const isInputElement = activeElement && activeElement.tagName === 'INPUT';
+        
+        // Don't steal focus from any input or if any modal is open
+        if (!anyModalOpen && !anyModalInputFocused && !anyToolbarInputFocused && !isInputElement) {
+          if (shouldFocus) {
+            // Keyboard navigation - select all text
+            inputRef.current?.focus();
+            inputRef.current?.select();
+          } else {
+            // Click navigation - just focus
+            inputRef.current?.focus();
+          }
         }
-      }
+      });
     }
   }, [isSelected, shouldFocus, isFocused]);
 
@@ -422,7 +427,7 @@ export function EditableCell({
             {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
           </span>
           {(updateCellMutation.isPending || createCellMutation.isPending) && (
-            <span className="ml-1 text-xs text-gray-400">💾</span>
+            <span className="ml-1 text-xs text-gray-400">Saved</span>
           )}
         </div>
         {/* Hidden input for editing */}
