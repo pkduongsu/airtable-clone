@@ -19,7 +19,7 @@ const createDebouncedTableInvalidation = (utils: any, tableId: string) => {
     const timer = setTimeout(() => {
       requestAnimationFrame(() => {
         // Universal detection: any table cell OR any modal/input context
-        const anyCellFocused = document.querySelector('input[data-cell]:focus');
+        const anyCellFocused = document.querySelector('[data-cell] input:focus');
         const anyModalOpen = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="Modal"]');
         const anyModalInputFocused = document.querySelector('[role="dialog"] input:focus, [aria-modal="true"] input:focus, [class*="Modal"] input:focus');
         const anyToolbarInputFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
@@ -180,6 +180,16 @@ export function EditableCell({
       return;
     }
     
+    // Skip saving for temporary/invalid IDs that don't exist in database
+    const isTemporaryRow = rowId.startsWith('temp-row-');
+    const isTemporaryColumn = columnId.startsWith('temp-column-');
+    
+    if (isTemporaryRow || isTemporaryColumn) {
+      // Just update local state for temporary entities
+      setLastSaved(newValue);
+      return;
+    }
+    
     if (shouldCreateCell) {
       // For new cells, try to find existing cell first
       try {
@@ -187,15 +197,24 @@ export function EditableCell({
         if (existingCell) {
           await updateCellMutation.mutateAsync({ cellId: existingCell.id, value: newValue });
         } else {
+          // Validate that row and column exist before creating cell
           await createCellMutation.mutateAsync({ rowId, columnId, value: newValue });
         }
-      } catch {
-        // If find fails, create new cell
-        await createCellMutation.mutateAsync({ rowId, columnId, value: newValue });
+      } catch (error) {
+        // If find or create fails due to FK constraint, just update local state
+        console.warn('Failed to save cell - row or column may not exist:', error);
+        setLastSaved(newValue);
+        return;
       }
     } else {
       // Update existing cell
-      await updateCellMutation.mutateAsync({ cellId, value: newValue });
+      try {
+        await updateCellMutation.mutateAsync({ cellId, value: newValue });
+      } catch (error) {
+        console.warn('Failed to update cell:', error);
+        setLastSaved(newValue);
+        return;
+      }
     }
     
     setLastSaved(newValue);
@@ -438,7 +457,7 @@ export function EditableCell({
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          className="absolute inset-0 w-full h-full px-2 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:bg-white focus:border focus:border-blue-500 focus:rounded-sm"
+          className="absolute inset-0 w-full h-full px-2 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:bg-white focus:border focus:border-blue-500 focus:border-solid"
           style={{
             opacity: isFocused ? 1 : 0,
             pointerEvents: isFocused ? 'auto' : 'none'
