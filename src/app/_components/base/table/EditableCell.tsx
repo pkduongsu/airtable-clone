@@ -4,6 +4,35 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "~/trpc/react";
 import { useQueryClient } from "@tanstack/react-query";
 
+// Global debounced invalidation to prevent multiple overlapping table refreshes
+const globalInvalidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const createDebouncedTableInvalidation = (utils: any, tableId: string) => {
+  return () => {
+    // Cancel any existing timer for this table
+    const existingTimer = globalInvalidationTimers.get(tableId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    
+    // Set new timer
+    const timer = setTimeout(() => {
+      requestAnimationFrame(() => {
+        // Check if any table cell is focused OR if focus moved to toolbar/search elements
+        const anyCellFocused = document.querySelector('input[data-cell]:focus');
+        const searchBarFocused = document.querySelector('input[type="search"]:focus, input[placeholder*="search" i]:focus, input[placeholder*="Search" i]:focus');
+        const toolbarFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
+        
+        if (!anyCellFocused && !searchBarFocused && !toolbarFocused) {
+          void utils.table.getTableData.invalidate({ tableId });
+        }
+      });
+    }, 1000);
+    
+    globalInvalidationTimers.set(tableId, timer);
+  };
+};
+
 interface EditableCellProps {
   cellId: string;
   tableId: string;
@@ -67,6 +96,12 @@ export function EditableCell({
   const utils = api.useUtils();
   const queryClient = useQueryClient();
   
+  // Use global debounced invalidation shared across all cells
+  const debouncedInvalidateTable = useCallback(
+    createDebouncedTableInvalidation(utils, tableId),
+    [utils, tableId]
+  );
+  
   // Determine if we need to create a new cell
   const shouldCreateCell = cellId?.startsWith('temp-cell-') ?? false;
   
@@ -114,23 +149,9 @@ export function EditableCell({
       }
     },
     onSuccess: () => {
-      // Only invalidate if NO cells are currently being edited in the entire table
-      setTimeout(() => {
-        const anyInputFocused = document.querySelector('input[data-cell]:focus');
-        if (!anyInputFocused) {
-          void utils.table.getTableData.invalidate({ tableId });
-        }
-      }, 500);
+      // Use debounced invalidation to prevent multiple overlapping calls
+      debouncedInvalidateTable();
     },
-    onSettled: () => {
-      // Only invalidate if this is the last mutation and no cells are being edited
-      setTimeout(() => {
-        const anyInputFocused = document.querySelector('input[data-cell]:focus');
-        if (queryClient.isMutating({ mutationKey: ['cell', 'update'] }) === 1 && !anyInputFocused) {
-          void utils.table.getTableData.invalidate({ tableId });
-        }
-      }, 100);
-    }
   });
   
   const createCellMutation = api.cell.create.useMutation({
@@ -147,13 +168,8 @@ export function EditableCell({
       }
     },
     onSuccess: () => {
-      // Only invalidate if NO cells are currently being edited in the entire table
-      setTimeout(() => {
-        const anyInputFocused = document.querySelector('input[data-cell]:focus');
-        if (!anyInputFocused) {
-          void utils.table.getTableData.invalidate({ tableId });
-        }
-      }, 500);
+      // Use debounced invalidation to prevent multiple overlapping calls
+      debouncedInvalidateTable();
     },
   });
 
@@ -199,16 +215,36 @@ export function EditableCell({
     }
   }, [initialValue, isFocused, value, lastSaved, updateCellMutation.isPending, createCellMutation.isPending]);
 
+  // Cleanup global timer on unmount
+  useEffect(() => {
+    return () => {
+      const timer = globalInvalidationTimers.get(tableId);
+      if (timer) {
+        clearTimeout(timer);
+        globalInvalidationTimers.delete(tableId);
+      }
+    };
+  }, [tableId]);
+
   // Focus cell when it becomes selected (click) or when shouldFocus is set (keyboard)
   useEffect(() => {
     if (isSelected && inputRef.current && !isFocused) {
-      if (shouldFocus) {
-        // Keyboard navigation - select all text
-        inputRef.current.focus();
-        inputRef.current.select();
-      } else {
-        // Click navigation - just focus
-        inputRef.current.focus();
+      // Don't auto-focus if user is interacting with toolbar elements
+      const activeElement = document.activeElement;
+      const isToolbarFocused = activeElement && (
+        activeElement.matches('input[type="search"], input[placeholder*="search" i], input[placeholder*="Search" i]') ||
+        activeElement.closest('[role="toolbar"], [data-toolbar]')
+      );
+      
+      if (!isToolbarFocused) {
+        if (shouldFocus) {
+          // Keyboard navigation - select all text
+          inputRef.current.focus();
+          inputRef.current.select();
+        } else {
+          // Click navigation - just focus
+          inputRef.current.focus();
+        }
       }
     }
   }, [isSelected, shouldFocus, isFocused]);
