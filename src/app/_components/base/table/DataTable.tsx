@@ -353,7 +353,6 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
               onSelect={() => handleCellSelection(rowIndex, columnIndex)}
               onDeselect={handleCellDeselection}
-              onFocused={() => setFocusedCell(null)} // Clear focused cell after focus is applied
               rowId={row.id}
               columnId={column.id} // Pass the real column ID directly
               onContextMenu={handleContextMenuClick}

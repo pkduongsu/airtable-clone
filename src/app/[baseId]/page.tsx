@@ -9,7 +9,7 @@ import { api } from "~/trpc/react";
 
 import { Sidebar } from "../_components/base/controls/Sidebar";
 import { NavBar } from "../_components/base/controls/NavBar";
-import { useMutationTracker, MutationTrackerProvider } from "../_components/providers/MutationTracker";
+import { useIsMutating } from "@tanstack/react-query";
 import { EditingStateProvider } from "../_components/providers/EditingStateProvider";
 import { TableTabsBar } from "../_components/base/controls/TableTabsBar";
 import  Toolbar  from "../_components/base/controls/Toolbar";
@@ -17,11 +17,10 @@ import { DataTable } from "../_components/base/table/DataTable";
 import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
 import { SummaryBar } from "../_components/base/controls/SummaryBar";
 import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
-import { type FilterRule } from "../_components/base/modals/FilterModal";
+import { type FilterRule } from "../_components/base/modals/FilterModal";  
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 import { useSortManagement } from "../_components/base/hooks/useSortManagement";
 import { useSortDataProcessor } from "../_components/base/hooks/useSortDataProcessor";
-import { useSortViewIntegration } from "../_components/base/hooks/useSortViewIntegration";
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -90,7 +89,7 @@ function BasePageContent() {
   updateViewMutationRef.current = updateViewMutation.mutate;
 
   // Manual trigger for immediate view saves (view list refresh handled by mutation)
-  const triggerViewSave = useCallback((currentSortRules: any[] = []) => {
+  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = []) => {
     if (currentViewId) {
       setTimeout(() => {
         const config: ViewConfig = {
@@ -106,10 +105,6 @@ function BasePageContent() {
     }
   }, [currentViewId, filterRules, hiddenColumns, updateViewMutationRef]);
 
-  // Specialized function for user-initiated view config updates
-  const triggerViewSaveWithRefresh = () => {
-    triggerViewSave(sortRules);
-  };
 
   // Sort management hooks with save trigger
   const {
@@ -1491,7 +1486,7 @@ function BasePageContent() {
   }, [handleRulesChange]);
 
   // Track all pending mutations for navbar saving indicator
-  const { isMutating: hasActiveMutations } = useMutationTracker();
+  const hasActiveMutations = useIsMutating() > 0;
   
   const isAnythingSaving = useMemo(() => {
     // Check specific table-level mutations
@@ -1734,10 +1729,8 @@ function BasePageContent() {
 
 export default function BasePage() {
   return (
-    <MutationTrackerProvider>
-      <EditingStateProvider>
-        <BasePageContent />
-      </EditingStateProvider>
-    </MutationTrackerProvider>
+    <EditingStateProvider>
+      <BasePageContent />
+    </EditingStateProvider>
   );
 }

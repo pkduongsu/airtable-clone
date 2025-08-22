@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useMutationTracker } from "../providers/MutationTracker";
+import { useIsMutating } from "@tanstack/react-query";
+import { useEditingState } from "../providers/EditingStateProvider";
 
 export function useBeforeUnloadWarning() {
-  const { isMutating } = useMutationTracker();
+  const isMutating = useIsMutating() > 0;
+  const { isAnyCellEditingRef } = useEditingState();
   
   const isMutatingRef = useRef(isMutating);
 
@@ -16,8 +18,9 @@ export function useBeforeUnloadWarning() {
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       const currentlyMutating = isMutatingRef.current;
+      const isAnyCellEditing = isAnyCellEditingRef();
       
-      if (currentlyMutating) {
+      if (currentlyMutating || isAnyCellEditing) {
         // Set the returnValue to trigger the browser's confirmation dialog
         event.returnValue = "Changes that you made may not be saved.";
         
@@ -33,5 +36,5 @@ export function useBeforeUnloadWarning() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, []); // Empty dependency array since we use ref
+  }, [isAnyCellEditingRef]); // Include isAnyCellEditingRef dependency
 }

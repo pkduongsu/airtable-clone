@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useRef, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useRef, useState, useCallback } from "react";
 
 interface EditingSession {
   cellId: string;
