@@ -46,7 +46,6 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
   const inputRef = useRef<HTMLInputElement>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestValueRef = useRef<string>(initialValue);
-  const [pendingMutation, setPendingMutation] = useState(false);
   const [editSessionId, setEditSessionId] = useState<string | null>(null);
   const [pendingValue, setPendingValue] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -375,7 +374,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
     // Additionally, don't update if a mutation is in flight to prevent disrupting optimistic updates
     const isMutationInProgress = updateCellMutation.isPending;
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-    const hasActiveEditingState = isEditing || hasLocalChanges || pendingMutation || editSessionId || pendingValue || editLock;
+    const hasActiveEditingState = isEditing || hasLocalChanges || editSessionId || pendingValue || editLock;
     const isCellCurrentlyEditing = isCellEditing(cellId);
     
     // Prevent updates during any active editing state
@@ -388,7 +387,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       }
     } else if (isMutationInProgress || hasActiveEditingState || isCellCurrentlyEditing || hasPendingSave) {
     }
-  }, [initialValue, isEditing, hasLocalChanges, pendingMutation, editSessionId, pendingValue, editLock, value, cellId, updateCellMutation.isPending, isCellEditing]);
+  }, [initialValue, isEditing, hasLocalChanges, editSessionId, pendingValue, editLock, value, cellId, updateCellMutation.isPending, isCellEditing]);
 
   // Focus input when entering edit mode
   useEffect(() => {
@@ -719,7 +718,7 @@ export function EditableCell({ cellId, tableId, initialValue, className = "", on
       }, 50);
     } else {
       // Normal blur behavior (clicking outside table, etc.) - save normally
-      if (!pendingMutation) {
+      if (!updateCellMutation.isPending) {
         void handleSave();
       }
     }
