@@ -111,7 +111,7 @@ export function useCreateColumn() {
       
       // Only invalidate if there are concurrent mutations as a fallback
       const concurrentMutations = queryClient.isMutating({ mutationKey: ['column', 'create'] });
-      if (concurrentMutations > 1) {
+      if (concurrentMutations === 1) {
         // There are other mutations running, invalidate to ensure consistency
         void utils.table.getTableData.invalidate({ tableId: variables.tableId });
       }

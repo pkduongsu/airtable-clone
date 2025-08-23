@@ -17,6 +17,7 @@ import { TableHeader } from "./TableHeader";
 import { RowNumberHeader } from "./RowNumberHeader";
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
+import { useCellEditTracker } from "../hooks/useCellEditTracker";
 
 // Define the types for our table data based on the actual tRPC return type
 type TableData = {
@@ -109,6 +110,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     position: { x: number; y: number } | null;
     column: { id: string; name: string } | null;
   }>({ isOpen: false, position: null, column: null });
+  const { trackCellEdit, untrackCellEdit, isCellBeingEdited, getCellEditValue, clearAllEdits  } = useCellEditTracker();
 
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
@@ -212,7 +214,6 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
 
       if (e.key === 'Enter') {
         e.preventDefault();
-        // Trigger focus to enter edit mode
         setFocusedCell(selectedCell);
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -362,6 +363,8 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               searchQuery={searchQuery}
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
+              onValueChange={(newValue) => trackCellEdit(cellId, newValue)} //uncomment once editablecell is modified 
+              onEditEnd={() => untrackCellEdit(cellId)}
             />
           );
         },
@@ -380,6 +383,11 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         // Store cell ID for editing
         rowData.__cellIds[cell.columnId] = cell.id;
         
+        const editedValue = getCellEditValue(cell.id);
+
+        if (editedValue !== undefined) {
+          rowData[cell.columnId] = editedValue || '';
+        } else {
         // Handle different value formats from JSON
         const value = cell.value;
         if (value && typeof value === 'object' && 'text' in value) {
@@ -389,6 +397,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         } else {
           rowData[cell.columnId] = '';
         }
+      }
       });
       
       return rowData;
@@ -399,7 +408,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, filterRules, isTableLoading, isTableStabilizing, searchMatchInfo, searchQuery]);
+  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, filterRules, isTableLoading, isTableStabilizing, searchMatchInfo, searchQuery, trackCellEdit, untrackCellEdit, isCellBeingEdited, getCellEditValue]);
 
   const table = useReactTable({
     data,

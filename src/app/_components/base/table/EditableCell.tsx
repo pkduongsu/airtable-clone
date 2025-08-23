@@ -1,37 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { set } from "zod";
 import { api } from "~/trpc/react";
 
-// Global debounced invalidation to prevent multiple overlapping table refreshes
-const globalInvalidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-const createDebouncedTableInvalidation = (utils: ReturnType<typeof api.useUtils>, tableId: string) => {
-  return () => {
-    // Cancel any existing timer for this table
-    const existingTimer = globalInvalidationTimers.get(tableId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-    
-    // Set new timer
-    const timer = setTimeout(() => {
-      requestAnimationFrame(() => {
-        // Universal detection: any table cell OR any modal/input context
-        const anyCellFocused = document.querySelector('[data-cell] input:focus');
-        const anyModalOpen = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="Modal"]');
-        const anyModalInputFocused = document.querySelector('[role="dialog"] input:focus, [aria-modal="true"] input:focus, [class*="Modal"] input:focus');
-        const anyToolbarInputFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
-        
-        if (!anyCellFocused && !anyModalOpen && !anyModalInputFocused && !anyToolbarInputFocused) {
-          void utils.table.getTableData.invalidate({ tableId });
-        }
-      });
-    }, 1000);
-    
-    globalInvalidationTimers.set(tableId, timer);
-  };
-};
 
 interface EditableCellProps {
   cellId: string;
@@ -64,6 +36,8 @@ interface EditableCellProps {
   columnType?: string;
   isTableLoading?: boolean;
   isTableStabilizing?: boolean;
+  onValueChange?: (newValue: string) => void; // Callback for value change
+  onEditEnd?: () => void; // Callback when editing ends
 }
 
 export function EditableCell({ 
@@ -86,27 +60,25 @@ export function EditableCell({
   isCurrentSearchResult = false,
   columnType = "TEXT",
   isTableLoading: _isTableLoading = false,
-  isTableStabilizing: _isTableStabilizing = false
+  isTableStabilizing: _isTableStabilizing = false,
+  onValueChange,
+  onEditEnd
 }: EditableCellProps) {
   const [value, setValue] = useState(initialValue);
   const [lastSaved, setLastSaved] = useState(initialValue);
   const [isFocused, setIsFocused] = useState(false);
+  const [isSavingCell, setIsSavingCell] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   
   const utils = api.useUtils();
 
-  
-  // Use global debounced invalidation shared across all cells
-  const debouncedInvalidateTable = useCallback(() => {
-    return createDebouncedTableInvalidation(utils, tableId)();
-  }, [utils, tableId]);
-  
   // Determine if we need to create a new cell
   const shouldCreateCell = cellId?.startsWith('temp-cell-') ?? false;
   
   const updateCellMutation = api.cell.update.useMutation({
-    mutationKey: ['cell', 'update'],
+    mutationKey: ['cell', 'update', cellId],
     onMutate: async ({ value: newValue }) => {
+      setIsSavingCell(true);
       await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // Optimistically update the cache
@@ -146,15 +118,30 @@ export function EditableCell({
         setValue(context.prevValue);
         setLastSaved(context.prevValue);
       }
+      setIsSavingCell(false);
     },
     onSuccess: () => {
-      // Use debounced invalidation to prevent multiple overlapping calls
-      debouncedInvalidateTable();
+      setIsSavingCell(false);
+      setLastSaved(value);
     },
+    onSettled: () => {
+      setTimeout(() => {
+        if (rowId && columnId) {
+          void utils.cell.findByRowColumn.invalidate({ rowId, columnId });
+        }
+        void utils.table.getTableData.invalidate({ 
+          tableId, 
+          limit: 100,
+          cursor: undefined
+        });
+      }, 1000); // Delay invalidation by 1 second
+    }
   });
   
   const createCellMutation = api.cell.create.useMutation({
+    mutationKey: ['cell', 'create', cellId],
     onMutate: async ({ value: _newValue }) => {
+      setIsSavingCell(true);
       await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // For create, just preserve the local state
@@ -165,10 +152,15 @@ export function EditableCell({
         setValue(context.prevValue);
         setLastSaved(context.prevValue);
       }
+      setIsSavingCell(false);
     },
     onSuccess: () => {
-      // Use debounced invalidation to prevent multiple overlapping calls
-      debouncedInvalidateTable();
+      setIsSavingCell(false);
+      void utils.table.getTableData.invalidate({ 
+        tableId, 
+        limit: 100,
+        cursor: undefined
+      });
     },
   });
 
@@ -187,6 +179,8 @@ export function EditableCell({
       setLastSaved(newValue);
       return;
     }
+
+    setLastSaved(newValue);
     
     if (shouldCreateCell) {
       // For new cells, try to find existing cell first
@@ -214,8 +208,7 @@ export function EditableCell({
         return;
       }
     }
-    
-    setLastSaved(newValue);
+  
   }, [lastSaved, cellId, rowId, columnId, shouldCreateCell, utils.cell.findByRowColumn, updateCellMutation, createCellMutation]);
 
   // Update value when initialValue changes (external data updates)
@@ -225,24 +218,21 @@ export function EditableCell({
   // 3. No pending mutations (not currently saving)
   useEffect(() => {
     const hasUnsavedChanges = value !== lastSaved;
-    const isSaving = updateCellMutation.isPending || createCellMutation.isPending;
     
-    if (!isFocused && !hasUnsavedChanges && !isSaving && initialValue !== value) {
+    if (!isFocused && !hasUnsavedChanges && !isSavingCell && initialValue !== value) {
       setValue(initialValue);
       setLastSaved(initialValue);
     }
-  }, [initialValue, isFocused, value, lastSaved, updateCellMutation.isPending, createCellMutation.isPending]);
+  }, [initialValue, isFocused, value, lastSaved, isSavingCell]);
 
-  // Cleanup global timer on unmount
+  // Add cleanup on unmount:
   useEffect(() => {
     return () => {
-      const timer = globalInvalidationTimers.get(tableId);
-      if (timer) {
-        clearTimeout(timer);
-        globalInvalidationTimers.delete(tableId);
-      }
+      // Ensure we untrack this cell when it unmounts
+      onEditEnd?.();
     };
-  }, [tableId]);
+  }, [onEditEnd]);
+
 
   // Focus cell when it becomes selected (click) or when shouldFocus is set (keyboard)
   useEffect(() => {
@@ -256,28 +246,25 @@ export function EditableCell({
         const activeElement = document.activeElement;
         const isInputElement = activeElement && activeElement.tagName === 'INPUT';
         
-        // Don't steal focus from any input or if any modal is open
-        if (!anyModalOpen && !anyModalInputFocused && !anyToolbarInputFocused && !isInputElement) {
-          if (shouldFocus) {
-            // Keyboard navigation - select all text
-            inputRef.current?.focus();
-            inputRef.current?.select();
-          } else {
-            // Click navigation - just focus
-            inputRef.current?.focus();
-          }
+        // Allow focus if it's a direct navigation action (keyboard)
+        if (shouldFocus && !anyModalOpen && !anyModalInputFocused && !anyToolbarInputFocused && !isInputElement) {
+          inputRef.current?.focus();
+        } else if (!shouldFocus && !isInputElement) {
+          // Click navigation - just focus without selecting
+          inputRef.current?.focus();
         }
+        
       });
     }
   }, [isSelected, shouldFocus, isFocused]);
 
-  // Debounced saving - save 500ms after user stops typing
+  // Debounced saving - save 300ms after user stops typing
   useEffect(() => {
     if (value === lastSaved || value === initialValue) return;
     
     const timer = setTimeout(() => {
       void saveToServer(value);
-    }, 500);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [value, lastSaved, initialValue, saveToServer]);
@@ -292,11 +279,13 @@ export function EditableCell({
     }
 
     setValue(newValue);
+    onValueChange?.(newValue);
   };
 
   const handleFocus = () => {
     if (!isFocused) {
       setIsFocused(true);
+      onValueChange?.(value); // Notify focus with current value
     }
   };
   
@@ -318,6 +307,11 @@ export function EditableCell({
 
   const handleBlur = () => {
     setIsFocused(false);
+    onEditEnd?.(); //notify edit has ended
+
+     if (value !== lastSaved) {
+      void saveToServer(value);
+    }
   };
 
   // Handle key navigation
@@ -336,6 +330,7 @@ export function EditableCell({
       case 'Escape':
         e.preventDefault();
         setValue(lastSaved);
+        onValueChange?.(lastSaved);
         inputRef.current?.blur();
         break;
       case 'ArrowUp':
@@ -443,9 +438,6 @@ export function EditableCell({
           <span className={`${(updateCellMutation.isPending || createCellMutation.isPending) ? 'opacity-70' : ''}`}>
             {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
           </span>
-          {(updateCellMutation.isPending || createCellMutation.isPending) && (
-            <span className="ml-1 text-xs text-gray-400">Saved</span>
-          )}
         </div>
         {/* Hidden input for editing */}
         <input

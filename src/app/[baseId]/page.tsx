@@ -446,8 +446,6 @@ function BasePageContent() {
 
   // updateViewMutation moved up before sort handlers
 
-
-
   // Get views for selected table - only called on initial load and explicit user interactions
   const { data: views, refetch: refetchViews } = api.view.list.useQuery(
     { tableId: selectedTable! },
@@ -459,7 +457,6 @@ function BasePageContent() {
       refetchInterval: false,
     }
   );
-
 
   // NO AUTO-SAVE: View configurations will only be saved on explicit user interactions
 
@@ -539,7 +536,6 @@ function BasePageContent() {
   // Row type is defined in the useFilterManagement hook
 
   // Client-side filtering function is now provided by useFilterManagement hook
-
 
   // Process table data with sorting and filtering
   const baseTableData = useMemo(() => {
@@ -782,8 +778,6 @@ function BasePageContent() {
                     hiddenColumns={hiddenColumns}
                     sortRules={sortRules}
                     filterRules={filterRules}
-                    isTableLoading={isInitialLoading}
-                    isTableStabilizing={isTableStabilizing}
                     searchResults={searchResults}
                     currentSearchIndex={currentSearchIndex}
                     searchQuery={searchQuery}
