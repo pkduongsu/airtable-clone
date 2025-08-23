@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "~/trpc/react";
 
 
 interface EditableCellProps {
-  cellId: string;
   tableId: string;
   initialValue: string;
   className?: string;
@@ -14,8 +13,8 @@ interface EditableCellProps {
   isSelected?: boolean;
   onSelect?: () => void;
   onDeselect?: () => void;
-  rowId?: string;
-  columnId?: string;
+  rowId: string;
+  columnId: string;
   onContextMenu?: (event: React.MouseEvent, rowId: string) => void;
   sortRules?: Array<{
     columnId: string;
@@ -35,12 +34,9 @@ interface EditableCellProps {
   columnType?: string;
   isTableLoading?: boolean;
   isTableStabilizing?: boolean;
-  onValueChange?: (newValue: string) => void; // Callback for value change
-  onEditEnd?: () => void; // Callback when editing ends
 }
 
 export function EditableCell({ 
-  cellId, 
   tableId, 
   initialValue, 
   className = "", 
@@ -60,8 +56,6 @@ export function EditableCell({
   columnType = "TEXT",
   isTableLoading: _isTableLoading = false,
   isTableStabilizing: _isTableStabilizing = false,
-  onValueChange,
-  onEditEnd
 }: EditableCellProps) {
   const [value, setValue] = useState(initialValue);
   const [lastSaved, setLastSaved] = useState(initialValue);
@@ -71,51 +65,19 @@ export function EditableCell({
   
   const utils = api.useUtils();
 
-  // Determine if we need to create a new cell
-  const shouldCreateCell = cellId?.startsWith('temp-cell-') ?? false;
   
   const updateCellMutation = api.cell.update.useMutation({
-    mutationKey: ['cell', 'update', cellId],
-    onMutate: async ({ value: newValue }) => {
+    mutationKey: ['cell', 'update', { rowId, columnId }],
+    onMutate: async () => {
       setIsSavingCell(true);
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
-      
-      // Optimistically update the cache
-      const previousData = utils.table.getTableData.getInfiniteData({ tableId, limit: 100 });
-      
-      utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
-        if (!old) return old;
-        
-        return {
-          ...old,
-          pages: old.pages.map(page => ({
-            ...page,
-            rows: page.rows.map(row => {
-              const targetCell = row.cells.find(cell => cell.id === cellId);
-              if (!targetCell) return row;
-              
-              return {
-                ...row,
-                cells: row.cells.map(cell => 
-                  cell.id === cellId 
-                    ? { ...cell, value: { text: newValue } }
-                    : cell
-                )
-              };
-            })
-          }))
-        };
-      });
-      
-      return { previousData, prevValue: lastSaved };
+      await utils.table.getById.cancel();
+      await utils.cell.findByRowColumn.cancel();
+
+      return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
-      if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, context.previousData);
-      }
       if (context?.prevValue) {
         setValue(context.prevValue);
-        setLastSaved(context.prevValue);
       }
       setIsSavingCell(false);
     },
@@ -128,111 +90,11 @@ export function EditableCell({
         if (rowId && columnId) {
           void utils.cell.findByRowColumn.invalidate({ rowId, columnId });
         }
-        void utils.table.getTableData.invalidate({ 
-          tableId, 
-          limit: 100,
-          cursor: undefined
-        });
+        void utils.table.getById.invalidate({ id: tableId });
       }, 1000); // Delay invalidation by 1 second
     }
   });
   
-  const createCellMutation = api.cell.create.useMutation({
-    mutationKey: ['cell', 'create', cellId],
-    onMutate: async ({ value: _newValue }) => {
-      setIsSavingCell(true);
-      await utils.table.getTableData.cancel({ tableId, limit: 100 });
-      
-      // For create, just preserve the local state
-      return { prevValue: lastSaved };
-    },
-    onError: (err, _, context) => {
-      if (context?.prevValue) {
-        setValue(context.prevValue);
-        setLastSaved(context.prevValue);
-      }
-      setIsSavingCell(false);
-    },
-    onSuccess: () => {
-      setIsSavingCell(false);
-      void utils.table.getTableData.invalidate({ 
-        tableId, 
-        limit: 100,
-        cursor: undefined
-      });
-    },
-  });
-
-  // Save function with server logic
-  const saveToServer = useCallback(async (newValue: string) => {
-    if (newValue === lastSaved || !cellId || !rowId || !columnId) {
-      return;
-    }
-    
-    // Skip saving for temporary/invalid IDs that don't exist in database
-    const isTemporaryRow = rowId.startsWith('temp-row-');
-    const isTemporaryColumn = columnId.startsWith('temp-column-');
-    
-    if (isTemporaryRow || isTemporaryColumn) {
-      // Just update local state for temporary entities
-      setLastSaved(newValue);
-      return;
-    }
-
-    setLastSaved(newValue);
-    
-    if (shouldCreateCell) {
-      // For new cells, try to find existing cell first
-      try {
-        const existingCell = await utils.cell.findByRowColumn.fetch({ rowId, columnId });
-        if (existingCell) {
-          await updateCellMutation.mutateAsync({ cellId: existingCell.id, value: newValue });
-        } else {
-          // Validate that row and column exist before creating cell
-          await createCellMutation.mutateAsync({ rowId, columnId, value: newValue });
-        }
-      } catch (error) {
-        // If find or create fails due to FK constraint, just update local state
-        console.warn('Failed to save cell - row or column may not exist:', error);
-        setLastSaved(newValue);
-        return;
-      }
-    } else {
-      // Update existing cell
-      try {
-        await updateCellMutation.mutateAsync({ cellId, value: newValue });
-      } catch (error) {
-        console.warn('Failed to update cell:', error);
-        setLastSaved(newValue);
-        return;
-      }
-    }
-  
-  }, [lastSaved, cellId, rowId, columnId, shouldCreateCell, utils.cell.findByRowColumn, updateCellMutation, createCellMutation]);
-
-  // Update value when initialValue changes (external data updates)
-  // Only update if:
-  // 1. Cell is not currently focused (user not actively editing)
-  // 2. No unsaved changes (value equals lastSaved)
-  // 3. No pending mutations (not currently saving)
-  useEffect(() => {
-    const hasUnsavedChanges = value !== lastSaved;
-    
-    if (!isFocused && !hasUnsavedChanges && !isSavingCell && initialValue !== value) {
-      setValue(initialValue);
-      setLastSaved(initialValue);
-    }
-  }, [initialValue, isFocused, value, lastSaved, isSavingCell]);
-
-  // Add cleanup on unmount:
-  useEffect(() => {
-    return () => {
-      // Ensure we untrack this cell when it unmounts
-      onEditEnd?.();
-    };
-  }, [onEditEnd]);
-
-
   // Focus cell when it becomes selected (click) or when shouldFocus is set (keyboard)
   useEffect(() => {
     if (isSelected && inputRef.current && !isFocused) {
@@ -259,14 +121,25 @@ export function EditableCell({
 
   // Debounced saving - save 300ms after user stops typing
   useEffect(() => {
-    if (value === lastSaved || value === initialValue) return;
-    
     const timer = setTimeout(() => {
-      void saveToServer(value);
-    }, 300);
+      if (value !== lastSaved) {
+        void updateCellMutation.mutateAsync({ columnId, rowId, value})
+      }
+    }, 500);
 
     return () => clearTimeout(timer);
-  }, [value, lastSaved, initialValue, saveToServer]);
+  }, [value, lastSaved, columnId, rowId, updateCellMutation]);
+
+  
+  //triggers when database resets and initialValue changes to the newest in db
+  useEffect(() => {
+    setValue(initialValue);
+    setLastSaved(initialValue);
+  }, [initialValue]);
+
+  const handleBlur = () => {
+    setIsFocused(false);
+  };
 
   // Handle input change with validation
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -278,13 +151,12 @@ export function EditableCell({
     }
 
     setValue(newValue);
-    onValueChange?.(newValue);
   };
+
 
   const handleFocus = () => {
     if (!isFocused) {
       setIsFocused(true);
-      onValueChange?.(value); // Notify focus with current value
     }
   };
   
@@ -304,14 +176,6 @@ export function EditableCell({
     }, 0);
   };
 
-  const handleBlur = () => {
-    setIsFocused(false);
-    onEditEnd?.(); //notify edit has ended
-
-     if (value !== lastSaved) {
-      void saveToServer(value);
-    }
-  };
 
   // Handle key navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -329,7 +193,6 @@ export function EditableCell({
       case 'Escape':
         e.preventDefault();
         setValue(lastSaved);
-        onValueChange?.(lastSaved);
         inputRef.current?.blur();
         break;
       case 'ArrowUp':
@@ -429,12 +292,11 @@ export function EditableCell({
         <div 
           className={getCellClassName()}
           onClick={handleClick} // Click to select and focus input
-          onDoubleClick={handleDoubleClick} // Double click to focus input  
+          onDoubleClick={handleDoubleClick} 
           onContextMenu={handleContextMenu}
           data-cell="true"
-          data-cell-id={cellId}
         >
-          <span className={`${(updateCellMutation.isPending || createCellMutation.isPending) ? 'opacity-70' : ''}`}>
+          <span className={`${(updateCellMutation.isPending ) ? 'opacity-70' : ''}`}>
             {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
           </span>
         </div>

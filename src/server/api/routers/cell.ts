@@ -43,14 +43,20 @@ export const cellRouter = createTRPCRouter({
 
   update: protectedProcedure
     .input(z.object({
-      cellId: z.string(),
+      rowId: z.string().min(1),
+      columnId: z.string().min(1),
       value: z.union([z.string(), z.number(), z.object({ text: z.string() })]),
     }))
     .mutation(async ({ ctx, input }) => {
       // Try to update the cell value
       try {
         const cell = await ctx.db.cell.update({
-          where: { id: input.cellId },
+          where: { 
+            rowId_columnId: {
+              rowId: input.rowId,
+              columnId: input.columnId,
+            }
+          },
           data: { 
             value: typeof input.value === 'string' 
               ? { text: input.value }
