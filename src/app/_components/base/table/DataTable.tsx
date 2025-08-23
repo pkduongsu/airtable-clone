@@ -363,7 +363,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
               searchQuery={searchQuery}
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
-              onValueChange={(newValue) => trackCellEdit(cellId, newValue)} //uncomment once editablecell is modified 
+              onValueChange={(newValue) => trackCellEdit(cellId, newValue)} 
               onEditEnd={() => untrackCellEdit(cellId)}
             />
           );
