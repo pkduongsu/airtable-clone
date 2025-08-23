@@ -3,7 +3,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useQueryClient } from "@tanstack/react-query";
 
 import { api } from "~/trpc/react";
 
@@ -21,7 +20,9 @@ import { type FilterRule } from "../_components/base/modals/FilterModal";
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 import { useSortManagement } from "../_components/base/hooks/useSortManagement";
 import { useSortDataProcessor } from "../_components/base/hooks/useSortDataProcessor";
-import { useCreateRow } from "../_components/base/hooks/useCreateRow";
+import { useRowMutations } from "../_components/base/hooks/useRowMutations";
+import { useFilterManagement } from "../_components/base/hooks/useFilterManagement";
+import { useColumnMutations } from "../_components/base/hooks/useColumnMutations";
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -61,15 +62,13 @@ function BasePageContent() {
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Filter state
-  const [filterRules, setFilterRules] = useState<FilterRule[]>([]);
+  // Filter state will be managed by useFilterManagement hook
 
   // View state
   const [currentViewId, setCurrentViewId] = useState<string | null>(null);
   const [isViewSwitching, setIsViewSwitching] = useState(false);
 
   const utils = api.useUtils();
-  const queryClient = useQueryClient();
   
   // View update mutation
   const updateViewMutation = api.view.update.useMutation({
@@ -90,12 +89,13 @@ function BasePageContent() {
   updateViewMutationRef.current = updateViewMutation.mutate;
 
   // Manual trigger for immediate view saves (view list refresh handled by mutation)
-  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = []) => {
+  // Note: filterRules will be passed as parameter to avoid dependency issues
+  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = [], currentFilterRules: FilterRule[] = []) => {
     if (currentViewId) {
       setTimeout(() => {
         const config: ViewConfig = {
           sortRules: currentSortRules,
-          filterRules,
+          filterRules: currentFilterRules,
           hiddenColumns: Array.from(hiddenColumns),
         };
         updateViewMutationRef.current({
@@ -104,7 +104,7 @@ function BasePageContent() {
         });
       }, 100);
     }
-  }, [currentViewId, filterRules, hiddenColumns, updateViewMutationRef]);
+  }, [currentViewId, hiddenColumns, updateViewMutationRef]);
 
 
   // Sort management hooks with save trigger
@@ -125,7 +125,7 @@ function BasePageContent() {
       const updatedSortRules = sortRules.map(rule => 
         rule.id === ruleId ? { ...rule, direction } : rule
       );
-      triggerViewSave(updatedSortRules);
+      triggerViewSave(updatedSortRules, filterRulesRef.current);
     }, 100);
   }, [originalHandleUpdateSortRule, sortRules, triggerViewSave]);
 
@@ -133,7 +133,7 @@ function BasePageContent() {
     originalHandleRemoveSortRule(ruleId);
     setTimeout(() => {
       const updatedSortRules = sortRules.filter(rule => rule.id !== ruleId);
-      triggerViewSave(updatedSortRules);
+      triggerViewSave(updatedSortRules, filterRulesRef.current);
     }, 100);
   }, [originalHandleRemoveSortRule, sortRules, triggerViewSave]);
 
@@ -148,7 +148,7 @@ function BasePageContent() {
         columnType,
       };
       const updatedSortRules = [...sortRules, newRule];
-      triggerViewSave(updatedSortRules);
+      triggerViewSave(updatedSortRules, filterRulesRef.current);
     }, 100);
   }, [originalHandleAddSortRule, sortRules, triggerViewSave]);
 
@@ -158,9 +158,25 @@ function BasePageContent() {
       const updatedSortRules = sortRules.map(rule => 
         rule.id === ruleId ? { ...rule, columnId, columnName, columnType } : rule
       );
-      triggerViewSave(updatedSortRules);
+      triggerViewSave(updatedSortRules, filterRulesRef.current);
     }, 100);
   }, [originalHandleUpdateSortRuleField, sortRules, triggerViewSave]);
+
+  // Filter management hook (after dependencies are defined)
+  const {
+    filterRules,
+    applyClientSideFilters,
+    updateFilterRules,
+    handleUpdateFilterRule,
+    handleRemoveFilterRule,
+    handleAddFilterRule,
+    handleUpdateFilterRuleField,
+    handleUpdateLogicOperator,
+  } = useFilterManagement({ triggerViewSave, sortRules });
+
+  // Create ref for filterRules to use in sort handlers
+  const filterRulesRef = useRef<FilterRule[]>([]);
+  filterRulesRef.current = filterRules;
 
   // Search state
   const [searchResults, setSearchResults] = useState<Array<{
@@ -271,22 +287,18 @@ function BasePageContent() {
   const updateTableMutation = api.table.update.useMutation();
   const deleteTableMutation = api.table.delete.useMutation();
   
-  const { handleCreateRow, createRowMutation } = useCreateRow();
-
-  const bulkInsertRowsMutation = api.row.bulkInsert.useMutation({
-    mutationKey: ['row', 'bulk-insert'],
-    onError: () => {
-      setIsBulkLoading(false);
-    },
-    onSuccess: (data, variables) => {
-      setIsBulkLoading(false);
-      // Only invalidate if this is the only bulk mutation running
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'bulk-insert'] });
-      if (concurrentMutations === 1) {
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
-    }
-  });
+  const {
+    createRowMutation,
+    bulkInsertRowsMutation,
+    insertRowAboveMutation,
+    insertRowBelowMutation,
+    deleteRowMutation,
+    handleAddRow: handleAddRowFromHook,
+    handleInsertRowAbove,
+    handleInsertRowBelow,
+    handleDeleteRow,
+    handleBulkAddRows,
+  } = useRowMutations();
 
   const handleCreateTable = async () => {
     try {
@@ -354,675 +366,10 @@ function BasePageContent() {
   };
 
   const handleAddRow = async () => {
-    if (!selectedTable) return;
-    
-    try {
-      await handleCreateRow(selectedTable);
-    } catch (error) {
-      console.error('Failed to create row:', error);
-    }
+    return handleAddRowFromHook(selectedTable);
   };
 
-  const insertRowAboveMutation = api.row.insertAbove.useMutation({
-    mutationKey: ['row', 'insert'],
-    onMutate: async ({ tableId, targetRowId }) => {
-      // Cancel any outgoing refetches that could interfere with optimistic updates
-      await Promise.all([
-        utils.table.getTableData.cancel({ 
-          tableId, 
-          limit: 100
-        }),
-        // Cancel cell queries that might interfere
-        queryClient.cancelQueries({ 
-          queryKey: ['trpc', 'cell', 'findByRowColumn']
-        })
-      ]);
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ 
-        tableId, 
-        limit: 100
-      });
-      
-      // Generate temporary IDs
-      const tempRowId = `temp-row-above-${Date.now()}`;
-      
-      // Optimistically update the cache
-      if (previousData && previousData.pages.length > 0) {
-        const firstPage = previousData.pages[0];
-        if (firstPage) {
-          // Find the target row to determine its order
-          const targetRow = previousData.pages
-            .flatMap(page => page.rows)
-            .find(row => row.id === targetRowId);
-          
-          if (targetRow) {
-            const newOrder = targetRow.order;
-            
-            // Create empty cells for all existing columns
-            const newCells = firstPage.columns.map(column => ({
-              id: `temp-cell-${tempRowId}-${column.id}`,
-              rowId: tempRowId,
-              columnId: column.id,
-              value: { text: "" },
-              column,
-            }));
-            
-            const newRow = {
-              id: tempRowId,
-              tableId,
-              order: newOrder,
-              cells: newCells,
-            };
-            
-            // Update all pages to insert the row and adjust orders
-            utils.table.getTableData.setInfiniteData({ 
-              tableId, 
-              limit: 100
-            }, (old) => {
-              if (!old) return old;
-              
-              const updatedPages = old.pages.map(page => ({
-                ...page,
-                rows: page.rows.map(row => 
-                  row.order >= newOrder 
-                    ? { ...row, order: row.order + 1 }
-                    : row
-                ).concat(newRow).sort((a, b) => a.order - b.order),
-                _count: {
-                  ...page._count,
-                  rows: page._count.rows + 1,
-                }
-              }));
-              
-              return {
-                ...old,
-                pages: updatedPages,
-              };
-            });
-          }
-        }
-      }
-      
-      return { previousData, tempRowId };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, context.previousData);
-      }
-    },
-    onSuccess: (data, variables, context) => {
-      // Update optimistic data with real server IDs instead of invalidating
-      if (context?.tempRowId && data?.id) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            pages: old.pages.map(page => ({
-              ...page,
-              rows: page.rows.map(row => 
-                row.id === context.tempRowId
-                  ? {
-                      ...row,
-                      id: data.id, // Update to real server ID
-                      // Update all cell rowId references
-                      cells: row.cells.map(cell => ({
-                        ...cell,
-                        rowId: data.id,
-                        // Update cell ID if it was temporary
-                        id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
-                          ? `temp-cell-${data.id}-${cell.columnId}`
-                          : cell.id
-                      }))
-                    }
-                  : row
-              )
-            }))
-          };
-        });
-      }
-      
-      // Only invalidate if there are concurrent mutations as a fallback
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'insert'] });
-      if (concurrentMutations > 1) {
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
-    }
-  });
-
-  const insertRowBelowMutation = api.row.insertBelow.useMutation({
-    mutationKey: ['row', 'insert'],
-    onMutate: async ({ tableId, targetRowId }) => {
-      // Cancel any outgoing refetches that could interfere with optimistic updates
-      await Promise.all([
-        utils.table.getTableData.cancel({ 
-          tableId, 
-          limit: 100
-        }),
-        // Cancel cell queries that might interfere
-        queryClient.cancelQueries({ 
-          queryKey: ['trpc', 'cell', 'findByRowColumn']
-        })
-      ]);
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ 
-        tableId, 
-        limit: 100
-      });
-      
-      // Generate temporary IDs
-      const tempRowId = `temp-row-below-${Date.now()}`;
-      
-      // Optimistically update the cache
-      if (previousData && previousData.pages.length > 0) {
-        const firstPage = previousData.pages[0];
-        if (firstPage) {
-          // Find the target row to determine its order
-          const targetRow = previousData.pages
-            .flatMap(page => page.rows)
-            .find(row => row.id === targetRowId);
-          
-          if (targetRow) {
-            const newOrder = targetRow.order + 1;
-            
-            // Create empty cells for all existing columns
-            const newCells = firstPage.columns.map(column => ({
-              id: `temp-cell-${tempRowId}-${column.id}`,
-              rowId: tempRowId,
-              columnId: column.id,
-              value: { text: "" },
-              column,
-            }));
-            
-            const newRow = {
-              id: tempRowId,
-              tableId,
-              order: newOrder,
-              cells: newCells,
-            };
-            
-            // Update all pages to insert the row and adjust orders
-            utils.table.getTableData.setInfiniteData({ 
-              tableId, 
-              limit: 100
-            }, (old) => {
-              if (!old) return old;
-              
-              const updatedPages = old.pages.map(page => ({
-                ...page,
-                rows: page.rows.map(row => 
-                  row.order >= newOrder 
-                    ? { ...row, order: row.order + 1 }
-                    : row
-                ).concat(newRow).sort((a, b) => a.order - b.order),
-                _count: {
-                  ...page._count,
-                  rows: page._count.rows + 1,
-                }
-              }));
-              
-              return {
-                ...old,
-                pages: updatedPages,
-              };
-            });
-          }
-        }
-      }
-      
-      return { previousData, tempRowId };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, context.previousData);
-      }
-    },
-    onSuccess: (data, variables, context) => {
-      // Update optimistic data with real server IDs instead of invalidating
-      if (context?.tempRowId && data?.id) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            pages: old.pages.map(page => ({
-              ...page,
-              rows: page.rows.map(row => 
-                row.id === context.tempRowId
-                  ? {
-                      ...row,
-                      id: data.id, // Update to real server ID
-                      // Update all cell rowId references
-                      cells: row.cells.map(cell => ({
-                        ...cell,
-                        rowId: data.id,
-                        // Update cell ID if it was temporary
-                        id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
-                          ? `temp-cell-${data.id}-${cell.columnId}`
-                          : cell.id
-                      }))
-                    }
-                  : row
-              )
-            }))
-          };
-        });
-      }
-      
-      // Only invalidate if there are concurrent mutations as a fallback
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'insert'] });
-      if (concurrentMutations > 1) {
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
-    }
-  });
-
-  const deleteRowMutation = api.row.delete.useMutation({
-    mutationKey: ['row', 'delete'],
-    onMutate: async ({ tableId, rowId }) => {
-      // Cancel any outgoing refetches that could interfere with optimistic updates
-      await Promise.all([
-        utils.table.getTableData.cancel({ 
-          tableId, 
-          limit: 100
-        }),
-        // Cancel cell queries that might interfere
-        queryClient.cancelQueries({ 
-          queryKey: ['trpc', 'cell', 'findByRowColumn']
-        })
-      ]);
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ 
-        tableId, 
-        limit: 100
-      });
-      
-      // Optimistically update the cache
-      if (previousData && previousData.pages.length > 0) {
-        // Find the target row to determine its order
-        const targetRow = previousData.pages
-          .flatMap(page => page.rows)
-          .find(row => row.id === rowId);
-        
-        if (targetRow) {
-          const deletedOrder = targetRow.order;
-          
-          // Update all pages to remove the row and adjust orders
-          utils.table.getTableData.setInfiniteData({ 
-            tableId, 
-            limit: 100
-          }, (old) => {
-            if (!old) return old;
-            
-            const updatedPages = old.pages.map(page => ({
-              ...page,
-              rows: page.rows
-                .filter(row => row.id !== rowId)
-                .map(row => 
-                  row.order > deletedOrder 
-                    ? { ...row, order: row.order - 1 }
-                    : row
-                ),
-              _count: {
-                ...page._count,
-                rows: Math.max(0, page._count.rows - 1),
-              }
-            }));
-            
-            return {
-              ...old,
-              pages: updatedPages,
-            };
-          });
-        }
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, context.previousData);
-      }
-    },
-    onSuccess: (data, variables) => {
-      // Only invalidate if this is the only row mutation running to prevent over-invalidation
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'delete'] });
-      if (concurrentMutations === 1) {
-        // Safe to invalidate related queries
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
-    }
-  });
-
-  const renameColumnMutation = api.column.rename.useMutation({
-    mutationKey: ['column', 'rename'],
-    onMutate: async ({ columnId, name }) => {
-      if (!selectedTable) return { previousData: undefined };
-
-      // Cancel any outgoing refetches that could interfere with optimistic updates
-      await Promise.all([
-        utils.table.getTableData.cancel({ 
-          tableId: selectedTable, 
-          limit: 100
-        }),
-        // Cancel cell queries that might interfere with column renaming
-        queryClient.cancelQueries({ 
-          queryKey: ['trpc', 'cell', 'findByRowColumn']
-        })
-      ]);
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ 
-        tableId: selectedTable, 
-        limit: 100
-      });
-      
-      // Optimistically update the cache
-      if (previousData && previousData.pages.length > 0) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: selectedTable, 
-          limit: 100
-        }, (old) => {
-          if (!old) return old;
-          
-          const updatedPages = old.pages.map(page => ({
-            ...page,
-            columns: page.columns.map(col => 
-              col.id === columnId ? { ...col, name } : col
-            ),
-            rows: page.rows.map(row => ({
-              ...row,
-              cells: row.cells.map(cell => 
-                cell.columnId === columnId 
-                  ? { ...cell, column: { ...cell.column, name } }
-                  : cell
-              )
-            }))
-          }));
-          
-          return {
-            ...old,
-            pages: updatedPages,
-          };
-        });
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData && selectedTable) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: selectedTable, 
-          limit: 100
-        }, context.previousData);
-      }
-    },
-    onSuccess: () => {
-      // Only invalidate if this is the only column mutation running to prevent over-invalidation
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['column', 'rename'] });
-      if (concurrentMutations === 1 && selectedTable) {
-        // Safe to invalidate related queries
-        void utils.table.getTableData.invalidate({ tableId: selectedTable });
-      }
-    }
-  });
-
-  const deleteColumnMutation = api.column.delete.useMutation({
-    mutationKey: ['column', 'delete'],
-    onMutate: async ({ columnId }) => {
-      if (!selectedTable) return { previousData: undefined };
-
-      // Cancel any outgoing refetches that could interfere with optimistic updates
-      await Promise.all([
-        utils.table.getTableData.cancel({ 
-          tableId: selectedTable, 
-          limit: 100
-        }),
-        // Cancel cell queries that might interfere with column deletion
-        queryClient.cancelQueries({ 
-          queryKey: ['trpc', 'cell', 'findByRowColumn']
-        })
-      ]);
-      
-      // Snapshot the previous value
-      const previousData = utils.table.getTableData.getInfiniteData({ 
-        tableId: selectedTable, 
-        limit: 100
-      });
-      
-      // Optimistically update the cache
-      if (previousData && previousData.pages.length > 0) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: selectedTable, 
-          limit: 100
-        }, (old) => {
-          if (!old) return old;
-          
-          const updatedPages = old.pages.map(page => ({
-            ...page,
-            columns: page.columns.filter(col => col.id !== columnId),
-            rows: page.rows.map(row => ({
-              ...row,
-              cells: row.cells.filter(cell => cell.columnId !== columnId)
-            }))
-          }));
-          
-          return {
-            ...old,
-            pages: updatedPages,
-          };
-        });
-      }
-      
-      return { previousData };
-    },
-    onError: (err, variables, context) => {
-      // Revert to the previous value on error
-      if (context?.previousData && selectedTable) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: selectedTable, 
-          limit: 100
-        }, context.previousData);
-      }
-    },
-    onSuccess: () => {
-      // Only invalidate if this is the only column mutation running to prevent over-invalidation
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['column', 'delete'] });
-      if (concurrentMutations === 1 && selectedTable) {
-        // Safe to invalidate related queries
-        void utils.table.getTableData.invalidate({ tableId: selectedTable });
-      }
-    }
-  });
-
-  const handleInsertRowAbove = async (tableId: string, rowId: string) => {
-    try {
-      // Check if this is a temporary row ID from optimistic updates
-      if (rowId.startsWith('temp-row-')) {
-        // For temporary rows, find the closest real row and use its position
-        const currentData = utils.table.getTableData.getInfiniteData({ 
-          tableId, 
-          limit: 100
-        });
-        
-        if (currentData && currentData.pages.length > 0) {
-          const allRows = currentData.pages.flatMap(page => page.rows);
-          const targetRowIndex = allRows.findIndex(row => row.id === rowId);
-          
-          if (targetRowIndex >= 0) {
-            // Find the closest real (non-temporary) row before this position
-            let realRowId = null;
-            for (let i = targetRowIndex - 1; i >= 0; i--) {
-              if (!allRows[i]!.id.startsWith('temp-row-')) {
-                realRowId = allRows[i]!.id;
-                break;
-              }
-            }
-            
-            if (realRowId) {
-              // Insert below the found real row (which will be above the temp row)
-              await insertRowBelowMutation.mutateAsync({ tableId, targetRowId: realRowId });
-              return;
-            } else {
-              // No real rows found above, just create a new row at the end
-              await handleCreateRow(tableId);
-              return;
-            }
-          }
-        }
-        
-        // Fallback: create a new row at the end if we can't determine position
-        await handleCreateRow(tableId);
-        return;
-      }
-      
-      await insertRowAboveMutation.mutateAsync({ tableId, targetRowId: rowId });
-    } catch (error) {
-      console.error('Failed to insert row above:', error);
-    }
-  };
-
-  const handleInsertRowBelow = async (tableId: string, rowId: string) => {
-    try {
-      // Check if this is a temporary row ID from optimistic updates
-      if (rowId.startsWith('temp-row-')) {
-        // For temporary rows, find the closest real row and use its position
-        const currentData = utils.table.getTableData.getInfiniteData({ 
-          tableId, 
-          limit: 100
-        });
-        
-        if (currentData && currentData.pages.length > 0) {
-          const allRows = currentData.pages.flatMap(page => page.rows);
-          const targetRowIndex = allRows.findIndex(row => row.id === rowId);
-          
-          if (targetRowIndex >= 0) {
-            // Find the closest real (non-temporary) row after this position
-            let realRowId = null;
-            for (let i = targetRowIndex + 1; i < allRows.length; i++) {
-              if (!allRows[i]!.id.startsWith('temp-row-')) {
-                realRowId = allRows[i]!.id;
-                break;
-              }
-            }
-            
-            if (realRowId) {
-              // Insert above the found real row (which will be below the temp row)
-              await insertRowAboveMutation.mutateAsync({ tableId, targetRowId: realRowId });
-              return;
-            } else {
-              // No real rows found below, just create a new row at the end
-              await handleCreateRow(tableId);
-              return;
-            }
-          }
-        }
-        
-        // Fallback: create a new row at the end if we can't determine position
-        await handleCreateRow(tableId);
-        return;
-      }
-      
-      await insertRowBelowMutation.mutateAsync({ tableId, targetRowId: rowId });
-    } catch (error) {
-      console.error('Failed to insert row below:', error);
-    }
-  };
-
-  const handleDeleteRow = async (tableId: string, rowId: string) => {
-    try {
-      // Check if this is a temporary row ID from optimistic updates
-      if (rowId.startsWith('temp-row-')) {
-        // For temporary rows, just remove them from the cache without server call
-        const currentData = utils.table.getTableData.getInfiniteData({ 
-          tableId, 
-          limit: 100
-        });
-        
-        if (currentData && currentData.pages.length > 0) {
-          // Find the target row to determine its order
-          const targetRow = currentData.pages
-            .flatMap(page => page.rows)
-            .find(row => row.id === rowId);
-          
-          if (targetRow) {
-            const deletedOrder = targetRow.order;
-            
-            // Update the cache to remove the temporary row
-            utils.table.getTableData.setInfiniteData({ 
-              tableId, 
-              limit: 100
-            }, (old) => {
-              if (!old) return old;
-              
-              const updatedPages = old.pages.map(page => ({
-                ...page,
-                rows: page.rows
-                  .filter(row => row.id !== rowId)
-                  .map(row => 
-                    row.order > deletedOrder 
-                      ? { ...row, order: row.order - 1 }
-                      : row
-                  ),
-                _count: {
-                  ...page._count,
-                  rows: Math.max(0, page._count.rows - 1),
-                }
-              }));
-              
-              return {
-                ...old,
-                pages: updatedPages,
-              };
-            });
-          }
-        }
-        return;
-      }
-      
-      await deleteRowMutation.mutateAsync({ tableId, rowId });
-    } catch (error) {
-      console.error('Failed to delete row:', error);
-    }
-  };
-
-  const handleRenameColumn = async (columnId: string, newName: string) => {
-    try {
-      await renameColumnMutation.mutateAsync({ columnId, name: newName });
-    } catch (error) {
-      console.error('Failed to rename column:', error);
-    }
-  };
-
-  const handleDeleteColumn = async (columnId: string) => {
-    try {
-      await deleteColumnMutation.mutateAsync({ columnId });
-    } catch (error) {
-      console.error('Failed to delete column:', error);
-    }
-  };
+  // Column mutations are now provided by useColumnMutations hook
 
   const handleContextMenu = (position: { x: number; y: number }, rowId: string) => {
     setContextMenu({
@@ -1036,110 +383,14 @@ function BasePageContent() {
     setContextMenu(null);
   };
 
-  const handleBulkAddRows = async () => {
-    if (!selectedTable || isBulkLoading) return;
-    
-    setIsBulkLoading(true);
-    try {
-      await bulkInsertRowsMutation.mutateAsync({
-        tableId: selectedTable,
-        count: 100000,
-      });
-    } catch (error) {
-      console.error('Failed to bulk insert rows:', error);
-      setIsBulkLoading(false);
-    }
+  const handleBulkAddRowsWrapper = async () => {
+    return handleBulkAddRows(selectedTable, isBulkLoading, setIsBulkLoading);
   };
 
-  // Column visibility handlers - save immediately on user interaction
-  const handleToggleColumn = (columnId: string) => {
-    setHiddenColumns(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(columnId)) {
-        newSet.delete(columnId);
-      } else {
-        newSet.add(columnId);
-      }
-      return newSet;
-    });
-    // Save view config immediately when user toggles column
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
-
-  // triggerViewSave moved up before sort handlers
-
-  const handleHideAllColumns = () => {
-    if (tableData?.columns) {
-      setHiddenColumns(new Set(tableData.columns.map(col => col.id)));
-    }
-    // Save view config immediately when user hides all columns
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
-
-  const handleShowAllColumns = () => {
-    setHiddenColumns(new Set());
-    // Save view config immediately when user shows all columns
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
+  // Column handlers are now provided by useColumnMutations hook
 
 
-  // Filter handlers - save immediately on user interaction
-  const handleUpdateFilterRule = (ruleId: string, operator: FilterRule['operator'], value?: string | number) => {
-    setFilterRules(prev => 
-      prev.map(rule => 
-        rule.id === ruleId ? { ...rule, operator, value } : rule
-      )
-    );
-    // Save view config immediately when user updates filter
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
-
-  const handleRemoveFilterRule = (ruleId: string) => {
-    setFilterRules(prev => prev.filter(rule => rule.id !== ruleId));
-    // Save view config immediately when user removes filter
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
-
-  const handleAddFilterRule = (columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
-    const newRule: FilterRule = {
-      id: `filter-${Date.now()}-${Math.random()}`,
-      columnId,
-      columnName,
-      columnType,
-      operator: columnType === 'NUMBER' ? 'equals' : 'contains',
-      value: undefined,
-    };
-    setFilterRules(prev => [...prev, newRule]);
-    // Save view config immediately when user adds filter
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
-
-  const handleUpdateFilterRuleField = (ruleId: string, columnId: string, columnName: string, columnType: 'TEXT' | 'NUMBER') => {
-    setFilterRules(prev => 
-      prev.map(rule => 
-        rule.id === ruleId ? { 
-          ...rule, 
-          columnId, 
-          columnName, 
-          columnType,
-          operator: columnType === 'NUMBER' ? 'equals' : 'contains', // Reset operator when changing field type
-          value: undefined // Reset value when changing field
-        } : rule
-      )
-    );
-    // Save view config immediately when user updates filter field
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
-
-  const handleUpdateLogicOperator = (ruleId: string, logicOperator: 'and' | 'or') => {
-    setFilterRules(prev => 
-      prev.map(rule => 
-        rule.id === ruleId ? { ...rule, logicOperator } : rule
-      )
-    );
-    // Save view config immediately when user updates logic operator
-    setTimeout(() => triggerViewSave(sortRules), 100);
-  };
+  // Filter handlers are now provided by useFilterManagement hook
 
   // Search handlers
   const handleSearchResultSelected = useCallback((result: SearchResult, index: number) => {
@@ -1210,8 +461,6 @@ function BasePageContent() {
   );
 
 
-
-
   // NO AUTO-SAVE: View configurations will only be saved on explicit user interactions
 
   // View handlers
@@ -1221,7 +470,7 @@ function BasePageContent() {
     
     // Apply the new view configuration
     updateSortRules(config.sortRules);
-    setFilterRules(config.filterRules);
+    updateFilterRules(config.filterRules);
     setHiddenColumns(new Set(config.hiddenColumns));
     
     // Refresh view list when switching views with delay to allow saves to complete
@@ -1235,7 +484,7 @@ function BasePageContent() {
     setTimeout(() => {
       setIsViewSwitching(false);
     }, 50);
-  }, [updateSortRules, utils, selectedTable]);
+  }, [updateSortRules, updateFilterRules, utils, selectedTable]);
 
   // Select first table when tables are loaded
   useEffect(() => {
@@ -1253,7 +502,7 @@ function BasePageContent() {
     if (defaultView) {
       handleViewChange(defaultView.id, defaultView.config as unknown as ViewConfig);
     }
-  }, [selectedTable, views]);
+  }, [selectedTable, views, currentViewId, handleViewChange, isViewSwitching]);
 
   // Reset view when switching tables
   useEffect(() => {
@@ -1268,46 +517,28 @@ function BasePageContent() {
     return tableData ?? lastKnownTableDataRef.current;
   }, [tableData]);
 
-  // Define proper row type for client-side processing
-  type TableRow = NonNullable<typeof tableData>['rows'][0];
+  // Column mutations hook (after tableData is defined)
+  const {
+    renameColumnMutation,
+    deleteColumnMutation,
+    handleRenameColumn,
+    handleDeleteColumn,
+    handleToggleColumn,
+    handleHideAllColumns,
+    handleShowAllColumns,
+  } = useColumnMutations({
+    selectedTable,
+    triggerViewSave,
+    sortRules,
+    filterRulesRef,
+    hiddenColumns,
+    setHiddenColumns,
+    tableData,
+  });
 
-  // Client-side filtering function
-  const applyClientSideFilters = useCallback((rows: TableRow[], filterRules: FilterRule[]): TableRow[] => {
-    if (filterRules.length === 0) return rows;
+  // Row type is defined in the useFilterManagement hook
 
-    return rows.filter(row => {
-      return filterRules.every(rule => {
-        const cell = row.cells.find(cell => cell.columnId === rule.columnId);
-        const cellValue = cell?.value as { text?: string } | null;
-        const textValue = cellValue?.text ?? '';
-
-        switch (rule.operator) {
-          case 'is_empty':
-            return textValue === '';
-          case 'is_not_empty':
-            return textValue !== '';
-          case 'contains':
-            return textValue.toLowerCase().includes((rule.value as string)?.toLowerCase() ?? '');
-          case 'not_contains':
-            return !textValue.toLowerCase().includes((rule.value as string)?.toLowerCase() ?? '');
-          case 'equals':
-            if (rule.columnType === 'NUMBER') {
-              const numValue = parseFloat(textValue) || 0;
-              return numValue === (rule.value as number);
-            }
-            return textValue.toLowerCase() === ((rule.value as string)?.toLowerCase() ?? '');
-          case 'greater_than':
-            const greaterValue = parseFloat(textValue) || 0;
-            return greaterValue > (rule.value as number);
-          case 'less_than':
-            const lessValue = parseFloat(textValue) || 0;
-            return lessValue < (rule.value as number);
-          default:
-            return true;
-        }
-      });
-    });
-  }, []);
+  // Client-side filtering function is now provided by useFilterManagement hook
 
 
   // Process table data with sorting and filtering
@@ -1565,7 +796,7 @@ function BasePageContent() {
               <SummaryBar 
                 recordCount={displayTableData?._count.rows ?? 0} 
                 onAddRow={handleAddRow} 
-                onBulkAddRows={handleBulkAddRows}
+                onBulkAddRows={handleBulkAddRowsWrapper}
                 isBulkLoading={isBulkLoading}
               />
             </div>

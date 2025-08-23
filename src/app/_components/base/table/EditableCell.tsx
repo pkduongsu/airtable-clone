@@ -2,12 +2,11 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "~/trpc/react";
-import { useQueryClient } from "@tanstack/react-query";
 
 // Global debounced invalidation to prevent multiple overlapping table refreshes
 const globalInvalidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-const createDebouncedTableInvalidation = (utils: any, tableId: string) => {
+const createDebouncedTableInvalidation = (utils: ReturnType<typeof api.useUtils>, tableId: string) => {
   return () => {
     // Cancel any existing timer for this table
     const existingTimer = globalInvalidationTimers.get(tableId);
@@ -76,7 +75,7 @@ export function EditableCell({
   shouldFocus, 
   isSelected, 
   onSelect, 
-  onDeselect, 
+  onDeselect: _onDeselect, 
   rowId, 
   columnId, 
   onContextMenu, 
@@ -95,13 +94,12 @@ export function EditableCell({
   const inputRef = useRef<HTMLInputElement>(null);
   
   const utils = api.useUtils();
-  const queryClient = useQueryClient();
+
   
   // Use global debounced invalidation shared across all cells
-  const debouncedInvalidateTable = useCallback(
-    createDebouncedTableInvalidation(utils, tableId),
-    [utils, tableId]
-  );
+  const debouncedInvalidateTable = useCallback(() => {
+    return createDebouncedTableInvalidation(utils, tableId)();
+  }, [utils, tableId]);
   
   // Determine if we need to create a new cell
   const shouldCreateCell = cellId?.startsWith('temp-cell-') ?? false;
@@ -156,7 +154,7 @@ export function EditableCell({
   });
   
   const createCellMutation = api.cell.create.useMutation({
-    onMutate: async ({ value: newValue }) => {
+    onMutate: async ({ value: _newValue }) => {
       await utils.table.getTableData.cancel({ tableId, limit: 100 });
       
       // For create, just preserve the local state
