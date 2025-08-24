@@ -61,6 +61,9 @@ function BasePageContent() {
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
+  // Record count state
+  const [recordCount, setRecordCount] = useState(0);
+
   // Filter state will be managed by useFilterManagement hook
 
   // View state
@@ -618,6 +621,7 @@ function BasePageContent() {
                     scrollToRowId={scrollToRowId}
                     onRenameColumn={handleRenameColumn}
                     onDeleteColumn={handleDeleteColumn}
+                    onRecordCountChange={setRecordCount}
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center bg-[#f6f8fc] z-10">
@@ -629,7 +633,7 @@ function BasePageContent() {
                 )}
               </main>
               <SummaryBar 
-                recordCount={0} 
+                recordCount={recordCount} 
                 onAddRow={handleAddRow} 
                 onBulkAddRows={handleBulkAddRowsWrapper}
                 isBulkLoading={isBulkLoading}

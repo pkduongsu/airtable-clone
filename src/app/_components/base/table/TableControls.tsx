@@ -1,6 +1,5 @@
 "use client";
 
-import { AddColumnButton } from "./AddColumnButton";
 import { AddRowButton } from "./AddRowButton";
 
 interface TableControlsProps {
@@ -25,7 +24,6 @@ export function TableControls({
   return (
     <>
       <AddRowButton tableData={tableData} tableTotalWidth={tableTotalWidth} />
-      <AddColumnButton tableData={tableData} tableTotalWidth={tableTotalWidth} />
     </>
   );
 }

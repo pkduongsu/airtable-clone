@@ -16,6 +16,8 @@ import { TableControls } from "./TableControls";
 import { RowNumberHeader } from "./RowNumberHeader";
 import Spinner from "../../icons/Spinner";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { AddColumnModal } from "../modals/AddColumnModal";
+import { useCreateColumn } from "../hooks/useCreateColumn";
 
 import type { Column, Cell, Row as _Record } from "@prisma/client";
 import {
@@ -76,6 +78,7 @@ interface DataTableProps {
   onRenameColumn?: (columnId: string, newName: string) => void;
   onDeleteColumn?: (columnId: string) => void;
   isApplyingFiltersOrSorts?: boolean;
+  onRecordCountChange?: (count: number) => void;
 }
 
 const isFiltering = (
@@ -114,7 +117,8 @@ export function DataTable({
   scrollToRowId, 
   onRenameColumn, 
   onDeleteColumn,
-  isApplyingFiltersOrSorts = false
+  isApplyingFiltersOrSorts = false,
+  onRecordCountChange
 }: DataTableProps) {
   const utils = api.useUtils();
   
@@ -130,11 +134,33 @@ export function DataTable({
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const [selectedCell, setSelectedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  
+  // Add Column Modal state
+  const [showAddColumnModal, setShowAddColumnModal] = useState(false);
+  const { handleCreateColumn } = useCreateColumn();
   const [columnModal, setColumnModal] = useState<{
     isOpen: boolean;
     position: { x: number; y: number } | null;
     column: { id: string; name: string } | null;
   }>({ isOpen: false, position: null, column: null });
+
+  // Add Column Modal handlers
+  const handleAddColumnClick = useCallback(() => {
+    setShowAddColumnModal(true);
+  }, []);
+
+  const handleCloseAddColumnModal = useCallback(() => {
+    setShowAddColumnModal(false);
+  }, []);
+
+  const handleCreateField = useCallback(async (name: string, type: 'TEXT' | 'NUMBER') => {
+    try {
+      await handleCreateColumn(tableId, name, type);
+      setShowAddColumnModal(false);
+    } catch (error) {
+      console.error('Failed to create column:', error);
+    }
+  }, [handleCreateColumn, tableId]);
 
   // Table metadata query 
   const {
@@ -189,6 +215,13 @@ export function DataTable({
       setCells(combinedCells);
     }
   }, [tableRecords, allRecords, setColumns, setRecords]);
+
+  // Update record count callback - use total count from tableData instead of paginated records
+  useEffect(() => {
+    if (onRecordCountChange && tableData?._count?.rows !== undefined) {
+      onRecordCountChange(tableData._count.rows);
+    }
+  }, [tableData?._count?.rows, onRecordCountChange]);
 
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
@@ -680,6 +713,18 @@ export function DataTable({
             table={table}
             tableColumns={columns}
             onColumnAction={handleColumnAction}
+            onAddColumnClick={handleAddColumnClick}
+            tableData={{
+              id: tableId,
+              columns: columns.map(col => ({
+                id: col.id,
+                name: col.name,
+                type: col.type,
+                order: col.order,
+                width: col.width,
+                tableId: col.tableId
+              }))
+            }}
           />
           <tbody
             style={{
@@ -804,6 +849,18 @@ export function DataTable({
         onDelete={(columnId) => {
           onDeleteColumn?.(columnId);
         }}
+      />
+
+      {/* Add Column Modal */}
+      <AddColumnModal
+        isOpen={showAddColumnModal}
+        onClose={handleCloseAddColumnModal}
+        onCreateField={handleCreateField}
+        position={{ 
+          top: 32,
+          left: table.getCenterTotalSize() - 188 // Position relative to table width, adjust for modal width
+        }}
+        existingColumnNames={columns.map(col => col.name)}
       />
 
     </div>
