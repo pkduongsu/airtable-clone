@@ -75,6 +75,7 @@ interface DataTableProps {
   scrollToRowId?: string | null;
   onRenameColumn?: (columnId: string, newName: string) => void;
   onDeleteColumn?: (columnId: string) => void;
+  isApplyingFiltersOrSorts?: boolean;
 }
 
 const isFiltering = (
@@ -112,7 +113,8 @@ export function DataTable({
   searchQuery: searchValue = "", 
   scrollToRowId, 
   onRenameColumn, 
-  onDeleteColumn 
+  onDeleteColumn,
+  isApplyingFiltersOrSorts = false
 }: DataTableProps) {
   const utils = api.useUtils();
   
@@ -738,6 +740,33 @@ export function DataTable({
               <Spinner size={20} color="#666" />
               <span className="text-sm text-gray-600 font-medium">
                 Loading more rows...
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Sort/Filter Loading Overlay */}
+        {isRecordsFetching && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '40px', // Below the header
+              left: '0',
+              right: '0',
+              bottom: '0',
+              backgroundColor: 'rgba(255, 255, 255, 0.85)',
+              backdropFilter: 'blur(2px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10,
+              pointerEvents: 'none',
+            }}
+          >
+            <div className="flex items-center justify-center gap-3 bg-white px-6 py-4 rounded-lg shadow-md border border-gray-200">
+              <Spinner size={24} color="#4A90E2" />
+              <span className="text-sm text-gray-700 font-medium">
+                Loading data...
               </span>
             </div>
           </div>
