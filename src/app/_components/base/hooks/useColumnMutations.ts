@@ -12,7 +12,7 @@ type SortRule = {
 
 interface UseColumnMutationsProps {
   selectedTable: string | null;
-  triggerViewSave: (sortRules: SortRule[], filterRules: FilterRule[]) => void;
+  triggerViewSave: (sortRules: SortRule[], filterRules: FilterRule[], currentHiddenColumns?: Set<string>) => void;
   sortRules: SortRule[];
   filterRulesRef: React.MutableRefObject<FilterRule[]>;
   hiddenColumns: Set<string>; // Used for reference in handlers
@@ -205,24 +205,26 @@ export function useColumnMutations({
       } else {
         newSet.add(columnId);
       }
+      // Save view config immediately when user toggles column with the updated state
+      setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current, newSet), 100);
       return newSet;
     });
-    // Save view config immediately when user toggles column
-    setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current), 100);
   };
 
   const handleHideAllColumns = () => {
     if (tableData?.columns) {
-      setHiddenColumns(new Set(tableData.columns.map(col => col.id)));
+      const allColumnIds = new Set(tableData.columns.map(col => col.id));
+      setHiddenColumns(allColumnIds);
+      // Save view config immediately when user hides all columns
+      setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current, allColumnIds), 100);
     }
-    // Save view config immediately when user hides all columns
-    setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current), 100);
   };
 
   const handleShowAllColumns = () => {
-    setHiddenColumns(new Set());
+    const emptySet = new Set<string>();
+    setHiddenColumns(emptySet);
     // Save view config immediately when user shows all columns
-    setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current), 100);
+    setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current, emptySet), 100);
   };
 
   return {

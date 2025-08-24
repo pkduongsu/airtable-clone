@@ -118,11 +118,6 @@ export function DataTable({
   
   // Extract parameters from props to match Table.tsx pattern
   const currentView = "";
-  const sortColumnId = sortRules[0]?.columnId ?? "";
-  const sort = sortRules[0]?.direction ?? "";
-  const filter = filterRules[0]?.operator ?? "";
-  const filterColumnId = filterRules[0]?.columnId ?? "";
-  const filterValue = filterRules[0]?.value?.toString() ?? "";
 
   // State management like Table.tsx
   const [records, setRecords] = useState<_Record[]>([]);
@@ -166,6 +161,11 @@ export function DataTable({
     {
       tableId: tableId,
       limit: FETCH_RECORD_LIMIT,
+      sortRules: sortRules.map(rule => ({
+        columnId: rule.columnId,
+        direction: rule.direction
+      })),
+      filterRules: filterRules
     },
     {
       getNextPageParam: (lastPage: any) => lastPage.nextCursor,
@@ -587,7 +587,7 @@ export function DataTable({
     if (tableId) {
       void refetchRecords();
     }
-  }, [sort, sortColumnId, filter, filterColumnId, filterValue, searchValue, refetchRecords, tableId]);
+  }, [sortRules, filterRules, searchValue, refetchRecords, tableId]);
 
   // Handle clicking outside cells to deselect
   const handleContainerClick = useCallback((e: React.MouseEvent) => {

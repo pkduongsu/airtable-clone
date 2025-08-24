@@ -89,13 +89,13 @@ function BasePageContent() {
 
   // Manual trigger for immediate view saves (view list refresh handled by mutation)
   // Note: filterRules will be passed as parameter to avoid dependency issues
-  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = [], currentFilterRules: FilterRule[] = []) => {
+  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = [], currentFilterRules: FilterRule[] = [], currentHiddenColumns?: Set<string>) => {
     if (currentViewId) {
       setTimeout(() => {
         const config: ViewConfig = {
           sortRules: currentSortRules,
           filterRules: currentFilterRules,
-          hiddenColumns: Array.from(hiddenColumns),
+          hiddenColumns: Array.from(currentHiddenColumns ?? hiddenColumns),
         };
         updateViewMutationRef.current({
           id: currentViewId,
@@ -426,7 +426,7 @@ function BasePageContent() {
     filterRulesRef,
     hiddenColumns,
     setHiddenColumns,
-    tableData: null, // DataTable handles its own data now
+    tableData,
   });
 
   // Row type is defined in the useFilterManagement hook
