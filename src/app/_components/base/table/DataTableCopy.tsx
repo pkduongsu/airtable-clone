@@ -236,6 +236,30 @@ export function DataTable({
       }
     });
 
+    // If currentSearchIndex doesn't point to a cell result, find the actual current result
+    if (!currentResult && currentSearchIndex >= 0 && searchResults[currentSearchIndex]) {
+      const currentSearchResult = searchResults[currentSearchIndex];
+      if (currentSearchResult && currentSearchResult.type === 'cell' && currentSearchResult.rowId) {
+        currentResult = `${currentSearchResult.rowId}-${currentSearchResult.columnId}`;
+      }
+    }
+
+    // Debug logging
+    console.log('SearchMatchInfo Update:', {
+      searchResultsLength: searchResults.length,
+      currentSearchIndex,
+      cellMatchesSize: cellMatches.size,
+      currentResult,
+      currentSearchResult: searchResults[currentSearchIndex],
+      currentSearchResultDetails: searchResults[currentSearchIndex] ? {
+        type: searchResults[currentSearchIndex].type,
+        rowId: searchResults[currentSearchIndex].rowId?.slice(-8),
+        columnId: searchResults[currentSearchIndex].columnId?.slice(-8),
+        name: searchResults[currentSearchIndex].name,
+      } : null,
+      searchResults: searchResults.slice(0, 5), // First 5 results
+    });
+
     return { cellMatches, currentResult };
   }, [searchResults, currentSearchIndex]);
 
@@ -441,6 +465,16 @@ export function DataTable({
           const matchKey = `${row.id}-${column.id}`;
           const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
           const isCurrentSearchResult = searchMatchInfo.currentResult === matchKey;
+          
+          // Debug current search result highlighting
+          if (isCurrentSearchResult) {
+            console.log(`Current search result cell: ${matchKey}`, {
+              rowId: row.id,
+              columnId: column.id,
+              isSearchMatch,
+              isCurrentSearchResult
+            });
+          }
 
           return (
             <EditableCell
@@ -495,7 +529,7 @@ export function DataTable({
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns,]);
+  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo, ]);
 
   const table = useReactTable({
     data,
@@ -636,7 +670,10 @@ export function DataTable({
           minWidth: '100%',
         }}
       >
-        <table style={{ display: 'grid', width: '100%' }}>
+        <table 
+          key={`search-${currentSearchIndex}-${searchMatchInfo.currentResult}`}
+          style={{ display: 'grid', width: '100%' }}
+        >
           <TableHeader
             table={table}
             tableColumns={columns}

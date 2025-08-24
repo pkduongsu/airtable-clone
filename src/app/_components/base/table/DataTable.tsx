@@ -308,6 +308,14 @@ export function DataTable({ tableId, onInsertRowAbove: _onInsertRowAbove, onInse
       }
     });
 
+    // If currentSearchIndex doesn't point to a cell result, find the actual current result
+    if (!currentResult && currentSearchIndex >= 0 && searchResults[currentSearchIndex]) {
+      const currentSearchResult = searchResults[currentSearchIndex];
+      if (currentSearchResult && currentSearchResult.type === 'cell' && currentSearchResult.rowId) {
+        currentResult = `${currentSearchResult.rowId}-${currentSearchResult.columnId}`;
+      }
+    }
+
     return { cellMatches, currentResult };
   }, [searchResults, currentSearchIndex]);
 

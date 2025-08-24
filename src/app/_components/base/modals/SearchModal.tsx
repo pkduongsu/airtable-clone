@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { api } from "~/trpc/react";
 import X from "../../icons/X";
 import ChevronDown from "../../icons/ChevronDown";
@@ -61,18 +61,56 @@ export function SearchModal({
     }
   );
 
-  const results = useMemo(() => searchData?.results ?? [], [searchData?.results]);
+  const results = useMemo(() => {
+    const rawResults = searchData?.results ?? [];
+    
+    // Debug: Log the first 10 results to check ordering
+    console.log('Search Results Ordering (first 10):', 
+      rawResults.slice(0, 10).map((result, index) => ({
+        index,
+        type: result.type,
+        columnOrder: result.columnOrder,
+        rowOrder: result.rowOrder,
+        name: result.name,
+        rowId: result.rowId?.slice(-8), // Last 8 chars for brevity
+      }))
+    );
+    
+    return rawResults;
+  }, [searchData?.results]);
   const statistics = useMemo(() => searchData?.statistics ?? { fieldCount: 0, cellCount: 0, recordCount: 0 }, [searchData?.statistics]);
 
-  // Reset current index when results change
+  // Reset current index when results change to first cell result
   useEffect(() => {
-    setCurrentResultIndex(0);
+    if (results.length === 0) {
+      setCurrentResultIndex(0);
+      return;
+    }
+    
+    // Find first cell result index
+    const firstCellIndex = results.findIndex(result => result.type === 'cell' && result.rowId);
+    setCurrentResultIndex(firstCellIndex >= 0 ? firstCellIndex : 0);
   }, [results]);
 
-  // Update parent component with search data
-  useEffect(() => {
+  // Update parent component with search data - use useLayoutEffect for immediate sync
+  useLayoutEffect(() => {
     if (onSearchDataUpdate) {
       onSearchDataUpdate(results, debouncedQuery, currentResultIndex);
+    }
+    
+    // Debug search results whenever they change
+    if (results.length > 0) {
+      console.log('Search Results Analysis:', {
+        totalResults: results.length,
+        currentIndex: currentResultIndex,
+        first5Results: results.slice(0, 5).map((r, i) => ({
+          index: i,
+          type: r.type,
+          columnOrder: r.columnOrder,
+          rowOrder: r.rowOrder,
+          name: r.name,
+        }))
+      });
     }
   }, [results, debouncedQuery, currentResultIndex, onSearchDataUpdate]);
 
@@ -123,6 +161,59 @@ export function SearchModal({
     modal.style.left = `${left}px`;
   }, [isOpen, triggerRef]);
 
+  // Navigate to next/previous result (only among cell results that can be highlighted)
+  const navigateResult = useCallback((direction: 'up' | 'down') => {
+    // Find all cell result indices
+    const cellResultIndices = results
+      .map((result, index) => ({ result, index }))
+      .filter(({ result }) => result.type === 'cell' && result.rowId)
+      .map(({ index }) => index);
+    
+    if (cellResultIndices.length === 0) return;
+    
+    // Find current position in cell results array
+    const currentCellPosition = cellResultIndices.indexOf(currentResultIndex);
+    let nextCellPosition: number;
+    
+    if (direction === 'up') {
+      nextCellPosition = currentCellPosition > 0 
+        ? currentCellPosition - 1 
+        : cellResultIndices.length - 1;
+    } else {
+      nextCellPosition = currentCellPosition < cellResultIndices.length - 1 
+        ? currentCellPosition + 1 
+        : 0;
+    }
+    
+    // Handle case where current index is not a cell result (e.g., field result)
+    if (currentCellPosition === -1) {
+      nextCellPosition = direction === 'up' ? cellResultIndices.length - 1 : 0;
+    }
+    
+    const newIndex = cellResultIndices[nextCellPosition]!;
+    setCurrentResultIndex(newIndex);
+    
+    // Debug logging
+    console.log('SearchModal Navigation:', {
+      direction,
+      oldIndex: currentResultIndex,
+      newIndex,
+      cellResultIndices,
+      resultAtNewIndex: results[newIndex],
+    });
+    
+    // Trigger scroll to result
+    const result = results[newIndex];
+    if (onScrollToResult && result && result.type === 'cell' && result.rowId) {
+      onScrollToResult(result, newIndex);
+    }
+    
+    // Notify parent of the current index change
+    if (onSearchDataUpdate) {
+      onSearchDataUpdate(results, debouncedQuery, newIndex);
+    }
+  }, [currentResultIndex, results, onScrollToResult, onSearchDataUpdate, debouncedQuery]);
+
   // Handle keyboard navigation
   useEffect(() => {
     if (!isOpen) return;
@@ -132,20 +223,16 @@ export function SearchModal({
         onClose();
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        setCurrentResultIndex(prev => 
-          prev > 0 ? prev - 1 : Math.max(0, results.length - 1)
-        );
+        navigateResult('up');
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        setCurrentResultIndex(prev => 
-          prev < results.length - 1 ? prev + 1 : 0
-        );
+        navigateResult('down');
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose, results.length]);
+  }, [isOpen, onClose, navigateResult]);
 
   // Handle outside clicks
   useEffect(() => {
@@ -179,25 +266,6 @@ export function SearchModal({
       return () => window.removeEventListener("resize", handleResize);
     }
   }, [isOpen, updatePosition]);
-
-  // Navigate to next/previous result
-  const navigateResult = useCallback((direction: 'up' | 'down') => {
-    const newIndex = direction === 'up' 
-      ? (currentResultIndex > 0 ? currentResultIndex - 1 : Math.max(0, results.length - 1))
-      : (currentResultIndex < results.length - 1 ? currentResultIndex + 1 : 0);
-    
-    setCurrentResultIndex(newIndex);
-    
-    // Trigger scroll to result if callback is provided
-    if (onScrollToResult && results[newIndex]) {
-      onScrollToResult(results[newIndex], newIndex);
-    }
-    
-    // Notify parent of the current index change
-    if (onSearchDataUpdate) {
-      onSearchDataUpdate(results, debouncedQuery, newIndex);
-    }
-  }, [currentResultIndex, results, onScrollToResult, onSearchDataUpdate, debouncedQuery]);
 
   if (!isOpen) return null;
 

@@ -626,11 +626,19 @@ export const tableRouter = createTRPCRouter({
           rowOrder: cell.rowOrder,
         })),
       ].sort((a, b) => {
-        // Sort by row order first (fields have rowOrder -1, so they come first)
-        if (a.rowOrder !== b.rowOrder) {
+        // Fields come before cells (fields have rowOrder -1)
+        if (a.rowOrder === -1 && b.rowOrder !== -1) return -1;
+        if (b.rowOrder === -1 && a.rowOrder !== -1) return 1;
+        
+        // For cells, sort by column order first (left to right), then row order (top to bottom)
+        if (a.rowOrder !== -1 && b.rowOrder !== -1) {
+          if (a.columnOrder !== b.columnOrder) {
+            return a.columnOrder - b.columnOrder;
+          }
           return a.rowOrder - b.rowOrder;
         }
-        // Then by column order
+        
+        // For fields only, sort by column order
         return a.columnOrder - b.columnOrder;
       });
 
