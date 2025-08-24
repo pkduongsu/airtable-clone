@@ -5,7 +5,6 @@ import {  createTRPCRouter,
   protectedProcedure,
 } from "~/server/api/trpc";
 
-//CRUD
 export const tableRouter = createTRPCRouter({
     create: protectedProcedure
     .input(

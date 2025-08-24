@@ -6,18 +6,17 @@ import React, {
   useMemo,
   useCallback,
   useRef,
-  createContext,
-  useContext,
 } from "react";
 import { api } from "~/trpc/react";
 import { TableHeader } from "./TableHeader";
 import { EditableCell } from "./EditableCell";
-import { TableControls } from "./TableControls";
 import { RowNumberHeader } from "./RowNumberHeader";
 import Spinner from "../../icons/Spinner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import { useCreateColumn } from "../hooks/useCreateColumn";
+import { useCreateRow } from "../hooks/useCreateRow";
+import Plus from "../../icons/Plus";
 
 import type { Column, Cell, Row as _Record } from "@prisma/client";
 import {
@@ -138,6 +137,9 @@ export function DataTable({
   // Add Column Modal state
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
   const { handleCreateColumn } = useCreateColumn();
+  
+  // Add Row functionality
+  const { handleCreateRow } = useCreateRow();
   const [columnModal, setColumnModal] = useState<{
     isOpen: boolean;
     position: { x: number; y: number } | null;
@@ -161,6 +163,14 @@ export function DataTable({
       console.error('Failed to create column:', error);
     }
   }, [handleCreateColumn, tableId]);
+
+  const handleAddRowClick = useCallback(async () => {
+    try {
+      await handleCreateRow(tableId);
+    } catch (error) {
+      console.error('Failed to create row:', error);
+    }
+  }, [handleCreateRow, tableId]);
 
   // Table metadata query 
   const {
@@ -579,7 +589,7 @@ export function DataTable({
     onColumnSizingChange: setColumnSizing,
   });
 
-  // Handlers will be managed by existing TableControls components
+  // Handlers for table interaction
 
   const { rows } = table.getRowModel();
 
@@ -819,22 +829,17 @@ export function DataTable({
         
       </div>
 
-      {/* Table Controls */}
+      {/* Add Row Button */}
       {columns.length > 0 && (
-        <TableControls
-          tableData={{
-            id: tableId,
-            columns: columns.map(col => ({
-              id: col.id,
-              name: col.name,
-              type: col.type,
-              order: col.order,
-              width: col.width,
-              tableId: col.tableId
-            }))
+        <button 
+          className="flex items-center gap-2 px-2 py-1 border-b border-r border-border-default bg-white hover:bg-[#f8f8f8] h-8 text-sm text-gray-600 hover:text-gray-800 cursor-pointer w-full"
+          style={{
+            width: table.getCenterTotalSize(),
           }}
-          tableTotalWidth={table.getCenterTotalSize()}
-        />
+          onClick={handleAddRowClick}
+        >
+          <Plus size={14} className="flex flex-none" />
+        </button>
       )}
 
       {/* Column Context Menu Modal */}
