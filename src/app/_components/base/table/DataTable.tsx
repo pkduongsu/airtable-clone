@@ -1,55 +1,46 @@
 "use client";
 
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+  type Dispatch,
+  type SetStateAction
+} from "react";
+import { api } from "~/trpc/react";
+import { TableHeader } from "./TableHeader";
+import { EditableCell } from "./EditableCell";
+import { RowNumberHeader } from "./RowNumberHeader";
+import Spinner from "../../icons/Spinner";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { AddColumnModal } from "../modals/AddColumnModal";
+import Plus from "../../icons/Plus";
+
+import type { Column, Cell, Row as _Record } from "@prisma/client";
 import {
   useReactTable,
+  type ColumnDef,
   getCoreRowModel,
   flexRender,
   createColumnHelper,
-  type ColumnDef,
   type ColumnSizingState,
 } from "@tanstack/react-table";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import ChevronDown from "../../icons/ChevronDown";
-import Spinner from "../../icons/Spinner";
-import { TableControls } from "../controls/TableControls";
-import { EditableCell } from "./EditableCell";
+
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-// Define the types for our table data based on the actual tRPC return type
-type TableData = {
+const PAGE_LIMIT = 100;
+
+type SearchResult = {
+  type: 'field' | 'cell';
   id: string;
   name: string;
-  columns: Array<{
-    id: string;
-    name: string;
-    type: string;
-    order: number;
-    width: number;
-    tableId: string;
-  }>;
-  rows: Array<{
-    id: string;
-    order: number;
-    cells: Array<{
-      id: string;
-      rowId: string;
-      columnId: string;
-      value: unknown; // JsonValue from Prisma
-      column: {
-        id: string;
-        name: string;
-        type: string;
-        order: number;
-        width: number;
-        tableId: string;
-      };
-    }>;
-  }>;
-  _count: {
-    rows: number;
-  };
+  columnId: string;
+  columnOrder: number;
+  rowId: string | null;
+  rowOrder: number;
 };
 
 type TableRow = {
@@ -61,14 +52,11 @@ type TableRow = {
 const columnHelper = createColumnHelper<TableRow>();
 
 interface DataTableProps {
-  tableData: TableData;
+  tableId: string;
   onInsertRowAbove?: (tableId: string, rowId: string) => void;
   onInsertRowBelow?: (tableId: string, rowId: string) => void;
   onDeleteRow?: (tableId: string, rowId: string) => void;
   onContextMenu?: (position: { x: number; y: number }, rowId: string) => void;
-  fetchNextPage?: () => void;
-  hasNextPage?: boolean;
-  isFetchingNextPage?: boolean;
   hiddenColumns?: Set<string>;
   sortRules?: SortRule[];
   filterRules?: Array<{
@@ -79,161 +67,258 @@ interface DataTableProps {
     operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
     value?: string | number;
   }>;
-  isTableLoading?: boolean;
-  isTableStabilizing?: boolean;
-  searchResults?: Array<{
-    type: 'field' | 'cell';
-    id: string;
-    name: string;
-    columnId: string;
-    columnOrder: number;
-    rowId: string | null;
-    rowOrder: number;
-  }>;
+  searchResults?: SearchResult[];
   currentSearchIndex?: number;
   searchQuery?: string;
   scrollToRowId?: string | null;
   onRenameColumn?: (columnId: string, newName: string) => void;
   onDeleteColumn?: (columnId: string) => void;
+  isApplyingFiltersOrSorts?: boolean;
+  onRecordCountChange?: (count: number) => void;
+  records: _Record[];
+  setRecords: Dispatch<SetStateAction<_Record[]>>;
+  columns: Column[];
+  setColumns: Dispatch<SetStateAction<Column[]>>;
 }
-
-export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onInsertRowBelow: _onInsertRowBelow, onDeleteRow: _onDeleteRow, onContextMenu, fetchNextPage, hasNextPage, isFetchingNextPage, hiddenColumns = new Set(), sortRules = [], filterRules = [], isTableLoading = false, isTableStabilizing = false, searchResults = [], currentSearchIndex = -1, searchQuery, scrollToRowId, onRenameColumn, onDeleteColumn }: DataTableProps) {
+export function DataTable({ 
+  tableId, 
+  onInsertRowAbove: _onInsertRowAbove, 
+  onInsertRowBelow: _onInsertRowBelow, 
+  onDeleteRow: _onDeleteRow, 
+  onContextMenu, 
+  hiddenColumns = new Set(), 
+  sortRules = [], 
+  filterRules = [], 
+  searchResults = [], 
+  currentSearchIndex = -1, 
+  searchQuery: searchValue = "", 
+  scrollToRowId, 
+  onRenameColumn, 
+  onDeleteColumn,
+  onRecordCountChange,
+  records,
+  setRecords, //set local records state (local = optimistic updates)
+  columns,
+  setColumns //set local columns state 
+}: DataTableProps) {
+  const utils = api.useUtils();
+  
+  const [cells, setCells] = useState<Cell[]>([]);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
-  const [hoveredHeader, setHoveredHeader] = useState<string | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
-  const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
-  const [selectedCell, setSelectedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  const [selectedCell, setSelectedCell] = useState<{rowId: string, columnId: string} | null>(null);
+  const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  // Store focus state in a ref to avoid re-renders
+  const focusStateRef = useRef<{
+    focusedRowId: string | null;
+    focusedColumnId: string | null;
+    selectedRowId: string | null;
+    selectedColumnId: string | null;
+  }>({
+    focusedRowId: null,
+    focusedColumnId: null,
+    selectedRowId: null,
+    selectedColumnId: null,
+  });
+  
+
+
+  // Ref to track focus timeout to avoid multiple simultaneous focuses
+  const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Ref to prevent navigation immediately after clicking
+  const lastClickTimeRef = useRef<number>(0);
+  
+  // Add Column Modal state
+  const [showAddColumnModal, setShowAddColumnModal] = useState(false);
+
+  
+  // Table metadata query 
+  const {
+    data: tableData,
+    isLoading: isTablesLoading,
+    refetch,
+  } = api.table.getById.useQuery(
+    {
+      id: tableId,
+    },
+    { 
+      enabled: !!tableId,
+    }
+  );
+
+  // Records query with infinite scrolling
+  const {
+    data: tableRecords,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetching: isRecordsFetching,
+    refetch: refetchRecords,
+  } = api.table.getTableData.useInfiniteQuery(
+    {
+      tableId: tableId,
+      limit: PAGE_LIMIT,
+      sortRules: sortRules.map(rule => ({
+        columnId: rule.columnId,
+        direction: rule.direction
+      })),
+      filterRules: filterRules
+    },
+    {
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
+      refetchOnWindowFocus: false,
+    }
+  );
+
+  // Flatten all records from pages
+  const allRecords = useMemo(() => {
+    return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
+  }, [tableRecords]);
+
+  // Critical state update useEffect
+  useEffect(() => {
+    if (tableRecords) {
+      setColumns(tableRecords?.pages[0]?.columns ?? []); 
+      setRecords(allRecords);
+      const combinedCells = allRecords.flatMap((r) => r.cells);
+      setCells(combinedCells);
+    }
+  }, [tableRecords, allRecords, setColumns, setRecords]);
+
+  const createColumnMutation = api.column.create.useMutation(
+    {
+      onSuccess: async() => {
+        await refetch();
+        await utils.table.getTableData.invalidate();
+      },
+    }
+  );
+
+  const createRowMutation = api.row.create.useMutation({
+    onSuccess: async() => {
+      await refetch();
+      await utils.table.getTableData.invalidate();
+    },
+  });
+
+  const handleCreateColumn = async(name:string, type: 'TEXT' | 'NUMBER') => {
+    try{
+      const tempColId = crypto.randomUUID();
+
+      const tempColumn = await createColumnMutation.mutateAsync({
+        tableId: tableId,
+        type: type,
+        name: name,
+        id: tempColId,      
+      });
+
+      utils.table.getTableData.setData(
+        {tableId: tableId, limit: PAGE_LIMIT},
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            columns: [...(old.columns ?? []), tempColumn]
+          };
+        }
+      );
+      
+
+      setShowAddColumnModal(false);
+
+    } catch (error) {
+      console.error('Failed to create column:', error);
+    }
+  };
+
+  const handleCreateRow = async() => {
+    try{
+      const tempRowId = crypto.randomUUID();
+
+      const tempRow: _Record = {
+        id: tempRowId,
+        tableId: tableId,
+        order: records.length
+      };
+      setRecords((old) => [...old, tempRow]) //add temp row to local state to display immediately
+
+      const newCells = columns.map(col => ({
+      id: crypto.randomUUID(), // local id
+      rowId: tempRowId,
+      columnId: col.id,
+      value: { text: "" },
+      tableId,
+    }));
+    setCells(old => [...old, ...newCells]);
+
+      await createRowMutation.mutateAsync({
+        id: tempRowId,
+        tableId: tableId, 
+      });
+    } catch (error) {
+      console.error('Failed to create row:', error);
+    }
+  }
+
+
   const [columnModal, setColumnModal] = useState<{
     isOpen: boolean;
     position: { x: number; y: number } | null;
     column: { id: string; name: string } | null;
   }>({ isOpen: false, position: null, column: null });
 
+  // Add Column Modal handlers
+  const handleAddColumnClick = useCallback(() => {
+    setShowAddColumnModal(true);
+  }, []);
+
+  const handleCloseAddColumnModal = useCallback(() => {
+    setShowAddColumnModal(false);
+  }, []);
+
+
+
+  // Update record count callback - use total count from tableData instead of paginated records
+  useEffect(() => {
+    if (onRecordCountChange && tableData?._count?.rows !== undefined) {
+      onRecordCountChange(tableData._count.rows);
+    }
+  }, [tableData?._count?.rows, onRecordCountChange]);
+
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
-  // Handle cell selection
-  const handleCellSelection = useCallback((rowIndex: number, columnIndex: number) => {
-    setSelectedCell({ rowIndex, columnIndex });
-  }, []);
+  // Transform row data
+  const rowData = useMemo(() => {
+    const map: Record<string, TableRow> = {};
+    // seed each row
+  for (const r of records) {
+    map[r.id] = { id: r.id, __cellIds: {} };
+  }
 
-  // Handle cell deselection
-  const handleCellDeselection = useCallback(() => {
-    setSelectedCell(null);
-  }, []);
+  // merge cells into the row object
+  for (const c of cells) {
+    const row = map[c.rowId];
+    if (!row) continue;
 
+    // keep the cell id for editing
+    row.__cellIds[c.columnId] = c.id;
 
-  // Handle context menu
-  const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
-    event.preventDefault();
-    
-    // For fixed positioning, we use clientX/clientY directly
-    // These are already relative to the viewport which is what we want for position: fixed
-    if (onContextMenu) {
-      onContextMenu({ x: event.clientX, y: event.clientY }, rowId);
-    }
-  }, [onContextMenu]);
+    const v = c.value as { text?: string; number?: number | null } | string | number | null;
+    row[c.columnId] =
+      v && typeof v === "object" && "text" in v
+        ? v.text ?? ""
+        : v && typeof v === "object" && "number" in v
+        ? (v.number != null ? String(v.number) : "")
+        : typeof v === "string" || typeof v === "number"
+        ? String(v)
+        : "";
+  }
 
-
-  // Handle cell navigation
-  const handleCellNavigation = useCallback((direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right', currentRowIndex: number, currentColumnIndex: number) => {
-    const maxRowIndex = tableData.rows.length - 1;
-    const visibleColumnCount = tableData.columns.filter(column => !hiddenColumns.has(column.id)).length;
-    const maxColumnIndex = visibleColumnCount - 1; // Excluding row number column
-    
-    let newRowIndex = currentRowIndex;
-    let newColumnIndex = currentColumnIndex;
-
-    switch (direction) {
-      case 'tab':
-        if (currentColumnIndex < maxColumnIndex) {
-          newColumnIndex = currentColumnIndex + 1;
-        } else if (currentRowIndex < maxRowIndex) {
-          newRowIndex = currentRowIndex + 1;
-          newColumnIndex = 0;
-        }
-        break;
-      case 'shift-tab':
-        if (currentColumnIndex > 0) {
-          newColumnIndex = currentColumnIndex - 1;
-        } else if (currentRowIndex > 0) {
-          newRowIndex = currentRowIndex - 1;
-          newColumnIndex = maxColumnIndex;
-        }
-        break;
-      case 'enter':
-      case 'down':
-        if (currentRowIndex < maxRowIndex) {
-          newRowIndex = currentRowIndex + 1;
-        }
-        break;
-      case 'up':
-        if (currentRowIndex > 0) {
-          newRowIndex = currentRowIndex - 1;
-        }
-        break;
-      case 'right':
-        if (currentColumnIndex < maxColumnIndex) {
-          newColumnIndex = currentColumnIndex + 1;
-        }
-        break;
-      case 'left':
-        if (currentColumnIndex > 0) {
-          newColumnIndex = currentColumnIndex - 1;
-        }
-        break;
-    }
-
-    if (newRowIndex !== currentRowIndex || newColumnIndex !== currentColumnIndex) {
-      setSelectedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
-      // Clear focusedCell to prevent interference
-      setFocusedCell(null);
-    }
-  }, [tableData.rows.length, tableData.columns, hiddenColumns]);
-
-  // Handle keyboard events for cell selection and navigation
-  useEffect(() => {
-    if (!selectedCell) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle keyboard events if no input is focused
-      const activeElement = document.activeElement;
-      if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
-        return;
-      }
-
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        // Trigger focus to enter edit mode
-        setFocusedCell(selectedCell);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        handleCellDeselection();
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        handleCellNavigation(e.shiftKey ? 'shift-tab' : 'tab', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        handleCellNavigation('up', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        handleCellNavigation('down', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        handleCellNavigation('left', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        handleCellNavigation('right', selectedCell.rowIndex, selectedCell.columnIndex);
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedCell, handleCellNavigation, handleCellDeselection]);
-
-  // Note: Sorting is now handled at the database level
-  // The sortRules prop is kept for UI display purposes only
+  return Object.values(map);
+}, [records, cells]);
 
   // Calculate search match information
   const searchMatchInfo = useMemo(() => {
@@ -256,29 +341,246 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       }
     });
 
+    // If currentSearchIndex doesn't point to a cell result, find the actual current result
+    if (!currentResult && currentSearchIndex >= 0 && searchResults[currentSearchIndex]) {
+      const currentSearchResult = searchResults[currentSearchIndex];
+      if (currentSearchResult && currentSearchResult.type === 'cell' && currentSearchResult.rowId) {
+        currentResult = `${currentSearchResult.rowId}-${currentSearchResult.columnId}`;
+      }
+    }
+
     return { cellMatches, currentResult };
   }, [searchResults, currentSearchIndex]);
 
+  // Calculate navigation bounds without depending on full arrays
+  const navigationBounds = useMemo(() => {
+    const visibleColumnCount = columns.filter(column => !hiddenColumns.has(column.id)).length;
+    return {
+      maxRowIndex: records.length - 1,
+      maxColumnIndex: Math.max(0, visibleColumnCount - 1)
+    };
+  }, [columns, records.length, hiddenColumns]);
+
+  // Handle cell selection (click)
+  const handleCellSelection = useCallback((rowId: string, columnId: string) => {
+    // Convert rowId/columnId back to indices for navigation consistency
+    const rowIndex = records.findIndex(record => record.id === rowId);
+    const visibleColumns = columns
+      .filter(col => !hiddenColumns.has(col.id))
+      .sort((a, b) => a.order - b.order);
+    const columnIndex = visibleColumns.findIndex(col => col.id === columnId);
+    
+    // Record click time to prevent immediate keyboard navigation
+    lastClickTimeRef.current = Date.now();
+    
+    setSelectedCell({ rowId, columnId });
+    setNavigatedCell({ rowIndex, columnIndex }); // Set navigation to clicked position
+    
+    // Update focus state ref for highlighting
+    focusStateRef.current = {
+      focusedRowId: rowId,
+      focusedColumnId: columnId,
+      selectedRowId: rowId,
+      selectedColumnId: columnId,
+    };
+  }, [records, columns, hiddenColumns]);
+
+  // Handle cell deselection
+  const handleCellDeselection = useCallback(() => {
+    setSelectedCell(null);
+    setNavigatedCell(null);
+  }, []);
+
+  // Handle cell navigation with optimized dependencies
+  const handleCellNavigation = useCallback((direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right', currentRowIndex: number, currentColumnIndex: number) => {
+    const { maxRowIndex, maxColumnIndex } = navigationBounds;
+    
+    let newRowIndex = currentRowIndex;
+    let newColumnIndex = currentColumnIndex;
+
+    switch (direction) {
+      case 'tab':
+        if (currentColumnIndex < maxColumnIndex) {
+          newColumnIndex = currentColumnIndex + 1;
+        } else if (currentRowIndex < maxRowIndex) {
+          newRowIndex = currentRowIndex + 1;
+          newColumnIndex = 0;
+        }
+        break;
+      case 'shift-tab':
+        if (currentColumnIndex > 0) {
+          newColumnIndex = currentColumnIndex - 1;
+        } else if (currentRowIndex > 0) {
+          newRowIndex = currentRowIndex - 1;
+          newColumnIndex = maxColumnIndex;
+        }
+        break;
+      case 'enter':
+        if (currentRowIndex < maxRowIndex) {
+          newRowIndex = currentRowIndex + 1;
+        }
+      case 'down':
+        if (currentRowIndex < maxRowIndex) {
+          newRowIndex = currentRowIndex + 1;
+        }
+        break;
+      case 'up':
+        if (currentRowIndex > 0) {
+          newRowIndex = currentRowIndex - 1;
+        }
+        break;
+      case 'right':
+        if (currentColumnIndex < maxColumnIndex) {
+          newColumnIndex = currentColumnIndex + 1;
+        }
+        break;
+      case 'left':
+        if (currentColumnIndex > 0) {
+          newColumnIndex = currentColumnIndex - 1;
+        }
+        break;
+    }
+
+    newRowIndex = Math.max(0, Math.min(newRowIndex, maxRowIndex));
+    newColumnIndex = Math.max(0, Math.min(newColumnIndex, maxColumnIndex));
+
+   const targetRowId = records[newRowIndex]?.id;
+  const visibleColumns = columns
+    .filter(col => !hiddenColumns.has(col.id))
+    .sort((a, b) => a.order - b.order);
+  const targetColumnId = visibleColumns[newColumnIndex]?.id;
+
+  if (!targetRowId || !targetColumnId) return;
+
+  // Update state
+  setNavigatedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
+  setSelectedCell(null);
+  focusStateRef.current = {
+    focusedRowId: targetRowId,
+    focusedColumnId: targetColumnId,
+    selectedRowId: null,
+    selectedColumnId: null,
+  };
+
+  // Focus the actual input in DOM
+  if (focusTimeoutRef.current) {
+    clearTimeout(focusTimeoutRef.current);
+  }
+  focusTimeoutRef.current = setTimeout(() => {
+    //eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+    const cellInput = document.querySelector(
+      `input[data-cell-id="${targetRowId}-${targetColumnId}"]`
+    ) as HTMLInputElement | null;
+    if (cellInput) {
+      cellInput.focus();
+      cellInput.select();
+    }
+    focusTimeoutRef.current = null;
+  }, 10);
+
+  }, [navigationBounds, hiddenColumns, records, columns]);
+
+  // Initialize navigation to first cell if no cell is navigated or selected
+  useEffect(() => {
+  if (!navigatedCell) return;
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    const active = document.activeElement as HTMLInputElement | null;
+    const isInput = active && active.tagName === "INPUT";
+
+    const { rowIndex, columnIndex } = navigatedCell;
+
+    const move = (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => {
+      if (direction == 'enter') {
+        handleCellDeselection();
+        e.preventDefault();
+        handleCellNavigation(direction, rowIndex, columnIndex);
+      }
+      e.preventDefault();
+      handleCellNavigation(direction, rowIndex, columnIndex);
+    };
+
+    switch (e.key) {
+      case "Tab":
+        move(e.shiftKey ? "shift-tab" : "tab");
+        break;
+
+      case "Enter":
+        move("enter");
+        break;
+
+      case "ArrowUp":
+        move("up");
+        break;
+
+      case "ArrowDown":
+        move("down");
+        break;
+
+      case "ArrowLeft":
+        if (isInput) {
+          const caret = active.selectionStart ?? 0;
+          if (caret > 0) return; // allow caret movement inside input
+        }
+        move("left");
+        break;
+
+      case "ArrowRight":
+        if (isInput) {
+          const caret = active.selectionStart ?? 0;
+          const len = active.value?.length ?? 0;
+          if (caret < len) return; // allow caret movement inside input
+        }
+        move("right");
+        break;
+
+      default:
+        return;
+    }
+  };
+
+  window.addEventListener("keydown", handleKeyDown);
+  return () => window.removeEventListener("keydown", handleKeyDown);
+}, [navigatedCell, handleCellNavigation, handleCellDeselection]);
+
+
+
+  // Handle context menu (insert row above/below)
+  const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
+    event.preventDefault();
+    
+    if (onContextMenu) {
+      onContextMenu({ x: event.clientX, y: event.clientY }, rowId);
+    }
+  }, [onContextMenu]);
+
+  // Handle column actions (dropdown menu)
+  const handleColumnAction = useCallback((position: { x: number; y: number }, column: { id: string; name: string }) => {
+    setColumnModal({
+      isOpen: true,
+      position,
+      column
+    });
+  }, []);
+
+
   // Transform the data structure into a format that TanStack Table can use
-  const { columns, data } = useMemo(() => {
+  const { columns: allColumns, data } = useMemo(() => {
     // Create row number column
     const rowNumberColumn: ColumnDef<TableRow, string | undefined> = columnHelper.accessor('__rowNumber', {
       id: '__rowNumber',
       header: () => (
-        <div className="flex items-center justify-center w-full h-full">
-          <input
-            type="checkbox"
-            className="w-4 h-4 flex-shrink-0"
-            checked={selectedRows.size === tableData.rows.length && tableData.rows.length > 0}
-            onChange={(e) => {
-              if (e.target.checked) {
-                setSelectedRows(new Set(tableData.rows.map(row => row.id)));
-              } else {
-                setSelectedRows(new Set());
-              }
-            }}
-          />
-        </div>
+        <RowNumberHeader
+          selectedRows={selectedRows}
+          totalRows={records.length}
+          onSelectAll={(checked) => {
+            if (checked) {
+              setSelectedRows(new Set(records.map(row => row.id)));
+            } else {
+              setSelectedRows(new Set());
+            }
+          }}
+        />
       ),
       size: 87, // Default width for row number column
       minSize: 87, // Minimum width for row number column
@@ -318,8 +620,12 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     });
 
     // Create column definitions for data columns (filter out hidden columns)
-    const visibleColumns = tableData.columns.filter(column => !hiddenColumns.has(column.id));
-    const tableColumns: ColumnDef<TableRow, string | undefined>[] = visibleColumns.map((column, columnIndex) =>
+    const visibleColumns = columns
+      .filter(column => !hiddenColumns.has(column.id))
+      .sort((a, b) => a.order - b.order);
+
+    
+    const tableColumns: ColumnDef<TableRow, string | undefined>[] = visibleColumns.map((column, _columnIndex) =>
       columnHelper.accessor(column.id, {
         id: column.id,
         header: column.name,
@@ -327,34 +633,30 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         cell: (info) => {
           const value = info.getValue()!;
           const row = info.row.original;
-          const cellId = row.__cellIds[column.id]!;
-          const rowIndex = info.row.index;
+
+          const rowId = row.id;
+          const columnId = column.id;
           
-          const matchKey = `${row.id}-${column.id}`;
+          const matchKey = `${rowId}-${columnId}`;
           const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
           const isCurrentSearchResult = searchMatchInfo.currentResult === matchKey;
 
           return (
             <EditableCell
-              key={`${row.id}-${column.id}`} // Stable key for React tracking
-              cellId={cellId}
-              tableId={tableData.id}
+              key={`${rowId}-${columnId}`} // Stable key to preserve cell state
+              tableId={tableId}
               initialValue={value ?? ""}
-              onNavigate={(direction) => handleCellNavigation(direction, rowIndex, columnIndex)}
-              shouldFocus={focusedCell?.rowIndex === rowIndex && focusedCell?.columnIndex === columnIndex}
-              isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
-              onSelect={() => handleCellSelection(rowIndex, columnIndex)}
+              onSelect={() => handleCellSelection(rowId, columnId)}
               onDeselect={handleCellDeselection}
-              rowId={row.id}
-              columnId={column.id} // Pass the real column ID directly
+              rowId={rowId}
+              columnId={columnId}
               onContextMenu={handleContextMenuClick}
-              sortRules={sortRules?.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
               filterRules={filterRules}
-              isTableLoading={isTableLoading}
-              isTableStabilizing={isTableStabilizing}
-              searchQuery={searchQuery}
+              searchQuery={searchValue}
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
+              // Pass focus state ref for visual highlighting
+              columnType={column.type}
             />
           );
         },
@@ -364,47 +666,29 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     // Combine row number column with data columns
     const allColumns = [rowNumberColumn, ...tableColumns];
 
-    // Transform rows data into the format expected by TanStack Table
-    const tableData_rows: TableRow[] = tableData.rows.map((row) => {
-      const rowData: TableRow = { id: row.id, __cellIds: {} };
-      
-      // For each cell, map it to the column ID
-      row.cells.forEach((cell) => {
-        // Store cell ID for editing
-        rowData.__cellIds[cell.columnId] = cell.id;
-        
-        // Handle different value formats from JSON
-        const value = cell.value;
-        if (value && typeof value === 'object' && 'text' in value) {
-          rowData[cell.columnId] = (value as { text: string }).text;
-        } else if (typeof value === 'string') {
-          rowData[cell.columnId] = value;
-        } else {
-          rowData[cell.columnId] = '';
-        }
-      });
-      
-      return rowData;
-    });
+    //
 
-    // Data is already sorted at database level
     return {
       columns: allColumns,
-      data: tableData_rows,
+      data: rowData, //uses this so that it merges record and cells in render time, whereas if separate, cells get rendered after.
     };
-  }, [tableData, selectedRows, hoveredRowIndex, handleCellNavigation, focusedCell, selectedCell, handleCellSelection, handleCellDeselection, handleContextMenuClick, hiddenColumns, sortRules, filterRules, isTableLoading, isTableStabilizing, searchMatchInfo, searchQuery]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo]);
 
   const table = useReactTable({
     data,
-    columns,
+    columns: allColumns,
     getCoreRowModel: getCoreRowModel(),
     enableColumnResizing: true,
     columnResizeMode: 'onChange',
+    getRowId: (row) => row.id, // Use stable row ID instead of array index
     state: {
       columnSizing,
     },
     onColumnSizingChange: setColumnSizing,
   });
+
+  // Handlers for table interaction
 
   const { rows } = table.getRowModel();
 
@@ -431,6 +715,13 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     }
   }, [scrollToRowId, data, rowVirtualizer]);
 
+  // Auto-scroll to navigated cell
+  useEffect(() => {
+    if (navigatedCell && rowVirtualizer) {
+      rowVirtualizer.scrollToIndex(navigatedCell.rowIndex, { align: 'center' });
+    }
+  }, [navigatedCell, rowVirtualizer]);
+
   // Infinite scrolling logic
   useEffect(() => {
     if (!fetchNextPage || !hasNextPage || isFetchingNextPage) return;
@@ -444,7 +735,7 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       
       // Trigger fetch when user has scrolled 80% of the way down
       if (scrollPercentage > 0.8) {
-        fetchNextPage();
+        void fetchNextPage();
       }
     };
 
@@ -452,6 +743,12 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
     return () => container.removeEventListener('scroll', handleScroll);
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
+  // Data refetch when parameters change
+  useEffect(() => {
+    if (tableId) {
+      void refetchRecords();
+    }
+  }, [sortRules, filterRules, searchValue, refetchRecords, tableId]);
 
   // Handle clicking outside cells to deselect
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
@@ -460,6 +757,28 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
       handleCellDeselection();
     }
   }, [handleCellDeselection]);
+
+  // Early return for loading or no data
+  if (!tableId) {
+    return <div className="flex-grow bg-white p-4">No table selected</div>;
+  }
+  if (isTablesLoading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-[#f6f8fc]">
+        <div className="flex items-center gap-3">
+          <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <div className="text-gray-600 font-medium">Loading table data...</div>
+        </div>
+      </div>
+    );
+  }
+  if (!tableData) {
+    return (
+      <div className="p-4">
+        <span className="text-black font-bold text-lg">Table not found</span>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -471,6 +790,13 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         paddingBottom: '70px',
       }}
       onClick={handleContainerClick}
+      tabIndex={0}
+      onFocus={() => {
+        // Ensure we have a navigated cell when table gets focus
+        if (!navigatedCell && !selectedCell && records.length > 0 && columns.length > 0) {
+          setNavigatedCell({ rowIndex: 0, columnIndex: 0 });
+        }
+      }}
     >
       <div 
         style={{ 
@@ -478,78 +804,16 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
           minWidth: '100%',
         }}
       >
-        <table style={{ display: 'grid', width: '100%' }}>
-            <thead
-              style={{
-                display: 'grid',
-                position: 'sticky',
-                top: 0,
-                zIndex: 10,
-              }}
-            >
-              {table.getHeaderGroups().map((headerGroup) => (
-                <tr
-                  key={headerGroup.id}
-                  style={{ display: 'flex', width: '100%' }}
-                >
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    className="text-left p-0 text-[#1d1f25] bg-white border-b border-r border-border-default hover:bg-[#f8f8f8] relative"
-                    style={{
-                      display: 'flex',
-                      width: header.getSize(),
-                    }}
-                  >
-                    <div 
-                      className="px-3 py-2 h-[32px] flex items-center justify-between text-xs font-family-system font-[500] text-[13px] leading-[19.5px] w-full"                     
-                      onMouseEnter={() => setHoveredHeader(header.id)}
-                      onMouseLeave={() => setHoveredHeader(null)}
-                    >
-                      <span className="truncate">
-                        {header.isPlaceholder
-                          ? null
-                          : flexRender(
-                              header.column.columnDef.header,
-                              header.getContext()
-                            )}
-                      </span>
-                      {header.id !== '__rowNumber' && (
-                        <button 
-                          className={`ml-1 cursor-pointer flex-shrink-0 transition-opacity duration-75 ${hoveredHeader === header.id ? 'opacity-100' : 'opacity-0'}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const column = tableData.columns.find(col => col.id === header.id);
-                            if (column) {
-                              setColumnModal({
-                                isOpen: true,
-                                position: { x: rect.left, y: rect.bottom + 5 },
-                                column: { id: column.id, name: column.name }
-                              });
-                            }
-                          }}
-                        >
-                          <ChevronDown size={16} color="#616670" className="hover:text-[#1d1f25]"/>
-                        </button>
-                      )}
-                    </div>
-                    {/* Column resize handle */}
-                    <div
-                      {...{
-                        onDoubleClick: () => header.column.resetSize(),
-                        onMouseDown: header.getResizeHandler(),
-                        onTouchStart: header.getResizeHandler(),
-                      }}
-                      className={`absolute right-0 top-[5px] bottom-[5px] w-[1px] rounded-[2px] cursor-col-resize hover:bg-[#166ee1] transition-opacity ${
-                        header.column.getIsResizing() ? 'bg-[#166ee1] opacity-100' : 'opacity-0 hover:opacity-100'
-                      }`}
-                    />
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
+        <table 
+          key={`search-${currentSearchIndex}-${searchMatchInfo.currentResult}`}
+          style={{ display: 'grid', width: '100%' }}
+        >
+          <TableHeader
+            table={table}
+            tableColumns={columns}
+            onColumnAction={handleColumnAction}
+            onAddColumnClick={handleAddColumnClick}
+          />
           <tbody
             style={{
               display: 'grid',
@@ -613,14 +877,48 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
             </div>
           </div>
         )}
+
+        {/* Sort/Filter Loading Overlay */}
+        {isRecordsFetching && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '40px', // Below the header
+              left: '0',
+              right: '0',
+              bottom: '0',
+              backgroundColor: 'rgba(255, 255, 255, 0.85)',
+              backdropFilter: 'blur(2px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10,
+              pointerEvents: 'none',
+            }}
+          >
+            <div className="flex items-center justify-center gap-3 bg-white px-6 py-4 rounded-lg shadow-md border border-gray-200">
+              <Spinner size={24} color="#4A90E2" />
+              <span className="text-sm text-gray-700 font-medium">
+                Loading data...
+              </span>
+            </div>
+          </div>
+        )}
         
       </div>
 
-      {/* Table Controls */}
-      <TableControls
-        tableData={tableData}
-        tableTotalWidth={table.getCenterTotalSize()}
-      />
+      {/* Add Row Button */}
+      {columns.length > 0 && (
+        <button 
+          className="flex items-center gap-2 px-2 py-1 border-b border-r border-border-default bg-white hover:bg-[#f8f8f8] h-8 text-sm text-gray-600 hover:text-gray-800 cursor-pointer w-full"
+          style={{
+            width: table.getCenterTotalSize(),
+          }}
+          onClick={handleCreateRow}
+        >
+          <Plus size={14} className="flex flex-none" />
+        </button>
+      )}
 
       {/* Column Context Menu Modal */}
       <ColumnContextMenuModal
@@ -634,6 +932,18 @@ export function DataTable({ tableData, onInsertRowAbove: _onInsertRowAbove, onIn
         onDelete={(columnId) => {
           onDeleteColumn?.(columnId);
         }}
+      />
+
+      {/* Add Column Modal */}
+      <AddColumnModal
+        isOpen={showAddColumnModal}
+        onClose={handleCloseAddColumnModal}
+        onCreateField={handleCreateColumn}
+        position={{ 
+          top: 32,
+          left: table.getCenterTotalSize() - 188 // Position relative to table width, adjust for modal width
+        }}
+        existingColumnNames={columns.map(col => col.name)}
       />
 
     </div>

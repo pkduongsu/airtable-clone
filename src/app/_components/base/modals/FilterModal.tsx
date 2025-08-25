@@ -478,7 +478,7 @@ export function FilterModal({
                       onClick={() => openOperatorModal(filterRule.id)}
                       className="flex items-center px-2 rounded-[3px] w-full cursor-pointer hover:bg-gray-100 min-w-0"
                     >
-                      <span className="mr-1 truncate flex-auto min-w-0 overflow-hidden">{getOperatorLabel(filterRule.operator, filterRule.columnType)}</span>
+                      <span className="mr-1 truncate flex-auto text-left min-w-0 overflow-hidden">{getOperatorLabel(filterRule.operator, filterRule.columnType)}</span>
                       <ChevronDown size={12} color="#6b7280" />
                     </button>
                   </div>

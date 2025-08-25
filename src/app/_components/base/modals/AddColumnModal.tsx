@@ -15,7 +15,7 @@ interface AddColumnModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreateField: (name: string, type: FieldType) => void;
-  position: { top: number; left: number };
+  position: { top: number; left?: number; right?: number };
   existingColumnNames: string[];
 }
 
@@ -97,7 +97,8 @@ export function AddColumnModal({
       className="absolute bg-white border border-border-default rounded-[6px] z-20 min-w-[280px]"
       style={{ 
         top: `${position.top}px`, 
-        left: `${position.left}px` 
+        ...(position.left !== undefined && { left: `${position.left}px` }),
+        ...(position.right !== undefined && { right: `${position.right}px` })
       }}
     >
       {addColumnStep === 'type-selection' && (

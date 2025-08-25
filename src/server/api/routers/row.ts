@@ -7,6 +7,7 @@ export const rowRouter = createTRPCRouter({
   create: protectedProcedure
     .input(z.object({
       tableId: z.string(),
+      id: z.string().optional(), // Optional client-generated ID
     }))
     .mutation(async ({ ctx, input }) => {
       // Get the current max order for rows in this table
@@ -22,6 +23,7 @@ export const rowRouter = createTRPCRouter({
         data: {
           tableId: input.tableId,
           order: nextOrder,
+          id: input.id,
         },
       });
 

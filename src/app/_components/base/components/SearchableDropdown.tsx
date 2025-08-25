@@ -107,7 +107,7 @@ export function SearchableDropdown({
                 <button
                   key={option.id}
                   onClick={() => handleSelect(option)}
-                  className={`w-full px-2 py-2 text-left font-family-system text-[12px] font-[400] hover:bg-gray-50 transition-colors duration-150 ${
+                  className={`cursor-pointer w-full px-2 py-2 text-left font-family-system text-[12px] font-[400] hover:bg-gray-50 transition-colors duration-150 ${
                     option.id === value ? 'bg-blue-50 text-blue-700' : 'text-gray-700'
                   }`}
                 >
