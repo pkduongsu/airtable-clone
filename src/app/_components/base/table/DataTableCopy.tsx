@@ -76,28 +76,6 @@ interface DataTableProps {
   isApplyingFiltersOrSorts?: boolean;
   onRecordCountChange?: (count: number) => void;
 }
-
-const isFiltering = (
-  colId1: string,
-  colId2: string,
-  filter: string,
-  filterValue: string
-) => {
-  const matchesColId = colId1 === colId2;
-  switch (filter) {
-    case "contains":
-    case "does not contain":
-    case "is":
-    case "is not":
-      return matchesColId && filterValue !== "";
-    case "is empty":
-    case "is not empty":
-      return matchesColId;
-    default:
-      return false;
-  }
-};
-
 export function DataTable({ 
   tableId, 
   onInsertRowAbove: _onInsertRowAbove, 
@@ -150,10 +128,12 @@ export function DataTable({
   
   // Add Column Modal state
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
+
   const { handleCreateColumn } = useCreateColumn();
   
   // Add Row functionality
   const { handleCreateRow } = useCreateRow();
+  
   const [columnModal, setColumnModal] = useState<{
     isOpen: boolean;
     position: { x: number; y: number } | null;
@@ -588,7 +568,6 @@ export function DataTable({
         cell: (info) => {
           const value = info.getValue()!;
           const row = info.row.original;
-          const cellId = row.__cellIds[column.id]!;
           const rowIndex = info.row.index;
           
           const matchKey = `${row.id}-${column.id}`;

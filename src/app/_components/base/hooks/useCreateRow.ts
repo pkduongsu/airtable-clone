@@ -95,53 +95,8 @@ export function useCreateRow() {
         }, context.previousData);
       }
     },
-    onSuccess: (data, variables, context) => {
-      // Update optimistic data with real server IDs instead of invalidating
-      if (context?.tempRowId && data?.id) {
-        utils.table.getTableData.setInfiniteData({ 
-          tableId: variables.tableId, 
-          limit: 100
-        }, (old) => {
-          if (!old) return old;
-          
-          return {
-            ...old,
-            pages: old.pages.map(page => ({
-              ...page,
-              rows: page.rows.map(row => 
-                row.id === context.tempRowId
-                  ? {
-                      ...row,
-                      id: data.id, // Update to real server ID
-                      // Update all cell rowId references to use the real row ID
-                      cells: row.cells.map(cell => ({
-                        ...cell,
-                        rowId: data.id,
-                        // Update cell ID to reference the real row ID if it was temporary
-                        id: cell.id.startsWith(`temp-cell-${context.tempRowId}-`) 
-                          ? `temp-cell-${data.id}-${cell.columnId}`
-                          : cell.id
-                      }))
-                    }
-                  : row
-              )
-            }))
-          };
-        });
-      }
-      
-      // TODO: Sync any temporary cell edits to the server in the background
-      // For now, cells with temporary row/column IDs will only be saved 
-      // when the user edits them again after the row/column gets real IDs
-      
-      // Only invalidate if there are concurrent mutations as a fallback
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'create'] });
-      if (concurrentMutations > 1) {
-        // There are other mutations running, invalidate to ensure consistency
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
-      
-      console.log('Row creation successful, updated optimistic state:', { tempRowId: context?.tempRowId, realRowId: data.id });
+    onSuccess: () => {
+      void utils.table.getTableData.invalidate();
     }
   });
 
