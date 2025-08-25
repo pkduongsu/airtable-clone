@@ -71,50 +71,9 @@ export function useCreateColumn() {
       
       return { previousData, tempColumnId };
     },
-    onSuccess: (newColumn, variables, context) => {
+    onSuccess: () => {
       // Update column metadata and fix cell columnId references to maintain __cellIds mapping
-      if (context?.tempColumnId) {
-        const { tableId } = variables;
-        
-        utils.table.getTableData.setInfiniteData({ tableId, limit: 100 }, (old) => {
-          if (!old) return old;
-          
-          const updatedPages = old.pages.map(page => ({
-            ...page,
-            // Update the column metadata
-            columns: page.columns.map(col => 
-              col.id === context.tempColumnId ? newColumn : col
-            ),
-            // Update cell columnId references so __cellIds mapping works correctly
-            // But keep the temporary cell IDs to preserve user data and avoid React remounts
-            rows: page.rows.map(row => ({
-              ...row,
-              cells: row.cells.map(cell =>
-                cell.columnId === context.tempColumnId
-                  ? { 
-                      ...cell, 
-                      columnId: newColumn.id, // Update columnId reference
-                      column: newColumn, // Update column reference
-                      // Keep original cell.id to avoid React remount issues
-                    }
-                  : cell
-              )
-            }))
-          }));
-          
-          return {
-            ...old,
-            pages: updatedPages,
-          };
-        });
-      }
-      
-      // Only invalidate if there are concurrent mutations as a fallback
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['column', 'create'] });
-      if (concurrentMutations === 1) {
-        // There are other mutations running, invalidate to ensure consistency
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
+      void utils.table.getTableData.invalidate();
     },
     onError: (err, variables, context) => {
       console.error('Failed to create column:', err);

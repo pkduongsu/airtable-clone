@@ -114,7 +114,7 @@ model Row {
   id       String   @id @default(cuid())
   tableId  String
   table    Table    @relation(fields: [tableId], references: [id])
-  order    Int
+  order    Int  //row index
   cells    Cell[]
   
   @@index([tableId, order])

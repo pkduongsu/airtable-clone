@@ -43,27 +43,43 @@ export const cellRouter = createTRPCRouter({
 
   update: protectedProcedure
     .input(z.object({
-      cellId: z.string(),
+      rowId: z.string().min(1),
+      columnId: z.string().min(1),
       value: z.union([z.string(), z.number(), z.object({ text: z.string() })]),
     }))
     .mutation(async ({ ctx, input }) => {
-      // Try to update the cell value
-      try {
+      // Prepare the value based on type
+      const cellValue = typeof input.value === 'string' 
+        ? { text: input.value }
+        : typeof input.value === 'number'
+        ? { number: input.value }
+        : input.value;
+
+      // Find existing cell first, then update or create
+      const existingCell = await ctx.db.cell.findFirst({
+        where: {
+          rowId: input.rowId,
+          columnId: input.columnId,
+        }
+      });
+
+      if (existingCell) {
+        // Update existing cell
         const cell = await ctx.db.cell.update({
-          where: { id: input.cellId },
-          data: { 
-            value: typeof input.value === 'string' 
-              ? { text: input.value }
-              : typeof input.value === 'number'
-              ? { number: input.value }
-              : input.value
-          },
+          where: { id: existingCell.id },
+          data: { value: cellValue }
         });
         return cell;
-      } catch (error) {
-        // If cell doesn't exist, we might need to handle this differently
-        // For now, let the error propagate to trigger the createCell fallback
-        throw error;
+      } else {
+        // Create new cell
+        const cell = await ctx.db.cell.create({
+          data: {
+            rowId: input.rowId,
+            columnId: input.columnId,
+            value: cellValue
+          }
+        });
+        return cell;
       }
     }),
 });

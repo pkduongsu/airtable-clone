@@ -2,6 +2,7 @@
 
 import { type Table } from "@tanstack/react-table";
 import { ColumnHeader } from "./ColumnHeader";
+import Plus from "../../icons/Plus";
 
 type TableRow = {
   id: string;
@@ -20,13 +21,16 @@ interface TableHeaderProps {
     tableId: string;
   }>;
   onColumnAction?: (position: { x: number; y: number }, column: { id: string; name: string }) => void;
+  onAddColumnClick?: () => void;
 }
 
 export function TableHeader({ 
   table, 
   tableColumns, 
-  onColumnAction 
+  onColumnAction,
+  onAddColumnClick
 }: TableHeaderProps) {
+
   return (
     <thead
       style={{
@@ -49,6 +53,22 @@ export function TableHeader({
               tableColumns={tableColumns}
             />
           ))}
+          {/* Add Column Button */}
+          <th
+            style={{
+              display: 'flex',
+              width: '94px',
+              minWidth: '94px',
+            }}
+          >
+            <button 
+              className="w-full h-[32px] bg-white border-b border-r border-border-default hover:bg-[#f8f8f8] flex items-center justify-center cursor-pointer" 
+              onClick={onAddColumnClick}
+              title="Add column"
+            >
+              <Plus size={16} className="flex-none" />
+            </button>
+          </th>
         </tr>
       ))}
     </thead>

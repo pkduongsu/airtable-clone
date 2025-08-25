@@ -19,10 +19,10 @@ import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
 import { type FilterRule } from "../_components/base/modals/FilterModal";  
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 import { useSortManagement } from "../_components/base/hooks/useSortManagement";
-import { useSortDataProcessor } from "../_components/base/hooks/useSortDataProcessor";
 import { useRowMutations } from "../_components/base/hooks/useRowMutations";
 import { useFilterManagement } from "../_components/base/hooks/useFilterManagement";
 import { useColumnMutations } from "../_components/base/hooks/useColumnMutations";
+import {type Column, type Row as _Record} from "@prisma/client";
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -42,9 +42,12 @@ function BasePageContent() {
   
   
   const user = session?.user;
+
   
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [records, setRecords] = useState<_Record[]>([]); //set local records state (local = optimistic updates)
+  const [columns, setColumns] = useState<Column[]>([]); //set local columns state 
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280); //for resizing main content area
   const [isResizing, setIsResizing] = useState(false);
@@ -61,6 +64,9 @@ function BasePageContent() {
 
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  // Record count state
+  const [recordCount, setRecordCount] = useState(0);
 
   // Filter state will be managed by useFilterManagement hook
 
@@ -90,13 +96,13 @@ function BasePageContent() {
 
   // Manual trigger for immediate view saves (view list refresh handled by mutation)
   // Note: filterRules will be passed as parameter to avoid dependency issues
-  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = [], currentFilterRules: FilterRule[] = []) => {
+  const triggerViewSave = useCallback((currentSortRules: Array<{ id: string; columnId: string; columnName: string; columnType: string; direction: 'asc' | 'desc'; }> = [], currentFilterRules: FilterRule[] = [], currentHiddenColumns?: Set<string>) => {
     if (currentViewId) {
       setTimeout(() => {
         const config: ViewConfig = {
           sortRules: currentSortRules,
           filterRules: currentFilterRules,
-          hiddenColumns: Array.from(hiddenColumns),
+          hiddenColumns: Array.from(currentHiddenColumns ?? hiddenColumns),
         };
         updateViewMutationRef.current({
           id: currentViewId,
@@ -165,7 +171,7 @@ function BasePageContent() {
   // Filter management hook (after dependencies are defined)
   const {
     filterRules,
-    applyClientSideFilters,
+    // applyClientSideFilters, // Now handled by DataTable
     updateFilterRules,
     handleUpdateFilterRule,
     handleRemoveFilterRule,
@@ -203,85 +209,20 @@ function BasePageContent() {
     { enabled: !!baseId }
   );
 
-  // Get detailed table data with rows and cells using infinite query (stable base query without sorting)
-  const {
-    data: infiniteTableData,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading: isLoadingTableData,
-    isFetching: isFetchingTableData,
-    refetch: refetchTableData
-  } = api.table.getTableData.useInfiniteQuery(
-    { 
-      tableId: selectedTable!, 
-      limit: 100
-      // Note: No sortRules here - keeping query stable
-    },
-    {
-      enabled: !!selectedTable,
-      getNextPageParam: (lastPage) => lastPage.nextCursor,
-    }
+  // Get table metadata including columns for the Toolbar
+  const { data: tableData } = api.table.getById.useQuery(
+    { id: selectedTable ?? '' },
+    { enabled: !!selectedTable }
   );
 
-  // Background query for server-side processed data (when sort or filter rules exist)
-  const {
-    data: processedInfiniteTableData,
-    isLoading: isLoadingProcessedData,
-    isFetching: isFetchingProcessedData,
-    refetch: refetchProcessedData
-  } = api.table.getTableData.useInfiniteQuery(
-    { 
-      tableId: selectedTable!, 
-      limit: 100,
-      ...(sortRules.length > 0 && {
-        sortRules: sortRules.map(rule => ({
-          columnId: rule.columnId,
-          direction: rule.direction
-        }))
-      }),
-      ...(filterRules.length > 0 && {
-        filterRules: filterRules.map(rule => ({
-          id: rule.id,
-          columnId: rule.columnId,
-          columnName: rule.columnName,
-          columnType: rule.columnType,
-          operator: rule.operator,
-          value: rule.value
-        }))
-      })
-    },
-    {
-      enabled: !!selectedTable && (sortRules.length > 0 || filterRules.length > 0),
-      getNextPageParam: (lastPage) => lastPage.nextCursor,
-    }
-  );
+  // Extract columns for the Toolbar
+  const columnsToolbar = useMemo(() => {
+    return tableData?.columns ?? [];
+  }, [tableData]);
 
-  // Data persistence to prevent loading states
-  const lastKnownTableDataRef = useRef<typeof tableData>(undefined);
+  // DataTable now handles its own data fetching
 
-  // Flatten the paginated data into a single tableData object
-  const tableData = useMemo(() => {
-    const data = infiniteTableData?.pages[0] ? {
-      ...infiniteTableData.pages[0], // Get table metadata from first page
-      rows: infiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
-    } : undefined;
-    
-    // Store the data if it exists
-    if (data) {
-      lastKnownTableDataRef.current = data;
-    }
-    
-    return data;
-  }, [infiniteTableData]);
-
-  // Server-side processed data (when available)
-  const serverProcessedTableData = useMemo(() => {
-    return processedInfiniteTableData?.pages[0] ? {
-      ...processedInfiniteTableData.pages[0], // Get table metadata from first page
-      rows: processedInfiniteTableData.pages.flatMap(page => page.rows), // Flatten all rows
-    } : undefined;
-  }, [processedInfiniteTableData]);
+  // Data processing is now handled by DataTable component
 
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
@@ -315,8 +256,7 @@ function BasePageContent() {
       // Select the newly created table
       setSelectedTable(newTable.id);
       
-      // Refetch table data for the new table
-      await refetchTableData();
+      // DataTable handles its own data refetching
     } catch (error) {
       console.error('Failed to create table:', error);
       throw error;
@@ -389,7 +329,6 @@ function BasePageContent() {
 
   // Column handlers are now provided by useColumnMutations hook
 
-
   // Filter handlers are now provided by useFilterManagement hook
 
   // Search handlers
@@ -403,46 +342,14 @@ function BasePageContent() {
     setCurrentSearchIndex(currentIndex);
   }, []);
 
-  const handleScrollToSearchResult = useCallback(async (result: SearchResult, _index: number) => {
+  const handleScrollToSearchResult = useCallback((result: SearchResult, _index: number) => {
     if (result.type !== 'cell' || !result.rowId) return;
     
-    // Find the row in currently loaded data
-    const allLoadedRows = infiniteTableData?.pages.flatMap(page => page.rows) ?? [];
-    const targetRow = allLoadedRows.find(row => row.id === result.rowId);
-    
-    if (targetRow) {
-      // Row is already loaded, trigger scroll
-      setScrollToRowId(result.rowId);
-      // Clear the scroll target after a brief delay to allow for re-scrolling
-      setTimeout(() => setScrollToRowId(null), 100);
-    } else {
-      // Row is not loaded, need to fetch more data
-      // Keep fetching until we find the row or reach the end
-      let attempts = 0;
-      const maxAttempts = 10; // Prevent infinite loop
-      
-      while (attempts < maxAttempts && hasNextPage && !isFetchingNextPage) {
-        await fetchNextPage();
-        attempts++;
-        
-        // Check if the row is now loaded
-        const updatedRows = infiniteTableData?.pages.flatMap(page => page.rows) ?? [];
-        const foundRow = updatedRows.find(row => row.id === result.rowId);
-        
-        if (foundRow) {
-          // Row found, trigger scroll
-          setScrollToRowId(result.rowId);
-          // Clear the scroll target after a brief delay
-          setTimeout(() => setScrollToRowId(null), 100);
-          break;
-        }
-      }
-      
-      if (attempts >= maxAttempts) {
-        console.warn(`Could not find row ${result.rowId} after ${maxAttempts} attempts`);
-      }
-    }
-  }, [infiniteTableData, hasNextPage, isFetchingNextPage, fetchNextPage]);
+    // DataTable now handles the scroll logic internally
+    setScrollToRowId(result.rowId);
+    // Clear the scroll target after a brief delay
+    setTimeout(() => setScrollToRowId(null), 100);
+  }, []);
 
   // updateViewMutation moved up before sort handlers
 
@@ -508,11 +415,7 @@ function BasePageContent() {
     // Views will be loaded when needed
   }, [selectedTable]);
 
-  // Get the best available data source for processing
-  const getBaseDataForProcessing = useCallback(() => {
-    // Priority: current tableData > lastKnownTableData > null
-    return tableData ?? lastKnownTableDataRef.current;
-  }, [tableData]);
+  // Data processing logic moved to DataTable component
 
   // Column mutations hook (after tableData is defined)
   const {
@@ -537,41 +440,12 @@ function BasePageContent() {
 
   // Client-side filtering function is now provided by useFilterManagement hook
 
-  // Process table data with sorting and filtering
-  const baseTableData = useMemo(() => {
-    const baseData = getBaseDataForProcessing();
-    if (!baseData) return null;
-    
-    // Apply client-side filtering first
-    const filteredRows = applyClientSideFilters(baseData.rows, filterRules);
-    
-    return {
-      ...baseData,
-      rows: filteredRows,
-    };
-  }, [getBaseDataForProcessing, filterRules, applyClientSideFilters]);
-
-  // Use sort data processor for sorting logic
-  const { processedTableData: optimisticTableData } = useSortDataProcessor({
-    baseData: baseTableData,
-    sortRules,
-    serverProcessedData: serverProcessedTableData,
-  });
+  // All data processing is now handled by DataTable component
 
   // NO AUTO-SAVE: Sort integration disabled to prevent automatic saves
   // useSortViewIntegration - DISABLED
 
-  // Background sync for server-side processed data
-  const handleRulesChange = useCallback(() => {
-    if (selectedTable && (sortRules.length > 0 || filterRules.length > 0)) {
-      // Trigger background fetch of server-side processed data
-      void refetchProcessedData();
-    }
-  }, [selectedTable, sortRules.length, filterRules.length, refetchProcessedData]);
-
-  useEffect(() => {
-    handleRulesChange();
-  }, [handleRulesChange]);
+  // Server-side data processing is now handled by DataTable
 
   // Track all pending mutations for navbar saving indicator
   const hasActiveMutations = useIsMutating() > 0;
@@ -640,18 +514,7 @@ function BasePageContent() {
     );
   }
 
-  // Use optimistic data if available, otherwise fall back to any available data
-  const displayTableData = optimisticTableData ?? tableData ?? lastKnownTableDataRef.current;
-
-  // Determine loading state
-  const isInitialLoading = Boolean(isLoadingTableData || (
-    !displayTableData && selectedTable && !lastKnownTableDataRef.current
-  ));
-  
-  const isTableStabilizing = isFetchingTableData || (
-    (sortRules.length > 0 || filterRules.length > 0) && 
-    (isLoadingProcessedData || isFetchingProcessedData)
-  );
+  // Loading states are now managed by DataTable component
 
 
 
@@ -687,7 +550,7 @@ function BasePageContent() {
             onSidebarClick={() => {
               setSidebarExpanded(!sidebarExpanded);
             }}
-            columns={displayTableData?.columns ?? []}
+            columns={columnsToolbar}
             hiddenColumns={hiddenColumns}
             onToggleColumn={handleToggleColumn}
             onHideAllColumns={handleHideAllColumns}
@@ -743,38 +606,16 @@ function BasePageContent() {
             {/* Main Content Panel */}
             <div className="flex-1 min-w-0 w-0 overflow-hidden flex flex-col">
               <main className="flex-1 h-full relative bg-[#f6f8fc]">
-                {/* Loading overlay for table stabilization */}
-                {isTableStabilizing && (
-                  <div className="absolute top-0 left-0 right-0 z-20 bg-white/80 backdrop-blur-sm border-b border-gray-200">
-                    <div className="flex items-center justify-center py-2 px-4">
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 border border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-xs text-gray-600 font-medium">
-                          {sortRules.length > 0 || filterRules.length > 0 ? 'Processing filters & sorting...' : 'Refreshing data...'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* DataTable now handles its own loading states */}
 
-                {/* Initial loading state - only covers main content */}
-                {(!selectedTable || isInitialLoading || !displayTableData) ? (
-                  <div className="absolute inset-0 flex items-center justify-center bg-[#f6f8fc] z-10">
-                    <div className="flex items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                      <div className="text-gray-600 font-medium">Loading table data...</div>
-                    </div>
-                  </div>
-                ) : (
+                {/* DataTable now handles its own loading states */}
+                {selectedTable ? (
                   <DataTable 
-                    tableData={displayTableData}
+                    tableId={selectedTable}
                     onInsertRowAbove={handleInsertRowAbove}
                     onInsertRowBelow={handleInsertRowBelow}
                     onDeleteRow={handleDeleteRow}
                     onContextMenu={handleContextMenu}
-                    fetchNextPage={fetchNextPage}
-                    hasNextPage={hasNextPage}
-                    isFetchingNextPage={isFetchingNextPage}
                     hiddenColumns={hiddenColumns}
                     sortRules={sortRules}
                     filterRules={filterRules}
@@ -784,11 +625,23 @@ function BasePageContent() {
                     scrollToRowId={scrollToRowId}
                     onRenameColumn={handleRenameColumn}
                     onDeleteColumn={handleDeleteColumn}
+                    onRecordCountChange={setRecordCount}
+                    records={records}
+                    setRecords={setRecords}
+                    columns={columns}
+                    setColumns={setColumns}
                   />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-[#f6f8fc] z-10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                      <div className="text-gray-600 font-medium">Loading...</div>
+                    </div>
+                  </div>
                 )}
               </main>
               <SummaryBar 
-                recordCount={displayTableData?._count.rows ?? 0} 
+                recordCount={recordCount} 
                 onAddRow={handleAddRow} 
                 onBulkAddRows={handleBulkAddRowsWrapper}
                 isBulkLoading={isBulkLoading}

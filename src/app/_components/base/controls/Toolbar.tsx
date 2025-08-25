@@ -479,6 +479,8 @@ export default function Toolbar({
           onSearchDataUpdate={onSearchDataUpdate}
           onScrollToResult={onScrollToSearchResult}
           triggerRef={searchButtonRef}
+          sortRules={sortRules.map(rule => ({ columnId: rule.columnId, direction: rule.direction }))}
+          filterRules={filterRules}
         />
       )}
 
