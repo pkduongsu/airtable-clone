@@ -207,12 +207,14 @@ export function DataTable({
     try{
       const tempColId = crypto.randomUUID();
 
-      const tempColumn = await createColumnMutation.mutateAsync({
+      const tempColumn: Column = {
         tableId: tableId,
         type: type,
         name: name,
-        id: tempColId,      
-      });
+        id: tempColId, 
+        order: columns.length,
+        width: 179     
+      };
 
       setColumns((old) => [...old, tempColumn]);
     
