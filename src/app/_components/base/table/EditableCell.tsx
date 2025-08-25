@@ -8,30 +8,17 @@ interface EditableCellProps {
   tableId: string;
   initialValue: string;
   className?: string;
- 
   onSelect?: () => void;
   onDeselect?: () => void;
   rowId: string;
   columnId: string;
   onContextMenu?: (event: React.MouseEvent, rowId: string) => void;
-  sortRules?: Array<{
-    columnId: string;
-    direction: 'asc' | 'desc';
-  }>;
-  filterRules?: Array<{
-    id: string;
-    columnId: string;
-    columnName: string;
-    columnType: 'TEXT' | 'NUMBER';
-    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
-    value?: string | number;
-  }>;
+  hasSort: boolean;
+  hasFilter: boolean;
   searchQuery?: string;
   isSearchMatch?: boolean;
   isCurrentSearchResult?: boolean;
   columnType?: string;
-  isTableLoading?: boolean;
-  isTableStabilizing?: boolean;
 }
 
 export function EditableCell({ 
@@ -43,14 +30,12 @@ export function EditableCell({
   rowId, 
   columnId, 
   onContextMenu, 
-  sortRules = [], 
-  filterRules = [], 
+  hasSort,
+  hasFilter,
   searchQuery: _searchQuery, 
   isSearchMatch = false, 
   isCurrentSearchResult = false,
   columnType = "TEXT",
-  isTableLoading: _isTableLoading = false,
-  isTableStabilizing: _isTableStabilizing = false,
 }: EditableCellProps) {
   const [value, setValue] = useState(initialValue);
   const [lastSaved, setLastSaved] = useState(initialValue);
@@ -65,9 +50,7 @@ export function EditableCell({
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
-      await utils.table.getById.cancel({id: tableId});
-      await utils.cell.findByRowColumn.cancel();
-
+      await utils.table.getById.cancel();
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
@@ -79,12 +62,8 @@ export function EditableCell({
       setLastSaved(value);
     },
     onSettled: () => {
-      setTimeout(() => {
-        if (rowId && columnId) {
-          void utils.cell.findByRowColumn.invalidate({ rowId, columnId });
-        }
         void utils.table.getById.invalidate({ id: tableId });
-      }, 1000); // Delay invalidation by 1 second
+        //void utils.table.getTableData.invalidate();
     }
   });
   
@@ -103,10 +82,8 @@ export function EditableCell({
   
   //triggers when database resets and initialValue changes to the newest in db
   useEffect(() => {
-    if (initialValue !== lastSaved) {
     setValue(initialValue);
     setLastSaved(initialValue);
-  }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValue]);
 
@@ -149,9 +126,6 @@ export function EditableCell({
 
   // Color cell based on filters and sorts (not search - that's handled separately)
   const getCellBackgroundColor = () => {
-    const hasSort = sortRules.some(rule => rule.columnId === columnId);
-    const hasFilter = filterRules.some(rule => rule.columnId === columnId);
-    
     if (hasSort && hasFilter) {
       return 'bg-[#EBE6A7]';
     }

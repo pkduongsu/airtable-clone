@@ -191,7 +191,7 @@ export function DataTable({
     {
       onSuccess: async() => {
         await refetch();
-        await utils.table.getTableData.invalidate();
+        //await utils.table.getTableData.invalidate();
       },
     }
   );
@@ -199,7 +199,7 @@ export function DataTable({
   const createRowMutation = api.row.create.useMutation({
     onSuccess: async() => {
       await refetch();
-      await utils.table.getTableData.invalidate();
+      //await utils.table.getTableData.invalidate();
     },
   });
 
@@ -214,19 +214,24 @@ export function DataTable({
         id: tempColId,      
       });
 
-      utils.table.getTableData.setData(
-        {tableId: tableId, limit: PAGE_LIMIT},
-        (old) => {
-          if (!old) return old;
-          return {
-            ...old,
-            columns: [...(old.columns ?? []), tempColumn]
-          };
-        }
-      );
-      
-
-      setShowAddColumnModal(false);
+      setColumns((old) => [...old, tempColumn]);
+    
+      const tempCells = records.map((row) => ({
+        id: crypto.randomUUID(),
+        rowId: row.id,
+        columnId: tempColId, // Real ID
+        value: { text: ""},
+      }));
+    
+      setCells((old) => [...old, ...tempCells]);
+    
+      // Pass the ID to the server
+      await createColumnMutation.mutateAsync({
+        tableId: tableId,
+        type: type,
+        name: name,
+        id: tempColId, // Use the same ID
+      });
 
     } catch (error) {
       console.error('Failed to create column:', error);
@@ -640,6 +645,8 @@ export function DataTable({
           const matchKey = `${rowId}-${columnId}`;
           const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
           const isCurrentSearchResult = searchMatchInfo.currentResult === matchKey;
+          const hasSort = sortRules.some(rule => rule.columnId === columnId);
+          const hasFilter = filterRules.some(rule => rule.columnId === columnId);
 
           return (
             <EditableCell
@@ -651,11 +658,10 @@ export function DataTable({
               rowId={rowId}
               columnId={columnId}
               onContextMenu={handleContextMenuClick}
-              filterRules={filterRules}
-              searchQuery={searchValue}
+              hasSort={hasSort}
+              hasFilter={hasFilter}
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
-              // Pass focus state ref for visual highlighting
               columnType={column.type}
             />
           );
