@@ -23,6 +23,7 @@ export const rowRouter = createTRPCRouter({
         data: {
           tableId: input.tableId,
           order: nextOrder,
+          id: input.id,
         },
       });
 

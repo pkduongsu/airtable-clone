@@ -12,7 +12,7 @@ import { useIsMutating } from "@tanstack/react-query";
 import { EditingStateProvider } from "../_components/providers/EditingStateProvider";
 import { TableTabsBar } from "../_components/base/controls/TableTabsBar";
 import  Toolbar  from "../_components/base/controls/Toolbar";
-import { DataTable } from "../_components/base/table/DataTableCopy";
+import { DataTable } from "../_components/base/table/DataTable";
 import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
 import { SummaryBar } from "../_components/base/controls/SummaryBar";
 import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
@@ -22,6 +22,7 @@ import { useSortManagement } from "../_components/base/hooks/useSortManagement";
 import { useRowMutations } from "../_components/base/hooks/useRowMutations";
 import { useFilterManagement } from "../_components/base/hooks/useFilterManagement";
 import { useColumnMutations } from "../_components/base/hooks/useColumnMutations";
+import {type Column, type Row as _Record} from "@prisma/client";
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -41,9 +42,12 @@ function BasePageContent() {
   
   
   const user = session?.user;
+
   
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [records, setRecords] = useState<_Record[]>([]); //set local records state (local = optimistic updates)
+  const [columns, setColumns] = useState<Column[]>([]); //set local columns state 
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280); //for resizing main content area
   const [isResizing, setIsResizing] = useState(false);
@@ -212,7 +216,7 @@ function BasePageContent() {
   );
 
   // Extract columns for the Toolbar
-  const columns = useMemo(() => {
+  const columnsToolbar = useMemo(() => {
     return tableData?.columns ?? [];
   }, [tableData]);
 
@@ -546,7 +550,7 @@ function BasePageContent() {
             onSidebarClick={() => {
               setSidebarExpanded(!sidebarExpanded);
             }}
-            columns={columns}
+            columns={columnsToolbar}
             hiddenColumns={hiddenColumns}
             onToggleColumn={handleToggleColumn}
             onHideAllColumns={handleHideAllColumns}
@@ -622,6 +626,10 @@ function BasePageContent() {
                     onRenameColumn={handleRenameColumn}
                     onDeleteColumn={handleDeleteColumn}
                     onRecordCountChange={setRecordCount}
+                    records={records}
+                    setRecords={setRecords}
+                    columns={columns}
+                    setColumns={setColumns}
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center bg-[#f6f8fc] z-10">

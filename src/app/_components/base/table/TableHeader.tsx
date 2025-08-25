@@ -21,17 +21,6 @@ interface TableHeaderProps {
     tableId: string;
   }>;
   onColumnAction?: (position: { x: number; y: number }, column: { id: string; name: string }) => void;
-  tableData: {
-    id: string;
-    columns: Array<{
-      id: string;
-      name: string;
-      type: string;
-      order: number;
-      width: number;
-      tableId: string;
-    }>;
-  };
   onAddColumnClick?: () => void;
 }
 
@@ -39,7 +28,6 @@ export function TableHeader({
   table, 
   tableColumns, 
   onColumnAction,
-  tableData,
   onAddColumnClick
 }: TableHeaderProps) {
 

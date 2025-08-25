@@ -70,12 +70,9 @@ export function EditableCell({
   const [value, setValue] = useState(initialValue);
   const [lastSaved, setLastSaved] = useState(initialValue);
   const [isFocused, setIsFocused] = useState(false);
-  const [isSavingCell, setIsSavingCell] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   
   // Compute states for visual highlighting
-  const isNavigated = navigatedCell?.rowIndex === rowIndex && navigatedCell?.columnIndex === columnIndex;
-  const isFocusedByRef = focusStateRef?.current?.focusedRowId === rowId && focusStateRef?.current?.focusedColumnId === columnId;
   
   const utils = api.useUtils();
 
@@ -83,8 +80,7 @@ export function EditableCell({
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
-      setIsSavingCell(true);
-      await utils.table.getById.cancel();
+      await utils.table.getById.cancel({id: tableId});
       await utils.cell.findByRowColumn.cancel();
 
       return { prevValue: lastSaved };
@@ -93,10 +89,8 @@ export function EditableCell({
       if (context?.prevValue) {
         setValue(context.prevValue);
       }
-      setIsSavingCell(false);
     },
     onSuccess: () => {
-      setIsSavingCell(false);
       setLastSaved(value);
     },
     onSettled: () => {
@@ -124,8 +118,10 @@ export function EditableCell({
   
   //triggers when database resets and initialValue changes to the newest in db
   useEffect(() => {
+    if (initialValue !== lastSaved) {
     setValue(initialValue);
     setLastSaved(initialValue);
+  }
   }, [initialValue]);
 
   const handleBlur = () => {
@@ -183,27 +179,6 @@ export function EditableCell({
     return '';
   };
 
-  // Highlight search text within cell value
-  const highlightSearchText = (text: string, query: string) => {
-    if (!query || !text) return text;
-    
-    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    const parts = text.split(regex);
-    
-    return parts.map((part, index) => {
-      if (regex.test(part)) {
-        return (
-          <span 
-            key={index} 
-            className={isCurrentSearchResult ? 'bg-orange-500' : 'bg-yellow-300'}
-          >
-            {part}
-          </span>
-        );
-      }
-      return part;
-    });
-  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
