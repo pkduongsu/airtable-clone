@@ -136,9 +136,11 @@ export function EditableCell({
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
     
-    // Validate number fields
-    if (columnType === "NUMBER" && newValue !== "" && !/^\d*\.?\d*$/.test(newValue)) {
-      return;
+    // Validate number fields - only allow digits, minus sign at start, and one decimal point
+    if (columnType === "NUMBER" && newValue !== "") {
+      if (!/^-?\d*\.?\d*$/.test(newValue)) {
+        return;
+      }
     }
 
     setValue(newValue);

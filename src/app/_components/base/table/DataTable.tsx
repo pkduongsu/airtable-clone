@@ -121,11 +121,17 @@ export function DataTable({ tableId, onInsertRowAbove: _onInsertRowAbove, onInse
     
       // Critical state update useEffect
       useEffect(() => {
+        console.log('useEffect running, tableRecords:', tableRecords);
         if (tableRecords) {
-          setColumns(tableRecords?.pages[0]?.columns ?? []);
+          const columns = tableRecords?.pages[0]?.columns ?? [];
+          console.log('Columns from tableRecords:', columns);
+          console.log('First column details:', columns[0]);
+          setColumns(columns);
           setRecords(allRecords);
           const combinedCells = allRecords.flatMap((r: any) => r.cells);
           setCells(combinedCells);
+        } else {
+          console.log('No tableRecords available');
         }
       }, [tableRecords, allRecords, setColumns, setRecords]);
     
@@ -391,6 +397,9 @@ export function DataTable({ tableId, onInsertRowAbove: _onInsertRowAbove, onInse
           const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
           const isCurrentSearchResult = searchMatchInfo.currentResult === matchKey;
 
+          // Debug log to check column type
+          console.log('DataTable - Column:', column.name, 'Type:', column.type);
+
           return (
             <EditableCell
               key={`${row.id}-${column.id}`} // Stable key for React tracking
@@ -407,6 +416,7 @@ export function DataTable({ tableId, onInsertRowAbove: _onInsertRowAbove, onInse
               filterRules={filterRules}
               isTableLoading={isRecordsFetching}
               isTableStabilizing={isRecordsLoading}
+              columnType={column.type}
               searchQuery={searchQuery}
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}

@@ -31,9 +31,7 @@ import {
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-const FETCH_RECORD_LIMIT = 100;
-
-
+const PAGE_LIMIT = 100;
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -214,7 +212,7 @@ export function DataTable({
   } = api.table.getTableData.useInfiniteQuery(
     {
       tableId: tableId,
-      limit: FETCH_RECORD_LIMIT,
+      limit: PAGE_LIMIT,
       sortRules: sortRules.map(rule => ({
         columnId: rule.columnId,
         direction: rule.direction
@@ -617,6 +615,7 @@ export function DataTable({
               rowIndex={rowIndex}
               columnIndex={columnIndex}
               navigatedCell={navigatedCell}
+              columnType={column.type}
             />
           );
         },

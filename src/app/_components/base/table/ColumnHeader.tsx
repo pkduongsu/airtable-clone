@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { flexRender, type Header } from "@tanstack/react-table";
 import ChevronDown from "../../icons/ChevronDown";
+import TextAlt from "../../icons/TextAlt";
+import HashStraight from "../../icons/HashStraight";
 
 type TableRow = {
   id: string;
@@ -56,13 +58,25 @@ export function ColumnHeader({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <span className="truncate">
-          {header.isPlaceholder
-            ? null
-            : flexRender(
+        <span className="truncate flex items-center gap-1">
+          {header.isPlaceholder ? null : (
+            <>
+              {/* Column type indicator */}
+              {header.id !== '__rowNumber' && (() => {
+                const column = tableColumns.find(col => col.id === header.id);
+                if (column?.type === 'NUMBER') {
+                  return <HashStraight size={16} color="#1d1f25" />;
+                } else if (column?.type === 'TEXT') {
+                  return <TextAlt size={16} color="#1d1f25" />;
+                }
+                return null;
+              })()}
+              {flexRender(
                 header.column.columnDef.header,
                 header.getContext()
               )}
+            </>
+          )}
         </span>
         {header.id !== '__rowNumber' && (
           <button 

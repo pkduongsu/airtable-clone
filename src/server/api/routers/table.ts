@@ -56,7 +56,7 @@ export const tableRouter = createTRPCRouter({
                 name: "Attachment Summary",
                 type: "TEXT",
                 order: 5,
-                width: 220,
+                width: 250,
               },
             ],
           },
@@ -323,7 +323,7 @@ export const tableRouter = createTRPCRouter({
               queryParams.push(`%${rule.value}%`);
               paramIndex++;
             } else if (['equals', 'greater_than', 'less_than'].includes(rule.operator) && rule.value !== undefined && rule.value !== null) {
-              queryParams.push(rule.value);
+              queryParams.push(String(rule.value));
               paramIndex++;
             }
           });
@@ -657,7 +657,7 @@ export const tableRouter = createTRPCRouter({
             queryParams.push(`%${rule.value}%`);
             paramIndex++;
           } else if (['equals', 'greater_than', 'less_than'].includes(rule.operator) && rule.value !== undefined && rule.value !== null) {
-            queryParams.push(rule.value);
+            queryParams.push(String(rule.value));
             paramIndex++;
           }
         });
