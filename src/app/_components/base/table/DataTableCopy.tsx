@@ -31,7 +31,6 @@ import {
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-const FAKER_RECORDS_COUNT = 5000;
 const FETCH_RECORD_LIMIT = 100;
 
 
@@ -116,23 +115,40 @@ export function DataTable({
   scrollToRowId, 
   onRenameColumn, 
   onDeleteColumn,
-  isApplyingFiltersOrSorts = false,
   onRecordCountChange
 }: DataTableProps) {
   const utils = api.useUtils();
   
   // Extract parameters from props to match Table.tsx pattern
-  const currentView = "";
 
-  // State management like Table.tsx
-  const [records, setRecords] = useState<_Record[]>([]);
-  const [columns, setColumns] = useState<Column[]>([]);
+  // State management
+  const [records, setRecords] = useState<_Record[]>([]); //set local records state (local = optimistic updates)
+  const [columns, setColumns] = useState<Column[]>([]); //set local columns state 
   const [cells, setCells] = useState<Cell[]>([]);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
-  const [focusedCell, setFocusedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
-  const [selectedCell, setSelectedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  const [focusedCell, setFocusedCell] = useState<{rowId: string, columnId: string} | null>(null);
+  const [selectedCell, setSelectedCell] = useState<{rowId: string, columnId: string} | null>(null);
+  const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  // Store focus state in a ref to avoid re-renders
+  const focusStateRef = useRef<{
+    focusedRowId: string | null;
+    focusedColumnId: string | null;
+    selectedRowId: string | null;
+    selectedColumnId: string | null;
+  }>({
+    focusedRowId: null,
+    focusedColumnId: null,
+    selectedRowId: null,
+    selectedColumnId: null,
+  });
+  
+  // Ref to track focus timeout to avoid multiple simultaneous focuses
+  const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Ref to prevent navigation immediately after clicking
+  const lastClickTimeRef = useRef<number>(0);
   
   // Add Column Modal state
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
@@ -289,44 +305,53 @@ export function DataTable({
       }
     }
 
-    // Debug logging
-    console.log('SearchMatchInfo Update:', {
-      searchResultsLength: searchResults.length,
-      currentSearchIndex,
-      cellMatchesSize: cellMatches.size,
-      currentResult,
-      currentSearchResult: searchResults[currentSearchIndex],
-      currentSearchResultDetails: searchResults[currentSearchIndex] ? {
-        type: searchResults[currentSearchIndex].type,
-        rowId: searchResults[currentSearchIndex].rowId?.slice(-8),
-        columnId: searchResults[currentSearchIndex].columnId?.slice(-8),
-        name: searchResults[currentSearchIndex].name,
-      } : null,
-      searchResults: searchResults.slice(0, 5), // First 5 results
-    });
-
     return { cellMatches, currentResult };
   }, [searchResults, currentSearchIndex]);
 
-  // Handle cell selection
-  const handleCellSelection = useCallback((rowIndex: number, columnIndex: number) => {
-    setSelectedCell({ rowIndex, columnIndex });
-    setFocusedCell({ rowIndex, columnIndex });
-  }, []);
+  // Calculate navigation bounds without depending on full arrays
+  const navigationBounds = useMemo(() => {
+    const visibleColumnCount = columns.filter(column => !hiddenColumns.has(column.id)).length;
+    return {
+      maxRowIndex: records.length - 1,
+      maxColumnIndex: Math.max(0, visibleColumnCount - 1)
+    };
+  }, [records.length, columns.length, hiddenColumns]);
+
+  // Handle cell selection (click)
+  const handleCellSelection = useCallback((rowId: string, columnId: string) => {
+    // Convert rowId/columnId back to indices for navigation consistency
+    const rowIndex = records.findIndex(record => record.id === rowId);
+    const visibleColumns = columns
+      .filter(col => !hiddenColumns.has(col.id))
+      .sort((a, b) => a.order - b.order);
+    const columnIndex = visibleColumns.findIndex(col => col.id === columnId);
+    
+    // Record click time to prevent immediate keyboard navigation
+    lastClickTimeRef.current = Date.now();
+    
+    setSelectedCell({ rowId, columnId });
+    setFocusedCell({ rowId, columnId });
+    setNavigatedCell({ rowIndex, columnIndex }); // Set navigation to clicked position
+    
+    // Update focus state ref for highlighting
+    focusStateRef.current = {
+      focusedRowId: rowId,
+      focusedColumnId: columnId,
+      selectedRowId: rowId,
+      selectedColumnId: columnId,
+    };
+  }, [records, columns, hiddenColumns]);
 
   // Handle cell deselection
   const handleCellDeselection = useCallback(() => {
     setSelectedCell(null);
     setFocusedCell(null);
+    setNavigatedCell(null);
   }, []);
 
-  // Handle cell navigation
+  // Handle cell navigation with optimized dependencies
   const handleCellNavigation = useCallback((direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right', currentRowIndex: number, currentColumnIndex: number) => {
-    if (!records || !columns) return;
-    
-    const maxRowIndex = records.length - 1;
-    const visibleColumnCount = columns.filter(column => !hiddenColumns.has(column.id)).length;
-    const maxColumnIndex = visibleColumnCount - 1;
+    const { maxRowIndex, maxColumnIndex } = navigationBounds;
     
     let newRowIndex = currentRowIndex;
     let newColumnIndex = currentColumnIndex;
@@ -349,6 +374,9 @@ export function DataTable({
         }
         break;
       case 'enter':
+        if (currentRowIndex < maxRowIndex) {
+          newRowIndex = currentRowIndex + 1;
+        }
       case 'down':
         if (currentRowIndex < maxRowIndex) {
           newRowIndex = currentRowIndex + 1;
@@ -371,53 +399,108 @@ export function DataTable({
         break;
     }
 
-    if (newRowIndex !== currentRowIndex || newColumnIndex !== currentColumnIndex) {
-      setSelectedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
-      setFocusedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
+    newRowIndex = Math.max(0, Math.min(newRowIndex, maxRowIndex));
+    newColumnIndex = Math.max(0, Math.min(newColumnIndex, maxColumnIndex));
+
+   const targetRowId = records[newRowIndex]?.id;
+  const visibleColumns = columns
+    .filter(col => !hiddenColumns.has(col.id))
+    .sort((a, b) => a.order - b.order);
+  const targetColumnId = visibleColumns[newColumnIndex]?.id;
+
+  if (!targetRowId || !targetColumnId) return;
+
+  // Update state
+  setNavigatedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
+  setSelectedCell(null);
+  setFocusedCell({ rowId: targetRowId, columnId: targetColumnId });
+  focusStateRef.current = {
+    focusedRowId: targetRowId,
+    focusedColumnId: targetColumnId,
+    selectedRowId: null,
+    selectedColumnId: null,
+  };
+
+  // Focus the actual input in DOM
+  if (focusTimeoutRef.current) {
+    clearTimeout(focusTimeoutRef.current);
+  }
+  focusTimeoutRef.current = setTimeout(() => {
+    const cellInput = document.querySelector(
+      `input[data-cell-id="${targetRowId}-${targetColumnId}"]`
+    ) as HTMLInputElement;
+    if (cellInput) {
+      cellInput.focus();
+      cellInput.select();
     }
-  }, [records?.length, columns, hiddenColumns]);
+    focusTimeoutRef.current = null;
+  }, 10);
 
-  // Handle keyboard events for cell selection and navigation
+  }, [navigationBounds, hiddenColumns, records, columns]);
+
+  // Initialize navigation to first cell if no cell is navigated or selected
   useEffect(() => {
-    if (!selectedCell) return;
+  if (!navigatedCell) return;
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Only handle keyboard events if no input is focused
-      const activeElement = document.activeElement;
-      if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
-        return;
-      }
+  const handleKeyDown = (e: KeyboardEvent) => {
+    const active = document.activeElement as HTMLInputElement | null;
+    const isInput = active && active.tagName === "INPUT";
 
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        setFocusedCell(selectedCell);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
+    let { rowIndex, columnIndex } = navigatedCell;
+
+    const move = (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => {
+      if (direction == 'enter') {
         handleCellDeselection();
-      } else if (e.key === 'Tab') {
         e.preventDefault();
-        handleCellNavigation(e.shiftKey ? 'shift-tab' : 'tab', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        handleCellNavigation('up', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        handleCellNavigation('down', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        handleCellNavigation('left', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        handleCellNavigation('right', selectedCell.rowIndex, selectedCell.columnIndex);
-      } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
-        // Start editing on any printable character
-        setFocusedCell(selectedCell);
+        handleCellNavigation(direction, rowIndex, columnIndex);
       }
+      e.preventDefault();
+      handleCellNavigation(direction, rowIndex, columnIndex);
     };
 
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selectedCell, handleCellNavigation, handleCellDeselection]);
+    switch (e.key) {
+      case "Tab":
+        move(e.shiftKey ? "shift-tab" : "tab");
+        break;
+
+      case "Enter":
+        move("enter");
+        break;
+
+      case "ArrowUp":
+        move("up");
+        break;
+
+      case "ArrowDown":
+        move("down");
+        break;
+
+      case "ArrowLeft":
+        if (isInput) {
+          const caret = active.selectionStart ?? 0;
+          if (caret > 0) return; // allow caret movement inside input
+        }
+        move("left");
+        break;
+
+      case "ArrowRight":
+        if (isInput) {
+          const caret = active.selectionStart ?? 0;
+          const len = active.value?.length ?? 0;
+          if (caret < len) return; // allow caret movement inside input
+        }
+        move("right");
+        break;
+
+      default:
+        return;
+    }
+  };
+
+  window.addEventListener("keydown", handleKeyDown);
+  return () => window.removeEventListener("keydown", handleKeyDown);
+}, [navigatedCell, handleCellNavigation, handleCellDeselection]);
+
 
 
   // Handle context menu (insert row above/below)
@@ -495,7 +578,10 @@ export function DataTable({
     });
 
     // Create column definitions for data columns (filter out hidden columns)
-    const visibleColumns = columns.filter(column => !hiddenColumns.has(column.id));
+    const visibleColumns = columns
+      .filter(column => !hiddenColumns.has(column.id))
+      .sort((a, b) => a.order - b.order);
+    
     const tableColumns: ColumnDef<TableRow, string | undefined>[] = visibleColumns.map((column, columnIndex) =>
       columnHelper.accessor(column.id, {
         id: column.id,
@@ -510,34 +596,27 @@ export function DataTable({
           const matchKey = `${row.id}-${column.id}`;
           const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
           const isCurrentSearchResult = searchMatchInfo.currentResult === matchKey;
-          
-          // Debug current search result highlighting
-          if (isCurrentSearchResult) {
-            console.log(`Current search result cell: ${matchKey}`, {
-              rowId: row.id,
-              columnId: column.id,
-              isSearchMatch,
-              isCurrentSearchResult
-            });
-          }
 
           return (
             <EditableCell
-              key={`${row.id}-${column.id}`} // Stable key for React tracking
+              key={`${row.id}-${column.id}`} // Stable key to preserve cell state
               tableId={tableId}
               initialValue={value ?? ""}
               onNavigate={(direction) => handleCellNavigation(direction, rowIndex, columnIndex)}
-              shouldFocus={focusedCell?.rowIndex === rowIndex && focusedCell?.columnIndex === columnIndex}
-              isSelected={selectedCell?.rowIndex === rowIndex && selectedCell?.columnIndex === columnIndex}
-              onSelect={() => handleCellSelection(rowIndex, columnIndex)}
+              onSelect={() => handleCellSelection(row.id, column.id)}
               onDeselect={handleCellDeselection}
               rowId={row.id}
-              columnId={column.id} // Pass the real column ID directly
+              columnId={column.id}
               onContextMenu={handleContextMenuClick}
               filterRules={filterRules}
               searchQuery={searchValue}
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
+              // Pass focus state ref for visual highlighting
+              focusStateRef={focusStateRef}
+              rowIndex={rowIndex}
+              columnIndex={columnIndex}
+              navigatedCell={navigatedCell}
             />
           );
         },
@@ -574,7 +653,7 @@ export function DataTable({
       columns: allColumns,
       data: tableData_rows,
     };
-  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo, ]);
+  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo ]);
 
   const table = useReactTable({
     data,
@@ -639,6 +718,13 @@ export function DataTable({
       }
     }
   }, [scrollToRowId, data, rowVirtualizer]);
+
+  // Auto-scroll to navigated cell
+  useEffect(() => {
+    if (navigatedCell && rowVirtualizer) {
+      rowVirtualizer.scrollToIndex(navigatedCell.rowIndex, { align: 'center' });
+    }
+  }, [navigatedCell, rowVirtualizer]);
 
   // Infinite scrolling logic
   useEffect(() => {
@@ -708,6 +794,13 @@ export function DataTable({
         paddingBottom: '70px',
       }}
       onClick={handleContainerClick}
+      tabIndex={0}
+      onFocus={() => {
+        // Ensure we have a navigated cell when table gets focus
+        if (!navigatedCell && !selectedCell && records.length > 0 && columns.length > 0) {
+          setNavigatedCell({ rowIndex: 0, columnIndex: 0 });
+        }
+      }}
     >
       <div 
         style={{ 

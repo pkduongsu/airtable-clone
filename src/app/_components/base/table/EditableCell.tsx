@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { api } from "~/trpc/react";
 
 
@@ -9,8 +9,16 @@ interface EditableCellProps {
   initialValue: string;
   className?: string;
   onNavigate?: (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => void;
-  shouldFocus?: boolean;
-  isSelected?: boolean;
+  // Focus state ref for highlighting without re-renders
+  focusStateRef?: React.RefObject<{
+    focusedRowId: string | null;
+    focusedColumnId: string | null;
+    selectedRowId: string | null;
+    selectedColumnId: string | null;
+  }>;
+  navigatedCell?: {rowIndex: number, columnIndex: number} | null;
+  rowIndex: number;
+  columnIndex: number;
   onSelect?: () => void;
   onDeselect?: () => void;
   rowId: string;
@@ -41,8 +49,10 @@ export function EditableCell({
   initialValue, 
   className = "", 
   onNavigate, 
-  shouldFocus, 
-  isSelected, 
+  focusStateRef,
+  navigatedCell,
+  rowIndex,
+  columnIndex,
   onSelect, 
   onDeselect: _onDeselect, 
   rowId, 
@@ -62,6 +72,10 @@ export function EditableCell({
   const [isFocused, setIsFocused] = useState(false);
   const [isSavingCell, setIsSavingCell] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  // Compute states for visual highlighting
+  const isNavigated = navigatedCell?.rowIndex === rowIndex && navigatedCell?.columnIndex === columnIndex;
+  const isFocusedByRef = focusStateRef?.current?.focusedRowId === rowId && focusStateRef?.current?.focusedColumnId === columnId;
   
   const utils = api.useUtils();
 
@@ -95,29 +109,6 @@ export function EditableCell({
     }
   });
   
-  // Focus cell when it becomes selected (click) or when shouldFocus is set (keyboard)
-  useEffect(() => {
-    if (isSelected && inputRef.current && !isFocused) {
-      // Use requestAnimationFrame to ensure DOM has settled after potential modal opening
-      requestAnimationFrame(() => {
-        // Universal modal detection - don't auto-focus if any modal is open or modal input is focused
-        const anyModalOpen = document.querySelector('[role="dialog"], [aria-modal="true"], [class*="Modal"]');
-        const anyModalInputFocused = document.querySelector('[role="dialog"] input:focus, [aria-modal="true"] input:focus, [class*="Modal"] input:focus');
-        const anyToolbarInputFocused = document.querySelector('[role="toolbar"] input:focus, [data-toolbar] input:focus');
-        const activeElement = document.activeElement;
-        const isInputElement = activeElement && activeElement.tagName === 'INPUT';
-        
-        // Allow focus if it's a direct navigation action (keyboard)
-        if (shouldFocus && !anyModalOpen && !anyModalInputFocused && !anyToolbarInputFocused && !isInputElement) {
-          inputRef.current?.focus();
-        } else if (!shouldFocus && !isInputElement) {
-          // Click navigation - just focus without selecting
-          inputRef.current?.focus();
-        }
-        
-      });
-    }
-  }, [isSelected, shouldFocus, isFocused]);
 
   // Debounced saving - save 300ms after user stops typing
   useEffect(() => {
@@ -166,63 +157,9 @@ export function EditableCell({
   };
   
   const handleDoubleClick = () => {
-    // Double click - select and focus for editing
-    if (!isSelected) {
-      onSelect?.();
-    }
-    setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 0);
-  };
-
-
-  // Handle key navigation
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    switch (e.key) {
-      case 'Enter':
-        e.preventDefault();
-        inputRef.current?.blur();
-        onNavigate?.('enter');
-        break;
-      case 'Tab':
-        e.preventDefault();
-        inputRef.current?.blur();
-        onNavigate?.(e.shiftKey ? 'shift-tab' : 'tab');
-        break;
-      case 'Escape':
-        e.preventDefault();
-        setValue(lastSaved);
-        inputRef.current?.blur();
-        break;
-      case 'ArrowUp':
-        e.preventDefault();
-        inputRef.current?.blur();
-        onNavigate?.('up');
-        break;
-      case 'ArrowDown':
-        e.preventDefault();
-        inputRef.current?.blur();
-        onNavigate?.('down');
-        break;
-      case 'ArrowLeft':
-        // Only navigate if cursor is at the beginning
-        const input = e.currentTarget as HTMLInputElement;
-        if (input.selectionStart === 0) {
-          e.preventDefault();
-          inputRef.current?.blur();
-          onNavigate?.('left');
-        }
-        break;
-      case 'ArrowRight':
-        // Only navigate if cursor is at the end
-        const inputRight = e.currentTarget as HTMLInputElement;
-        if (inputRight.selectionStart === inputRight.value.length) {
-          e.preventDefault();
-          inputRef.current?.blur();
-          onNavigate?.('right');
-        }
-        break;
+    // Double click - select all text
+    if (inputRef.current) {
+      inputRef.current.select();
     }
   };
 
@@ -256,7 +193,7 @@ export function EditableCell({
         return (
           <span 
             key={index} 
-            className={isCurrentSearchResult ? 'bg-orange-300' : 'bg-yellow-300'}
+            className={isCurrentSearchResult ? 'bg-orange-500' : 'bg-yellow-300'}
           >
             {part}
           </span>
@@ -273,46 +210,35 @@ export function EditableCell({
     }
   };
 
-  // Determine cell styling based on state (original approach)
+  // Determine cell styling based on state
   const getCellClassName = () => {
-    const baseClasses = "w-full h-full px-2 py-1 flex items-center text-sm text-gray-900";
+    const baseClasses = "w-full h-full px-2 py-1 text-sm text-gray-900 cursor-text border border-transparent";
     
-    if (isSelected) {
-      return `${baseClasses} cursor-text bg-blue-50 border border-blue-500 border-solid`;
+    if (isFocused) {
+      // Editing state - strong blue border and background
+      return `${baseClasses} !bg-white !border-2 !border-blue-600 shadow-sm`;
     } else if (isSearchMatch) {
-      return `${baseClasses} cursor-text ${isCurrentSearchResult ? 'bg-orange-100' : 'bg-yellow-100'} hover:bg-[#f8f8f8]`;
+      return `${baseClasses} ${isCurrentSearchResult ? '!bg-orange-300' : '!bg-yellow-100'} hover:bg-gray-50`;
     } else {
-      return `${baseClasses} cursor-text hover:bg-[#f8f8f8] ${getCellBackgroundColor()}`;
+      return `${baseClasses} hover:bg-gray-50 ${getCellBackgroundColor()}`;
     }
   };
 
   return (
     <div className={`w-full h-full flex items-center ${className}`}>
       <div className="relative w-full h-full">
-        <div 
-          className={getCellClassName()}
-          onClick={handleClick} // Click to select and focus input
-          onDoubleClick={handleDoubleClick} 
-          onContextMenu={handleContextMenu}
-          data-cell="true"
-        >
-          <span className={`${(updateCellMutation.isPending ) ? 'opacity-70' : ''}`}>
-            {searchQuery && isSearchMatch ? highlightSearchText(value, searchQuery) : value}
-          </span>
-        </div>
-        {/* Hidden input for editing */}
+        {/* Always visible input - let it handle its own focus naturally */}
         <input
           ref={inputRef}
           value={value}
           onChange={handleChange}
           onFocus={handleFocus}
           onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          className="absolute inset-0 w-full h-full px-2 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:bg-white focus:border focus:border-blue-500 focus:border-solid"
-          style={{
-            opacity: isFocused ? 1 : 0,
-            pointerEvents: isFocused ? 'auto' : 'none'
-          }}
+          onClick={handleClick}
+          onDoubleClick={handleDoubleClick}
+          onContextMenu={handleContextMenu}
+          className={getCellClassName()}
+          data-cell-id={`${rowId}-${columnId}`}
         />
       </div>
     </div>
