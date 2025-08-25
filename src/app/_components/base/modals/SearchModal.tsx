@@ -24,6 +24,15 @@ interface SearchModalProps {
   onSearchDataUpdate?: (results: SearchResult[], query: string, currentIndex: number) => void;
   onScrollToResult?: (result: SearchResult, index: number) => void;
   triggerRef: React.RefObject<HTMLElement | null>;
+  sortRules?: Array<{ columnId: string; direction: 'asc' | 'desc' }>;
+  filterRules?: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+  }>;
 }
 
 export function SearchModal({
@@ -34,6 +43,8 @@ export function SearchModal({
   onSearchDataUpdate,
   onScrollToResult,
   triggerRef,
+  sortRules = [],
+  filterRules = [],
 }: SearchModalProps) {
   const [query, setQuery] = useState("");
   const [currentResultIndex, setCurrentResultIndex] = useState(0);
@@ -55,6 +66,8 @@ export function SearchModal({
     {
       tableId,
       query: debouncedQuery,
+      sortRules: sortRules.map(rule => ({ columnId: rule.columnId, direction: rule.direction })),
+      filterRules,
     },
     {
       enabled: debouncedQuery.length > 0,

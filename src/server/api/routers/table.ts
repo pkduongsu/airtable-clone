@@ -538,23 +538,25 @@ export const tableRouter = createTRPCRouter({
     }),
 
 
-
-
-
-
-
-
-
-
-
-
   searchTable: protectedProcedure
     .input(z.object({
       tableId: z.string(),
       query: z.string().min(1),
+      sortRules: z.array(z.object({
+        columnId: z.string(),
+        direction: z.enum(['asc', 'desc'])
+      })).optional(),
+      filterRules: z.array(z.object({
+        id: z.string(),
+        columnId: z.string(),
+        columnName: z.string(),
+        columnType: z.enum(['TEXT', 'NUMBER']),
+        operator: z.enum(['is_empty', 'is_not_empty', 'contains', 'not_contains', 'equals', 'greater_than', 'less_than']),
+        value: z.union([z.string(), z.number()]).optional()
+      })).optional()
     }))
     .query(async ({ ctx, input }) => {
-      const { tableId, query } = input;
+      const { tableId, query, sortRules = [], filterRules = [] } = input;
       
       // Search for matching column names
       const matchingColumns = await ctx.db.column.findMany({
@@ -572,31 +574,144 @@ export const tableRouter = createTRPCRouter({
         },
       });
 
-      // Search for matching cells using raw SQL for case-insensitive search
-      const matchingCells = await ctx.db.$queryRaw<Array<{
-        id: string;
-        value: { text: string } | null;
-        columnId: string;
-        rowId: string;
-        rowOrder: number;
-        columnName: string;
-        columnOrder: number;
-      }>>`
-        SELECT 
-          c.id,
-          c.value,
-          c."columnId",
-          c."rowId",
-          r."order" as "rowOrder",
-          col.name as "columnName",
-          col."order" as "columnOrder"
-        FROM "Cell" c
-        JOIN "Row" r ON c."rowId" = r.id
-        JOIN "Column" col ON c."columnId" = col.id
-        WHERE col."tableId" = ${tableId}
-        AND LOWER(c.value->>'text') LIKE LOWER(${`%${query}%`})
-        ORDER BY r."order" ASC
-      `;
+      // Search for matching cells using raw SQL with proper sorting that matches table display
+      let matchingCells;
+      
+      if (sortRules.length === 0 && filterRules.length === 0) {
+        // Use simple query when no sorting/filtering
+        matchingCells = await ctx.db.$queryRaw<Array<{
+          id: string;
+          value: { text: string } | null;
+          columnId: string;
+          rowId: string;
+          rowOrder: number;
+          columnName: string;
+          columnOrder: number;
+        }>>`
+          SELECT 
+            c.id,
+            c.value,
+            c."columnId",
+            c."rowId",
+            r."order" as "rowOrder",
+            col.name as "columnName",
+            col."order" as "columnOrder"
+          FROM "Cell" c
+          JOIN "Row" r ON c."rowId" = r.id
+          JOIN "Column" col ON c."columnId" = col.id
+          WHERE col."tableId" = ${tableId}
+          AND LOWER(c.value->>'text') LIKE LOWER(${`%${query}%`})
+          ORDER BY r."order" ASC, col."order" ASC
+        `;
+      } else {
+        // Use complex query that matches the table's current sort order
+        // Get all rows with their current sort order first
+        const sortExpressions = sortRules.map((rule, index) => {
+          return `(CASE
+            WHEN sort_col${index}.type = 'NUMBER' THEN
+              LPAD(COALESCE(NULLIF(sort_c${index}.value->>'text', ''), '0'), 20, '0')
+            ELSE
+              LOWER(COALESCE(sort_c${index}.value->>'text', ''))
+          END)`;
+        });
+        
+        // Build filter conditions for the search query
+        const buildFilterCondition = (rule: typeof filterRules[0], index: number, paramIndex: number) => {
+          const cellValue = `filter_c${index}.value->>'text'`;
+          switch (rule.operator) {
+            case 'is_empty': 
+              return `(${cellValue} IS NULL OR ${cellValue} = '')`;
+            case 'is_not_empty': 
+              return `(${cellValue} IS NOT NULL AND ${cellValue} != '')`;
+            case 'contains': 
+              return rule.value !== null && rule.value !== undefined 
+                ? `LOWER(COALESCE(${cellValue}, '')) LIKE LOWER($${paramIndex})`
+                : 'FALSE';
+            case 'not_contains': 
+              return rule.value !== null && rule.value !== undefined
+                ? `(${cellValue} IS NULL OR LOWER(COALESCE(${cellValue}, '')) NOT LIKE LOWER($${paramIndex}))`
+                : 'TRUE';
+            case 'equals': 
+              if (rule.columnType === 'NUMBER') {
+                return `CAST(NULLIF(${cellValue}, '') AS NUMERIC) = $${paramIndex}`;
+              }
+              return `LOWER(COALESCE(${cellValue}, '')) = LOWER($${paramIndex})`;
+            case 'greater_than': 
+              return `CAST(NULLIF(${cellValue}, '') AS NUMERIC) > $${paramIndex}`;
+            case 'less_than': 
+              return `CAST(NULLIF(${cellValue}, '') AS NUMERIC) < $${paramIndex}`;
+            default:
+              return 'TRUE';
+          }
+        };
+
+        const filterConditions: string[] = [];
+        const queryParams = [tableId, `%${query}%`];
+        let paramIndex = 3;
+
+        filterRules.forEach((rule, index) => {
+          const condition = buildFilterCondition(rule, index, paramIndex);
+          filterConditions.push(condition);
+          
+          if (['contains', 'not_contains'].includes(rule.operator) && rule.value !== undefined && rule.value !== null) {
+            queryParams.push(`%${rule.value}%`);
+            paramIndex++;
+          } else if (['equals', 'greater_than', 'less_than'].includes(rule.operator) && rule.value !== undefined && rule.value !== null) {
+            queryParams.push(rule.value);
+            paramIndex++;
+          }
+        });
+        
+        let sqlQuery = `
+          SELECT 
+            c.id,
+            c.value,
+            c."columnId",
+            c."rowId",
+            ROW_NUMBER() OVER (ORDER BY ${sortRules.length > 0 ? sortExpressions.map((expr, i) => `${expr} ${sortRules[i]!.direction.toUpperCase()} NULLS LAST`).join(', ') + ', r."order" ASC' : 'r."order" ASC'}) - 1 as "rowOrder",
+            col.name as "columnName",
+            col."order" as "columnOrder"
+          FROM "Cell" c
+          JOIN "Row" r ON c."rowId" = r.id
+          JOIN "Column" col ON c."columnId" = col.id`;
+        
+        // Add JOINs for sorting
+        sortRules.forEach((rule, index) => {
+          sqlQuery += `
+          LEFT JOIN "Cell" sort_c${index} ON r.id = sort_c${index}."rowId" AND sort_c${index}."columnId" = '${rule.columnId}'
+          LEFT JOIN "Column" sort_col${index} ON sort_c${index}."columnId" = sort_col${index}.id`;
+        });
+
+        // Add JOINs for filtering
+        filterRules.forEach((rule, index) => {
+          sqlQuery += `
+          LEFT JOIN "Cell" filter_c${index} ON r.id = filter_c${index}."rowId" AND filter_c${index}."columnId" = '${rule.columnId}'`;
+        });
+        
+        sqlQuery += `
+          WHERE col."tableId" = $1
+          AND LOWER(c.value->>'text') LIKE LOWER($2)`;
+        
+        if (filterConditions.length > 0) {
+          sqlQuery += ` AND (${filterConditions.join(' AND ')})`;
+        }
+        
+        sqlQuery += `
+          ORDER BY ${sortRules.length > 0 ? sortExpressions.map((expr, i) => `${expr} ${sortRules[i]!.direction.toUpperCase()} NULLS LAST`).join(', ') + ', r."order" ASC' : 'r."order" ASC'}, col."order" ASC`;
+
+        console.log('Search SQL Query:', sqlQuery);
+        console.log('Search Query Params:', queryParams);
+
+        matchingCells = await ctx.db.$queryRawUnsafe<Array<{
+          id: string;
+          value: { text: string } | null;
+          columnId: string;
+          rowId: string;
+          rowOrder: number;
+          columnName: string;
+          columnOrder: number;
+        }>>(sqlQuery, ...queryParams);
+      }
 
       // Calculate statistics
       const uniqueRowIds = new Set(matchingCells.map(cell => cell.rowId));
@@ -629,13 +744,11 @@ export const tableRouter = createTRPCRouter({
         if (a.rowOrder === -1 && b.rowOrder !== -1) return -1;
         if (b.rowOrder === -1 && a.rowOrder !== -1) return 1;
         
-        // For cells, sort by column order first (left to right), then row order (top to bottom)
+        // For cells, sort by row order first, then column order
         if (a.rowOrder !== -1 && b.rowOrder !== -1) {
-          if (a.columnOrder !== b.columnOrder) {
-            return a.columnOrder - b.columnOrder;
-          }
-          return a.rowOrder - b.rowOrder;
-        }
+        if (a.rowOrder !== b.rowOrder) return a.rowOrder - b.rowOrder;
+        return a.columnOrder - b.columnOrder;
+      }
         
         // For fields only, sort by column order
         return a.columnOrder - b.columnOrder;
