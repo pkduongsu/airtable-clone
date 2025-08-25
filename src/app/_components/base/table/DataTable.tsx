@@ -169,14 +169,14 @@ export function DataTable({
       filterRules: filterRules
     },
     {
-      getNextPageParam: (lastPage: any) => lastPage.nextCursor,
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
       refetchOnWindowFocus: false,
     }
   );
 
   // Flatten all records from pages
   const allRecords = useMemo(() => {
-    return tableRecords?.pages.flatMap((page: any) => page.rows) ?? [];
+    return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
   }, [tableRecords]);
 
   // Critical state update useEffect
@@ -184,7 +184,7 @@ export function DataTable({
     if (tableRecords) {
       setColumns(tableRecords?.pages[0]?.columns ?? []); 
       setRecords(allRecords);
-      const combinedCells = allRecords.flatMap((r: any) => r.cells);
+      const combinedCells = allRecords.flatMap((r) => r.cells);
       setCells(combinedCells);
     }
   }, [tableRecords, allRecords, setColumns, setRecords]);
@@ -658,9 +658,6 @@ export function DataTable({
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
               // Pass focus state ref for visual highlighting
-              rowIndex={rowIndex}
-              columnIndex={columnIndex}
-              navigatedCell={navigatedCell}
               columnType={column.type}
             />
           );
@@ -695,8 +692,6 @@ export function DataTable({
   // Handlers for table interaction
 
   const { rows } = table.getRowModel();
-
-  const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Setup virtualizer for rows
   const rowVirtualizer = useVirtualizer({

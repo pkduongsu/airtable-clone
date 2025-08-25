@@ -132,38 +132,50 @@ export const tableRouter = createTRPCRouter({
       id: z.string(),
     }))
     .mutation(async ({ ctx, input }) => {
-      // Delete all related data in the correct order due to foreign key constraints
-      
-      // First, delete all cells
-      await ctx.db.cell.deleteMany({
-        where: {
-          row: {
-            tableId: input.id
+      // Use a transaction to ensure all deletions succeed or fail together
+      return await ctx.db.$transaction(async (tx) => {
+        // Delete all related data in the correct order due to foreign key constraints
+        
+        // First, delete all cells for this table (both via rows and columns)
+        await tx.cell.deleteMany({
+          where: {
+            OR: [
+              {
+                row: {
+                  tableId: input.id
+                }
+              },
+              {
+                column: {
+                  tableId: input.id
+                }
+              }
+            ]
           }
-        }
-      });
+        });
 
-      // Then, delete all rows
-      await ctx.db.row.deleteMany({
-        where: { tableId: input.id }
-      });
+        // Then, delete all rows
+        await tx.row.deleteMany({
+          where: { tableId: input.id }
+        });
 
-      // Delete all columns
-      await ctx.db.column.deleteMany({
-        where: { tableId: input.id }
-      });
+        // Delete all columns
+        await tx.column.deleteMany({
+          where: { tableId: input.id }
+        });
 
-      // Delete all views
-      await ctx.db.view.deleteMany({
-        where: { tableId: input.id }
-      });
+        // Delete all views
+        await tx.view.deleteMany({
+          where: { tableId: input.id }
+        });
 
-      // Finally, delete the table
-      const table = await ctx.db.table.delete({
-        where: { id: input.id },
+        // Finally, delete the table
+        const table = await tx.table.delete({
+          where: { id: input.id },
+        });
+        
+        return table;
       });
-      
-      return table;
     }),
 
   getById: protectedProcedure

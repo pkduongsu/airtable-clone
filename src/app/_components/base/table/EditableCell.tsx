@@ -16,9 +16,6 @@ interface EditableCellProps {
     selectedRowId: string | null;
     selectedColumnId: string | null;
   }>;
-  navigatedCell?: {rowIndex: number, columnIndex: number} | null;
-  rowIndex: number;
-  columnIndex: number;
   onSelect?: () => void;
   onDeselect?: () => void;
   rowId: string;
@@ -50,9 +47,6 @@ export function EditableCell({
   className = "", 
   onNavigate, 
   focusStateRef,
-  navigatedCell,
-  rowIndex,
-  columnIndex,
   onSelect, 
   onDeselect: _onDeselect, 
   rowId, 
