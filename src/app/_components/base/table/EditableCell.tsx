@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "~/trpc/react";
 
 
@@ -8,14 +8,7 @@ interface EditableCellProps {
   tableId: string;
   initialValue: string;
   className?: string;
-  onNavigate?: (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => void;
-  // Focus state ref for highlighting without re-renders
-  focusStateRef?: React.RefObject<{
-    focusedRowId: string | null;
-    focusedColumnId: string | null;
-    selectedRowId: string | null;
-    selectedColumnId: string | null;
-  }>;
+ 
   onSelect?: () => void;
   onDeselect?: () => void;
   rowId: string;
@@ -45,8 +38,6 @@ export function EditableCell({
   tableId, 
   initialValue, 
   className = "", 
-  onNavigate, 
-  focusStateRef,
   onSelect, 
   onDeselect: _onDeselect, 
   rowId, 
@@ -54,7 +45,7 @@ export function EditableCell({
   onContextMenu, 
   sortRules = [], 
   filterRules = [], 
-  searchQuery, 
+  searchQuery: _searchQuery, 
   isSearchMatch = false, 
   isCurrentSearchResult = false,
   columnType = "TEXT",
@@ -116,6 +107,7 @@ export function EditableCell({
     setValue(initialValue);
     setLastSaved(initialValue);
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValue]);
 
   const handleBlur = () => {

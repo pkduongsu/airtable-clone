@@ -107,7 +107,6 @@ export function DataTable({
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
-  const [focusedCell, setFocusedCell] = useState<{rowId: string, columnId: string} | null>(null);
   const [selectedCell, setSelectedCell] = useState<{rowId: string, columnId: string} | null>(null);
   const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   // Store focus state in a ref to avoid re-renders
@@ -156,7 +155,6 @@ export function DataTable({
     hasNextPage,
     isFetchingNextPage,
     isFetching: isRecordsFetching,
-    isLoading: isRecordsLoading,
     refetch: refetchRecords,
   } = api.table.getTableData.useInfiniteQuery(
     {
@@ -308,12 +306,14 @@ export function DataTable({
     // keep the cell id for editing
     row.__cellIds[c.columnId] = c.id;
 
-    const v = c.value as any;
+    const v = c.value as { text?: string; number?: number | null } | string | number | null;
     row[c.columnId] =
       v && typeof v === "object" && "text" in v
-        ? v.text
-        : typeof v === "string"
-        ? v
+        ? v.text ?? ""
+        : v && typeof v === "object" && "number" in v
+        ? (v.number != null ? String(v.number) : "")
+        : typeof v === "string" || typeof v === "number"
+        ? String(v)
         : "";
   }
 
@@ -359,7 +359,7 @@ export function DataTable({
       maxRowIndex: records.length - 1,
       maxColumnIndex: Math.max(0, visibleColumnCount - 1)
     };
-  }, [records.length, columns.length, hiddenColumns]);
+  }, [columns, records.length, hiddenColumns]);
 
   // Handle cell selection (click)
   const handleCellSelection = useCallback((rowId: string, columnId: string) => {
@@ -374,7 +374,6 @@ export function DataTable({
     lastClickTimeRef.current = Date.now();
     
     setSelectedCell({ rowId, columnId });
-    setFocusedCell({ rowId, columnId });
     setNavigatedCell({ rowIndex, columnIndex }); // Set navigation to clicked position
     
     // Update focus state ref for highlighting
@@ -389,7 +388,6 @@ export function DataTable({
   // Handle cell deselection
   const handleCellDeselection = useCallback(() => {
     setSelectedCell(null);
-    setFocusedCell(null);
     setNavigatedCell(null);
   }, []);
 
@@ -457,7 +455,6 @@ export function DataTable({
   // Update state
   setNavigatedCell({ rowIndex: newRowIndex, columnIndex: newColumnIndex });
   setSelectedCell(null);
-  setFocusedCell({ rowId: targetRowId, columnId: targetColumnId });
   focusStateRef.current = {
     focusedRowId: targetRowId,
     focusedColumnId: targetColumnId,
@@ -470,9 +467,10 @@ export function DataTable({
     clearTimeout(focusTimeoutRef.current);
   }
   focusTimeoutRef.current = setTimeout(() => {
+    //eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
     const cellInput = document.querySelector(
       `input[data-cell-id="${targetRowId}-${targetColumnId}"]`
-    ) as HTMLInputElement;
+    ) as HTMLInputElement | null;
     if (cellInput) {
       cellInput.focus();
       cellInput.select();
@@ -490,7 +488,7 @@ export function DataTable({
     const active = document.activeElement as HTMLInputElement | null;
     const isInput = active && active.tagName === "INPUT";
 
-    let { rowIndex, columnIndex } = navigatedCell;
+    const { rowIndex, columnIndex } = navigatedCell;
 
     const move = (direction: 'tab' | 'shift-tab' | 'enter' | 'up' | 'down' | 'left' | 'right') => {
       if (direction == 'enter') {
@@ -625,8 +623,9 @@ export function DataTable({
     const visibleColumns = columns
       .filter(column => !hiddenColumns.has(column.id))
       .sort((a, b) => a.order - b.order);
+
     
-    const tableColumns: ColumnDef<TableRow, string | undefined>[] = visibleColumns.map((column, columnIndex) =>
+    const tableColumns: ColumnDef<TableRow, string | undefined>[] = visibleColumns.map((column, _columnIndex) =>
       columnHelper.accessor(column.id, {
         id: column.id,
         header: column.name,
@@ -634,7 +633,6 @@ export function DataTable({
         cell: (info) => {
           const value = info.getValue()!;
           const row = info.row.original;
-          const rowIndex = info.row.index;
 
           const rowId = row.id;
           const columnId = column.id;
@@ -674,7 +672,8 @@ export function DataTable({
       columns: allColumns,
       data: rowData, //uses this so that it merges record and cells in render time, whereas if separate, cells get rendered after.
     };
-  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo]);
 
   const table = useReactTable({
     data,
@@ -736,7 +735,7 @@ export function DataTable({
       
       // Trigger fetch when user has scrolled 80% of the way down
       if (scrollPercentage > 0.8) {
-        fetchNextPage();
+        void fetchNextPage();
       }
     };
 

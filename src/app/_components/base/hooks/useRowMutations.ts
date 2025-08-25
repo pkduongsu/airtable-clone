@@ -14,11 +14,9 @@ export function useRowMutations() {
     },
     onSuccess: (data, variables) => {
       // Note: isBulkLoading state should be managed by the consuming component
-      // Only invalidate if this is the only bulk mutation running
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'bulk-insert'] });
-      if (concurrentMutations === 1) {
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
+      // Invalidate both table data and table metadata (includes _count)
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getById.invalidate({ id: variables.tableId });
     }
   });
 
@@ -147,12 +145,6 @@ export function useRowMutations() {
             }))
           };
         });
-      }
-      
-      // Only invalidate if there are concurrent mutations as a fallback
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'insert'] });
-      if (concurrentMutations > 1) {
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
       }
     }
   });
@@ -283,12 +275,6 @@ export function useRowMutations() {
           };
         });
       }
-      
-      // Only invalidate if there are concurrent mutations as a fallback
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'insert'] });
-      if (concurrentMutations > 1) {
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
     }
   });
 
@@ -365,12 +351,9 @@ export function useRowMutations() {
       }
     },
     onSuccess: (data, variables) => {
-      // Only invalidate if this is the only row mutation running to prevent over-invalidation
-      const concurrentMutations = queryClient.isMutating({ mutationKey: ['row', 'delete'] });
-      if (concurrentMutations === 1) {
-        // Safe to invalidate related queries
-        void utils.table.getTableData.invalidate({ tableId: variables.tableId });
-      }
+      // Invalidate both table data and table metadata (includes _count)
+      void utils.table.getTableData.invalidate({ tableId: variables.tableId });
+      void utils.table.getById.invalidate({ id: variables.tableId });
     }
   });
 
