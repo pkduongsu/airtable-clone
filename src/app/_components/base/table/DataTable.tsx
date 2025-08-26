@@ -118,10 +118,6 @@ export function DataTable({
   const editedCellValuesRef = useRef<Map<string, string>>(new Map());
   const [, forceUpdate] = useReducer(x => x + 1, 0);
 
-  const pageSize = 1000;
-  const [loadedPages, setLoadedPages] = useState<Set<number>>(new Set());
-  const [rowsMap, setRowsMap] = useState<Record<number, _Record>>({});
-
   // Store focus state in a ref to avoid re-renders
   const focusStateRef = useRef<{
     focusedRowId: string | null;
@@ -134,8 +130,6 @@ export function DataTable({
     selectedRowId: null,
     selectedColumnId: null,
   });
-  
-  const utils = api.useUtils();
 
   // Ref to track focus timeout to avoid multiple simultaneous focuses
   const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -167,7 +161,6 @@ export function DataTable({
     hasNextPage,
     isFetchingNextPage,
     isFetching: isRecordsFetching,
-    isLoading,
     refetch: refetchRecords,
   } = api.table.getTableData.useInfiniteQuery(
     {
@@ -812,6 +805,7 @@ export function DataTable({
   if (endIndex + 2 * PAGE_LIMIT > loaded && hasNextPage && !isFetchingNextPage) {
     void fetchNextPage();
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [rowVirtualizer.getVirtualItems(), hasNextPage, isFetchingNextPage, fetchNextPage]);
 
 

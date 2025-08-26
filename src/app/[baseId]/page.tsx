@@ -348,7 +348,7 @@ function BasePageContent() {
       },
       {
         onSuccess: async() => {
-            await utils.table.getTableData.invalidate({tableId: selectedTable});
+            void await utils.table.getTableData.invalidate({tableId: selectedTable});
         },
       }
     );

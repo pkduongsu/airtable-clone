@@ -329,7 +329,11 @@ export const rowRouter = createTRPCRouter({
     const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
 
     // cells
-    const cellsData: any[] = [];
+    const cellsData: Array<{
+      rowId: string;
+      columnId: string;
+      value: { text: string };
+    }> = [];
     for (const row of insertedRows) {
       for (const column of columns) {
         const fakeValue = generateFakeValue(column.name, column.type);
@@ -377,7 +381,11 @@ export const rowRouter = createTRPCRouter({
       const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
 
       // cells
-      const cellsData: any[] = [];
+      const cellsData: Array<{
+        rowId: string;
+        columnId: string;
+        value: { text: string };
+      }> = [];
       for (const row of insertedRows) {
         for (const column of columns) {
           const fakeValue = generateFakeValue(column.name, column.type);

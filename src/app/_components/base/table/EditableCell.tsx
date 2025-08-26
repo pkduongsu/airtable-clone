@@ -91,6 +91,7 @@ export function EditableCell({
         setLastSaved(initialValue);
         onValueChange?.(rowId, columnId, initialValue);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValue]);
 
   const handleBlur = () => {
