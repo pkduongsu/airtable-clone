@@ -774,7 +774,9 @@ export function DataTable({
 
   // Setup virtualizer for rows
   const rowVirtualizer = useVirtualizer({
-    count: tableData?._count?.rows ?? rows.length,
+    count: rows.length > PAGE_LIMIT 
+    ? (tableData?._count?.rows ?? rows.length) // trust server count when big
+    : rows.length,
     estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
     getScrollElement: () => tableContainerRef.current,
     measureElement:
