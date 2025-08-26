@@ -3,6 +3,32 @@ import { faker } from '@faker-js/faker';
 
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 
+// Function to generate fake data based on column name and type
+const generateFakeValue = (columnName: string, columnType: string) => {
+const lowerName = columnName.toLowerCase();
+        
+if (lowerName.includes('name') || lowerName.includes('title')) {
+ return faker.person.fullName();
+  } else if (lowerName.includes('email')) {
+    return faker.internet.email();
+  } else if (lowerName.includes('note') || lowerName.includes('description') || lowerName.includes('comment')) {
+    return faker.lorem.word(10);
+  } else if (lowerName.includes('assignee') || lowerName.includes('owner') || lowerName.includes('user')) {
+  return faker.person.firstName();
+  } else if (lowerName.includes('status')) {
+    return faker.helpers.arrayElement(['In Progress', 'Complete', 'Pending', 'Review', 'Blocked']);
+  } else if (lowerName.includes('priority')) {
+    return faker.helpers.arrayElement(['High', 'Medium', 'Low', 'Critical']);
+  } else if (lowerName.includes('attachment') || lowerName.includes('file')) {
+    return faker.helpers.arrayElement(['', 'document.pdf', 'image.jpg', 'spreadsheet.xlsx']);
+  } else if (columnType === 'NUMBER') {
+    return faker.number.int({ min: 1, max: 99 }).toString();
+  } else {
+    // Default text data
+    return faker.lorem.words(faker.number.int({ min: 1, max: 4 }));
+  }
+};
+
 export const rowRouter = createTRPCRouter({
   create: protectedProcedure
     .input(z.object({
@@ -226,43 +252,9 @@ export const rowRouter = createTRPCRouter({
 
       const startOrder = (maxOrderResult._max.order ?? -1) + 1;
 
-      // Function to generate fake data based on column name and type
-      const generateFakeValue = (columnName: string, columnType: string) => {
-        const lowerName = columnName.toLowerCase();
-        
-        if (lowerName.includes('name') || lowerName.includes('title')) {
-          return faker.person.fullName();
-        } else if (lowerName.includes('email')) {
-          return faker.internet.email();
-        } else if (lowerName.includes('note') || lowerName.includes('description') || lowerName.includes('comment')) {
-          return faker.lorem.word();
-        } else if (lowerName.includes('assignee') || lowerName.includes('owner') || lowerName.includes('user')) {
-          return faker.person.firstName();
-        } else if (lowerName.includes('status')) {
-          return faker.helpers.arrayElement(['In Progress', 'Complete', 'Pending', 'Review', 'Blocked']);
-        } else if (lowerName.includes('priority')) {
-          return faker.helpers.arrayElement(['High', 'Medium', 'Low', 'Critical']);
-        } else if (lowerName.includes('phone')) {
-          return faker.phone.number();
-        } else if (lowerName.includes('address')) {
-          return faker.location.streetAddress();
-        } else if (lowerName.includes('city')) {
-          return faker.location.city();
-        } else if (lowerName.includes('company') || lowerName.includes('organization')) {
-          return faker.company.name();
-        } else if (lowerName.includes('attachment') || lowerName.includes('file')) {
-          return faker.helpers.arrayElement(['', 'document.pdf', 'image.jpg', 'spreadsheet.xlsx']);
-        } else if (columnType === 'NUMBER') {
-          return faker.number.int({ min: 1, max: 1000 }).toString();
-        } else {
-          // Default text data
-          return faker.lorem.words(faker.number.int({ min: 1, max: 4 }));
-        }
-      };
-
       // Process in batches to avoid memory/timeout issues
-      const batchSize = 1000;
-      const batches = Math.ceil(count / batchSize);
+      const batchSize = 5000; //pushes to 5000 records to make adding records faster
+      const batches = Math.ceil(count / batchSize); //total batches count 5000 -> 20 batches
 
       for (let batch = 0; batch < batches; batch++) {
         const batchStart = batch * batchSize;
@@ -303,7 +295,104 @@ export const rowRouter = createTRPCRouter({
           });
         }
       }
-
       return { success: true, insertedCount: count };
     }),
+
+  insertFirstBatch: protectedProcedure
+  .input(z.object({
+    tableId: z.string(),
+    count: z.number().default(100000),
+  }))
+  .mutation(async ({ ctx, input }) => {
+    const { tableId, count } = input;
+
+    const columns = await ctx.db.column.findMany({
+      where: { tableId },
+      orderBy: { order: 'asc' },
+    });
+
+    const maxOrderResult = await ctx.db.row.aggregate({
+      where: { tableId },
+      _max: { order: true },
+    });
+
+    const startOrder = (maxOrderResult._max.order ?? -1) + 1;
+    const batchSize = 5000;
+
+    const batchCount = Math.min(count, batchSize);
+
+    // rows
+    const rowsData = Array.from({ length: batchCount }, (_, i) => ({
+      tableId,
+      order: startOrder + i,
+    }));
+    const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
+
+    // cells
+    const cellsData: any[] = [];
+    for (const row of insertedRows) {
+      for (const column of columns) {
+        const fakeValue = generateFakeValue(column.name, column.type);
+        cellsData.push({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: fakeValue },
+        });
+      }
+    }
+    if (cellsData.length > 0) {
+      await ctx.db.cell.createMany({ data: cellsData });
+    }
+
+    return {
+      success: true,
+      insertedCount: batchCount,
+      remaining: count - batchCount,
+      nextStartOrder: startOrder + batchCount,
+    };
+  }),
+
+  insertRemainingBatches: protectedProcedure
+  .input(z.object({
+    tableId: z.string(),
+    remaining: z.number(),
+    nextStartOrder: z.number(),
+  }))
+  .mutation(async ({ ctx, input }) => {
+    const { tableId, remaining, nextStartOrder } = input;
+    const columns = await ctx.db.column.findMany({ where: { tableId } });
+    const batchSize = 5000;
+    const batches = Math.ceil(remaining / batchSize);
+
+    for (let batch = 0; batch < batches; batch++) {
+      const batchStart = batch * batchSize;
+      const batchEnd = Math.min(batchStart + batchSize, remaining);
+      const batchCount = batchEnd - batchStart;
+
+      // rows
+      const rowsData = Array.from({ length: batchCount }, (_, i) => ({
+        tableId,
+        order: nextStartOrder + batchStart + i,
+      }));
+      const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
+
+      // cells
+      const cellsData: any[] = [];
+      for (const row of insertedRows) {
+        for (const column of columns) {
+          const fakeValue = generateFakeValue(column.name, column.type);
+          cellsData.push({
+            rowId: row.id,
+            columnId: column.id,
+            value: { text: fakeValue },
+          });
+        }
+      }
+      if (cellsData.length > 0) {
+        await ctx.db.cell.createMany({ data: cellsData });
+      }
+    }
+
+    return { success: true, insertedCount: remaining };
+  }),
 });

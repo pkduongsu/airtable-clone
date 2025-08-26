@@ -29,10 +29,14 @@ import {
   type ColumnSizingState,
 } from "@tanstack/react-table";
 
+import {
+  keepPreviousData,
+} from "@tanstack/react-query";
+
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-const PAGE_LIMIT = 100;
+const PAGE_LIMIT = 50;
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -76,6 +80,7 @@ interface DataTableProps {
   onDeleteColumn?: (columnId: string) => void;
   isApplyingFiltersOrSorts?: boolean;
   onRecordCountChange?: (count: number) => void;
+  onBulkOperationStart?: (updateRecordCount: (additionalRows: number) => void) => void;
   records: _Record[];
   setRecords: Dispatch<SetStateAction<_Record[]>>;
   columns: Column[];
@@ -97,6 +102,7 @@ export function DataTable({
   onRenameColumn, 
   onDeleteColumn,
   onRecordCountChange,
+  onBulkOperationStart,
   records,
   setRecords, //set local records state (local = optimistic updates)
   columns,
@@ -112,7 +118,9 @@ export function DataTable({
   const editedCellValuesRef = useRef<Map<string, string>>(new Map());
   const [, forceUpdate] = useReducer(x => x + 1, 0);
 
-
+  const pageSize = 1000;
+  const [loadedPages, setLoadedPages] = useState<Set<number>>(new Set());
+  const [rowsMap, setRowsMap] = useState<Record<number, _Record>>({});
 
   // Store focus state in a ref to avoid re-renders
   const focusStateRef = useRef<{
@@ -159,6 +167,7 @@ export function DataTable({
     hasNextPage,
     isFetchingNextPage,
     isFetching: isRecordsFetching,
+    isLoading,
     refetch: refetchRecords,
   } = api.table.getTableData.useInfiniteQuery(
     {
@@ -173,6 +182,7 @@ export function DataTable({
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       refetchOnWindowFocus: false,
+      placeholderData: keepPreviousData,
     }
   );
 
@@ -375,6 +385,21 @@ export function DataTable({
       onRecordCountChange(tableData._count.rows);
     }
   }, [tableData?._count?.rows, onRecordCountChange]);
+
+  // Helper function for optimistic record count updates during bulk operations
+  const updateRecordCountOptimistically = useCallback((additionalRows: number) => {
+    if (onRecordCountChange && tableData?._count?.rows !== undefined) {
+      const newCount = tableData._count.rows + additionalRows;
+      onRecordCountChange(newCount);
+    }
+  }, [onRecordCountChange, tableData?._count?.rows]);
+
+  // Provide the optimistic update function to parent component
+  useEffect(() => {
+    if (onBulkOperationStart) {
+      onBulkOperationStart(updateRecordCountOptimistically);
+    }
+  }, [onBulkOperationStart, updateRecordCountOptimistically]);
 
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
@@ -756,7 +781,7 @@ export function DataTable({
 
   // Setup virtualizer for rows
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count: tableData?._count?.rows ?? rows.length,
     estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
     getScrollElement: () => tableContainerRef.current,
     measureElement:
@@ -764,7 +789,7 @@ export function DataTable({
       !navigator.userAgent.includes('Firefox')
         ? element => element?.getBoundingClientRect().height
         : undefined,
-    overscan: 5,
+    overscan: 5, // Optimized for better performance and smoother scrolling
   });
 
   // Scroll to specific row when scrollToRowId changes
@@ -777,6 +802,22 @@ export function DataTable({
     }
   }, [scrollToRowId, data, rowVirtualizer]);
 
+  
+
+  useEffect(() => {
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const endIndex = virtualItems[virtualItems.length - 1]?.index ?? 0;
+  const loaded = tableRecords?.pages.flatMap(p => p.rows).length ?? 0;
+
+  if (endIndex + 2 * PAGE_LIMIT > loaded && hasNextPage && !isFetchingNextPage) {
+    void fetchNextPage();
+  }
+}, [rowVirtualizer.getVirtualItems(), hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+
+
+
+
   // Auto-scroll to navigated cell
   useEffect(() => {
     if (navigatedCell && rowVirtualizer) {
@@ -784,26 +825,6 @@ export function DataTable({
     }
   }, [navigatedCell, rowVirtualizer]);
 
-  // Infinite scrolling logic
-  useEffect(() => {
-    if (!fetchNextPage || !hasNextPage || isFetchingNextPage) return;
-
-    const container = tableContainerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      const { scrollTop, scrollHeight, clientHeight } = container;
-      const scrollPercentage = (scrollTop + clientHeight) / scrollHeight;
-      
-      // Trigger fetch when user has scrolled 80% of the way down
-      if (scrollPercentage > 0.8) {
-        void fetchNextPage();
-      }
-    };
-
-    container.addEventListener('scroll', handleScroll);
-    return () => container.removeEventListener('scroll', handleScroll);
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   // Data refetch when parameters change
   useEffect(() => {
@@ -884,7 +905,44 @@ export function DataTable({
             }}
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const row = rows[virtualRow.index]!;
+              const row = rows[virtualRow.index];
+              const rowId = row?.original?.id;
+              const isRowLoaded = !!rowId && cells.some(c => c.rowId === rowId);
+              
+              // Show skeleton for unloaded virtual items (beyond loaded records or without data)
+              if (!isRowLoaded || virtualRow.index >= records.length) {
+                return (
+                  <tr
+                    key={`loading-${virtualRow.index}`}
+                    style={{ 
+                      transform: `translateY(${virtualRow.start}px)`,
+                      display: 'flex',
+                      position: 'absolute',
+                      width: table.getCenterTotalSize(),
+                    }}
+                    className="h-8 border-b border-border-default bg-white"
+                  >
+                    {/* Row number skeleton */}
+                    <td
+                      className="px-2 text-center border-r border-border-default"
+                      style={{ width: 87, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <Spinner size={12} />
+                    </td>
+                    {/* Data column skeletons */}
+                    {columns.filter(col => !hiddenColumns.has(col.id)).map((col) => (
+                      <td
+                        key={`${virtualRow.index}-${col.id}`}
+                        className="px-2 text-center border-r border-border-default"
+                        style={{ width: 179, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >
+                        <Spinner size={12} />
+                      </td>
+                    ))}
+                  </tr>
+                );
+              }
+
               return (
                 <tr
                   data-index={virtualRow.index}
@@ -917,28 +975,6 @@ export function DataTable({
           </tbody>
         </table>
         
-        {/* Loading indicator at the bottom */}
-        {isFetchingNextPage && (
-          <div
-            style={{
-              position: 'absolute',
-              top: `${rowVirtualizer.getTotalSize() + 40}px`,
-              width: '100%',
-              padding: '16px',
-              textAlign: 'center',
-              background: 'rgba(255, 255, 255, 0.95)',
-              borderTop: '1px solid #e5e7eb',
-              boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.1)',
-            }}
-          >
-            <div className="flex items-center justify-center gap-3">
-              <Spinner size={20} color="#666" />
-              <span className="text-sm text-gray-600 font-medium">
-                Loading more rows...
-              </span>
-            </div>
-          </div>
-        )}
 
         {/* Sort/Filter Loading Overlay */}
         {isRecordsFetching && (
@@ -966,7 +1002,6 @@ export function DataTable({
             </div>
           </div>
         )}
-        
       </div>
 
       {/* Add Row Button */}

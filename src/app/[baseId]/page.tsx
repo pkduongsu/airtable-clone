@@ -237,7 +237,6 @@ function BasePageContent() {
     handleInsertRowAbove,
     handleInsertRowBelow,
     handleDeleteRow,
-    handleBulkAddRows,
   } = useRowMutations();
 
   const handleCreateTable = async () => {
@@ -322,9 +321,42 @@ function BasePageContent() {
     setContextMenu(null);
   };
 
+  const insertFirstBatch = api.row.insertFirstBatch.useMutation();
+  const insertRemainingBatches = api.row.insertRemainingBatches.useMutation();
+
   const handleBulkAddRowsWrapper = async () => {
-    return handleBulkAddRows(selectedTable, isBulkLoading, setIsBulkLoading);
-  };
+    if (!selectedTable) return;
+
+    setIsBulkLoading(true);
+
+    try {
+    // first batch (instant feedback)
+    const first = await insertFirstBatch.mutateAsync({
+      tableId: selectedTable,
+      count: 100000,
+    });
+
+    // refetch immediately so user sees new rows
+    await utils.table.getTableData.invalidate({ tableId: selectedTable });
+
+    // kick off remaining in background
+    if (first.remaining > 0) {
+      void insertRemainingBatches.mutateAsync({
+        tableId: selectedTable,
+        remaining: first.remaining,
+        nextStartOrder: first.nextStartOrder,
+      },
+      {
+        onSuccess: async() => {
+            await utils.table.getTableData.invalidate({tableId: selectedTable});
+        },
+      }
+    );
+    }
+  } finally {
+    setIsBulkLoading(false);
+  }
+};
 
   // Column handlers are now provided by useColumnMutations hook
 

@@ -185,7 +185,6 @@ export const tableRouter = createTRPCRouter({
         where: { id: input.id },
         include: {
           columns: true,
-          rows: true,
           _count: {
             select: { rows: true },
           },

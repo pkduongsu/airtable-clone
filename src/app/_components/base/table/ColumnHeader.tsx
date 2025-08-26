@@ -58,7 +58,7 @@ export function ColumnHeader({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <span className="truncate flex items-center gap-1">
+        <span className="flex items-center gap-1">
           {header.isPlaceholder ? null : (
             <>
               {/* Column type indicator */}
@@ -71,20 +71,22 @@ export function ColumnHeader({
                 }
                 return null;
               })()}
-              {flexRender(
-                header.column.columnDef.header,
-                header.getContext()
-              )}
+              <span className="truncate overflow-hidden overflow-ellipsis max-w-32">
+                {flexRender(
+                  header.column.columnDef.header,
+                  header.getContext()
+                )}
+              </span>
             </>
           )}
         </span>
         {header.id !== '__rowNumber' && (
-          <button 
-            className={`ml-1 cursor-pointer flex-shrink-0 transition-opacity duration-75 ${isHovered ? 'opacity-100' : 'opacity-0'}`}
-            onClick={handleDropdownClick}
-          >
-            <ChevronDown size={16} color="#616670" className="hover:text-[#1d1f25]"/>
-          </button>
+            <button 
+              className={`ml-1 cursor-pointer flex-shrink-0 transition-opacity duration-75 ${isHovered ? 'opacity-100' : 'opacity-0'}`}
+              onClick={handleDropdownClick}
+            >
+              <ChevronDown size={16} color="#616670" className="hover:text-[#1d1f25]"/>
+            </button>
         )}
       </div>
       {/* Column resize handle */}
