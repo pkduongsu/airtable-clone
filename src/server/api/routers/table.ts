@@ -184,9 +184,8 @@ export const tableRouter = createTRPCRouter({
       return ctx.db.table.findUnique({
         where: { id: input.id },
         include: {
-          columns: {
-            orderBy: { order: "asc" },
-          },
+          columns: true,
+          rows: true,
           _count: {
             select: { rows: true },
           },

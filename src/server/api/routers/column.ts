@@ -27,6 +27,7 @@ export const columnRouter = createTRPCRouter({
         type: input.type,
         order: nextOrder,
         width: 179, // Default width
+        id: input.id
       },
     });
 

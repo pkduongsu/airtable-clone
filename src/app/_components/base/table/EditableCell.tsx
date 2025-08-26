@@ -19,6 +19,7 @@ interface EditableCellProps {
   isSearchMatch?: boolean;
   isCurrentSearchResult?: boolean;
   columnType?: string;
+  onValueChange?: (rowId: string, columnId: string, value: string) => void; //immediate change
 }
 
 export function EditableCell({ 
@@ -36,6 +37,7 @@ export function EditableCell({
   isSearchMatch = false, 
   isCurrentSearchResult = false,
   columnType = "TEXT",
+  onValueChange,
 }: EditableCellProps) {
   const [value, setValue] = useState(initialValue);
   const [lastSaved, setLastSaved] = useState(initialValue);
@@ -56,6 +58,7 @@ export function EditableCell({
     onError: (err, _, context) => {
       if (context?.prevValue) {
         setValue(context.prevValue);
+        onValueChange?.(rowId, columnId, context.prevValue);
       }
     },
     onSuccess: () => {
@@ -71,6 +74,7 @@ export function EditableCell({
   // Debounced saving - save 300ms after user stops typing
   useEffect(() => {
     const timer = setTimeout(() => {
+
       if (value !== lastSaved) {
         void updateCellMutation.mutateAsync({ columnId, rowId, value})
       }
@@ -82,9 +86,11 @@ export function EditableCell({
   
   //triggers when database resets and initialValue changes to the newest in db
   useEffect(() => {
-    setValue(initialValue);
-    setLastSaved(initialValue);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    if(initialValue !== value && value === lastSaved) {
+        setValue(initialValue);
+        setLastSaved(initialValue);
+        onValueChange?.(rowId, columnId, initialValue);
+    }
   }, [initialValue]);
 
   const handleBlur = () => {
@@ -103,6 +109,7 @@ export function EditableCell({
     }
 
     setValue(newValue);
+    onValueChange?.(rowId, columnId, newValue);
   };
 
 

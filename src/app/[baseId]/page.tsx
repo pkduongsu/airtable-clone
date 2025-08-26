@@ -9,7 +9,6 @@ import { api } from "~/trpc/react";
 import { Sidebar } from "../_components/base/controls/Sidebar";
 import { NavBar } from "../_components/base/controls/NavBar";
 import { useIsMutating } from "@tanstack/react-query";
-import { EditingStateProvider } from "../_components/providers/EditingStateProvider";
 import { TableTabsBar } from "../_components/base/controls/TableTabsBar";
 import  Toolbar  from "../_components/base/controls/Toolbar";
 import { DataTable } from "../_components/base/table/DataTable";
@@ -667,9 +666,5 @@ function BasePageContent() {
 }
 
 export default function BasePage() {
-  return (
-    <EditingStateProvider>
-      <BasePageContent />
-    </EditingStateProvider>
-  );
+  return <BasePageContent />;
 }

@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useCallback,
   useRef,
+  useReducer,
   type Dispatch,
   type SetStateAction
 } from "react";
@@ -101,7 +102,6 @@ export function DataTable({
   columns,
   setColumns //set local columns state 
 }: DataTableProps) {
-  const utils = api.useUtils();
   
   const [cells, setCells] = useState<Cell[]>([]);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
@@ -109,6 +109,11 @@ export function DataTable({
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [selectedCell, setSelectedCell] = useState<{rowId: string, columnId: string} | null>(null);
   const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
+  const editedCellValuesRef = useRef<Map<string, string>>(new Map());
+  const [, forceUpdate] = useReducer(x => x + 1, 0);
+
+
+
   // Store focus state in a ref to avoid re-renders
   const focusStateRef = useRef<{
     focusedRowId: string | null;
@@ -122,7 +127,7 @@ export function DataTable({
     selectedColumnId: null,
   });
   
-
+  const utils = api.useUtils();
 
   // Ref to track focus timeout to avoid multiple simultaneous focuses
   const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -133,7 +138,6 @@ export function DataTable({
   // Add Column Modal state
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
 
-  
   // Table metadata query 
   const {
     data: tableData,
@@ -172,6 +176,8 @@ export function DataTable({
     }
   );
 
+  //this get called when first table load, or when we invalidate if we want
+
   // Flatten all records from pages
   const allRecords = useMemo(() => {
     return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
@@ -179,33 +185,90 @@ export function DataTable({
 
   // Critical state update useEffect
   useEffect(() => {
+    console.log(`entering critical useEffect:`);
+
     if (tableRecords) {
+      console.log(`setting the col, rec, cells`);
       setColumns(tableRecords?.pages[0]?.columns ?? []); 
       setRecords(allRecords);
       const combinedCells = allRecords.flatMap((r) => r.cells);
       setCells(combinedCells);
     }
   }, [tableRecords, allRecords, setColumns, setRecords]);
+  
+
+  const handleCellValueChange = useCallback((rowId: string, columnId: string, value: string) => {
+    const key = `${rowId}-${columnId}`;
+    editedCellValuesRef.current.set(key, value);
+    //let Editable Cell handle debounced state
+  }, []);
+
+  // Transform row data
+  const rowData = useMemo(() => {
+
+    console.log("changing rowData"); //this is using the old data fetched originally, e
+
+    const map: Record<string, TableRow> = {};
+    // seed each row
+  for (const r of records) {
+    map[r.id] = { id: r.id, __cellIds: {} };
+  }
+
+  // merge cells into the row object
+  for (const c of cells) {
+    const row = map[c.rowId];
+    if (!row) continue;
+
+    // keep the cell id for editing
+    row.__cellIds[c.columnId] = c.id;
+
+    //check for editing value for cells
+    const editKey = `${c.rowId}-${c.columnId}`
+
+    if (editedCellValuesRef.current.has(editKey)) {
+      //use the edited value instead of old values from db
+      row[c.columnId] = editedCellValuesRef.current.get(editKey)!;
+    } else {
+      const v = c.value as { text?: string; number?: number | null } | string | number | null;
+      row[c.columnId] =
+      v && typeof v === "object" && "text" in v
+        ? v.text ?? ""
+        : v && typeof v === "object" && "number" in v
+        ? (v.number != null ? String(v.number) : "")
+        : typeof v === "string" || typeof v === "number"
+        ? String(v)
+        : "";
+    }
+  }
+
+  return Object.values(map);
+}, [records, cells]);
+
+
+
 
   const createColumnMutation = api.column.create.useMutation(
     {
       onSuccess: async() => {
+        console.log("column created");
         await refetch();
-        //await utils.table.getTableData.invalidate();
+      //  await utils.table.getTableData.invalidate();
       },
     }
   );
 
   const createRowMutation = api.row.create.useMutation({
     onSuccess: async() => {
+      console.log("row created");
       await refetch();
-      //await utils.table.getTableData.invalidate();
+     // await utils.table.getTableData.invalidate();
     },
   });
 
   const handleCreateColumn = async(name:string, type: 'TEXT' | 'NUMBER') => {
     try{
       const tempColId = crypto.randomUUID();
+
 
       const tempColumn: Column = {
         tableId: tableId,
@@ -216,7 +279,7 @@ export function DataTable({
         width: 179     
       };
 
-      setColumns((old) => [...old, tempColumn]);
+      setColumns((old) => [...old, tempColumn]); //optimistically add rows
     
       const tempCells = records.map((row) => ({
         id: crypto.randomUUID(),
@@ -226,8 +289,13 @@ export function DataTable({
       }));
     
       setCells((old) => [...old, ...tempCells]);
+
+      //problem is edits happen between here
+
+      //create mutation calls -> reset all cells
+      //is it because setColumns was called?
     
-      // Pass the ID to the server
+      // Pass the ID to the server //create actual column and when create, invalidate
       await createColumnMutation.mutateAsync({
         tableId: tableId,
         type: type,
@@ -235,14 +303,22 @@ export function DataTable({
         id: tempColId, // Use the same ID
       });
 
+      forceUpdate();
+
+
+      //so does that mean that I have to update the cells of that here 
+      // invalidate does that on a db level
+
     } catch (error) {
-      console.error('Failed to create column:', error);
+      // Column creation failed - optimistic update will be reverted by server state
+      console.error("Failed to create column:", error);
     }
   };
 
   const handleCreateRow = async() => {
     try{
       const tempRowId = crypto.randomUUID();
+
 
       const tempRow: _Record = {
         id: tempRowId,
@@ -258,12 +334,18 @@ export function DataTable({
       value: { text: "" },
       tableId,
     }));
-    setCells(old => [...old, ...newCells]);
+    setCells(old => [...old, ...newCells]); //optimistically add cells for edit, if i stop here, nothing disappears
 
-      await createRowMutation.mutateAsync({
+    //but then , if i want the cells to actually be saved, we need a real record
+    //so what if I just create a record and does not invalidate?
+
+     await createRowMutation.mutateAsync({
         id: tempRowId,
         tableId: tableId, 
       });
+
+      forceUpdate();
+
     } catch (error) {
       console.error('Failed to create row:', error);
     }
@@ -297,35 +379,6 @@ export function DataTable({
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
-  // Transform row data
-  const rowData = useMemo(() => {
-    const map: Record<string, TableRow> = {};
-    // seed each row
-  for (const r of records) {
-    map[r.id] = { id: r.id, __cellIds: {} };
-  }
-
-  // merge cells into the row object
-  for (const c of cells) {
-    const row = map[c.rowId];
-    if (!row) continue;
-
-    // keep the cell id for editing
-    row.__cellIds[c.columnId] = c.id;
-
-    const v = c.value as { text?: string; number?: number | null } | string | number | null;
-    row[c.columnId] =
-      v && typeof v === "object" && "text" in v
-        ? v.text ?? ""
-        : v && typeof v === "object" && "number" in v
-        ? (v.number != null ? String(v.number) : "")
-        : typeof v === "string" || typeof v === "number"
-        ? String(v)
-        : "";
-  }
-
-  return Object.values(map);
-}, [records, cells]);
 
   // Calculate search match information
   const searchMatchInfo = useMemo(() => {
@@ -660,6 +713,7 @@ export function DataTable({
               rowId={rowId}
               columnId={columnId}
               onContextMenu={handleContextMenuClick}
+              onValueChange={handleCellValueChange}
               hasSort={hasSort}
               hasFilter={hasFilter}
               isSearchMatch={isSearchMatch}
