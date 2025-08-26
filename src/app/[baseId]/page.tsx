@@ -347,8 +347,8 @@ function BasePageContent() {
         nextStartOrder: first.nextStartOrder,
       },
       {
-        onSuccess: async() => {
-            void await utils.table.getTableData.invalidate({tableId: selectedTable});
+        onSuccess: () => {
+          void utils.table.getTableData.invalidate({tableId: selectedTable});
         },
       }
     );
