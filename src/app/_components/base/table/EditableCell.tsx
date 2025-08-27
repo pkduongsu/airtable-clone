@@ -20,7 +20,6 @@ interface EditableCellProps {
   isCurrentSearchResult?: boolean;
   columnType?: string;
   onValueChange?: (rowId: string, columnId: string, value: string) => void; //immediate change
-  onCellSaved?: (rowId: string, columnId: string) => void;
 }
 
 export function EditableCell({ 
@@ -39,7 +38,6 @@ export function EditableCell({
   isCurrentSearchResult = false,
   columnType = "TEXT",
   onValueChange,
-  onCellSaved
 }: EditableCellProps) {
 
   
@@ -67,30 +65,13 @@ export function EditableCell({
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
-      console.error('Cell update error:', err);
-    
-    if (err.message?.includes('Foreign key constraint') && pendingSave) {
-      // Retry after delay only if we still have pending changes //add a retry logic to prevent race cond
-      setTimeout(() => {
-        if (value !== lastSaved) {
-          updateCellMutation.mutate({
-            columnId,
-            rowId,
-            value: { text: value }
-          });
-        }
-      }, 1000);
-    } else if (context?.prevValue !== undefined) {
-      setPendingSave(false);
-      setValue(context.prevValue);
-      onValueChange?.(rowId, columnId, context.prevValue);
-    }
+      if (context?.prevValue) {
+        setValue(context.prevValue);
+        onValueChange?.(rowId, columnId, context.prevValue);
+      }
     },
     onSuccess: () => {
       setLastSaved(value);
-      if (onCellSaved) {
-      onCellSaved(rowId, columnId);
-    }
     },
     onSettled: () => {
         void utils.table.getById.invalidate({ id: tableId });
