@@ -20,6 +20,7 @@ interface EditableCellProps {
   isCurrentSearchResult?: boolean;
   columnType?: string;
   onValueChange?: (rowId: string, columnId: string, value: string) => void; //immediate change
+  onCellSaved?: (rowId: string, columnId: string) => void;
 }
 
 export function EditableCell({ 
@@ -38,6 +39,7 @@ export function EditableCell({
   isCurrentSearchResult = false,
   columnType = "TEXT",
   onValueChange,
+  onCellSaved
 }: EditableCellProps) {
 
   
@@ -65,13 +67,17 @@ export function EditableCell({
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
-      if (context?.prevValue) {
+      console.error('Cell update error:', err);
+      if (context?.prevValue !== undefined) {
         setValue(context.prevValue);
         onValueChange?.(rowId, columnId, context.prevValue);
       }
     },
     onSuccess: () => {
       setLastSaved(value);
+      if (onCellSaved) {
+      onCellSaved(rowId, columnId);
+    }
     },
     onSettled: () => {
         void utils.table.getById.invalidate({ id: tableId });

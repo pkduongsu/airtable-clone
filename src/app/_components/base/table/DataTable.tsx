@@ -110,6 +110,7 @@ export function DataTable({
   const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const editedCellValuesRef = useRef<Map<string, string>>(new Map());
   const [, forceUpdate] = useReducer(x => x + 1, 0);
+  const [editedCells, setEditedCells] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{
     isOpen: boolean;
     position: { x: number; y: number };
@@ -197,10 +198,10 @@ export function DataTable({
   //merge rows (keep optimistic ones for this table)
   setRecords(prev => {
     const serverIds = new Set(serverRecords.map(r => r.id));
-    return [
-      ...prev.filter(r => r.tableId === tableId && !serverIds.has(r.id)),
-      ...serverRecords,
-    ];
+    const optimisticRecords = prev.filter(r => 
+      r.tableId === tableId && !serverIds.has(r.id)
+    );
+    return [...optimisticRecords, ...serverRecords];
   });
 
   //cells: trust server snapshot only
@@ -224,49 +225,77 @@ export function DataTable({
     const key = `${rowId}-${columnId}`;
     editedCellValuesRef.current.set(key, value);
     //let Editable Cell handle debounced state
-    forceUpdate();
+     setEditedCells(prev => new Set(prev).add(key));
   }, []);
 
+  const handleCellSaved = useCallback((rowId: string, columnId: string) => {
+    const key = `${rowId}-${columnId}`;
+    setEditedCells(prev => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+
+    const savedValue = cells.find(c => c.rowId === rowId && c.columnId === columnId)?.value;
+    if (savedValue) {
+      const currentValue = editedCellValuesRef.current.get(key);
+      const normalizedSavedValue = typeof savedValue === 'object' && 'text' in savedValue 
+        ? savedValue.text 
+        : String(savedValue);
+      
+      if (currentValue === normalizedSavedValue) {
+        editedCellValuesRef.current.delete(key);
+      }
+    }
+}, [cells]);
+
   // Transform row data
-  const rowData = useMemo(() => {
-
-    console.log("changing rowData"); //this is using the old data fetched originally, e
-
-    const map: Record<string, TableRow> = {};
-    // seed each row
+const rowData = useMemo(() => {
+  const map: Record<string, TableRow> = {};
+  
+  // Create entries for all records
   for (const r of records) {
     map[r.id] = { id: r.id, __cellIds: {} };
   }
 
-  // merge cells into the row object
+  // Add cells data
   for (const c of cells) {
     const row = map[c.rowId];
     if (!row) continue;
 
-    // keep the cell id for editing
     row.__cellIds[c.columnId] = c.id;
 
-    //check for editing value for cells
-    const editKey = `${c.rowId}-${c.columnId}`
-
+    const editKey = `${c.rowId}-${c.columnId}`;
+    
     if (editedCellValuesRef.current.has(editKey)) {
-      //use the edited value instead of old values from db
       row[c.columnId] = editedCellValuesRef.current.get(editKey)!;
     } else {
       const v = c.value as { text?: string; number?: number | null } | string | number | null;
       row[c.columnId] =
-      v && typeof v === "object" && "text" in v
-        ? v.text ?? ""
-        : v && typeof v === "object" && "number" in v
-        ? (v.number != null ? String(v.number) : "")
-        : typeof v === "string" || typeof v === "number"
-        ? String(v)
-        : "";
+        v && typeof v === "object" && "text" in v
+          ? v.text ?? ""
+          : v && typeof v === "object" && "number" in v
+          ? (v.number != null ? String(v.number) : "")
+          : typeof v === "string" || typeof v === "number"
+          ? String(v)
+          : "";
+    }
+  }
+
+  // For records without cells yet, add empty values for all columns
+  for (const record of records) {
+    const row = map[record.id];
+    if (!row) continue;
+    
+    for (const column of columns) {
+      if (!(column.id in row)) {
+        row[column.id] = "";
+      }
     }
   }
 
   return Object.values(map);
-}, [records, cells]);
+}, [records, cells, columns, editedCells]);
 
 
 
@@ -353,14 +382,14 @@ export function DataTable({
 
       setColumns((old) => [...old, tempColumn]); //optimistically add rows
     
-      // const tempCells = records.map((row) => ({
-      //   id: crypto.randomUUID(),
-      //   rowId: row.id,
-      //   columnId: tempColId, // Real ID
-      //   value: { text: ""},
-      // }));
+      const tempCells = records.map((row) => ({
+        id: crypto.randomUUID(),
+        rowId: row.id,
+        columnId: tempColId, // Real ID
+        value: { text: ""},
+      }));
     
-      // setCells((old) => [...old, ...tempCells]);
+      setCells((old) => [...old, ...tempCells]);
 
       //problem is edits happen between here
 
@@ -1001,6 +1030,7 @@ export function DataTable({
               columnId={columnId}
               onContextMenu={handleContextMenuClick}
               onValueChange={handleCellValueChange}
+              onCellSaved={handleCellSaved}
               hasSort={hasSort}
               hasFilter={hasFilter}
               isSearchMatch={isSearchMatch}
