@@ -297,6 +297,7 @@ export const rowRouter = createTRPCRouter({
         if (cellsData.length > 0) {
           await ctx.db.cell.createMany({
             data: cellsData,
+            skipDuplicates: true,
           });
         }
       }
