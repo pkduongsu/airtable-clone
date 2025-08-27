@@ -70,7 +70,7 @@ export function EditableCell({
     onError: (err, _, context) => {
       console.error('Cell update error:', err);
     
-    if (err.message?.includes('Foreign key constraint') && pendingSave) {
+    if (err.message?.includes('Invalid `ctx.db.cell.createMany()` invocation') && pendingSave) {
       // Retry after delay only if we still have pending changes //add a retry logic to prevent race cond
       setTimeout(() => {
         if (value !== lastSaved) {
@@ -80,7 +80,7 @@ export function EditableCell({
             value: { text: value }
           });
         }
-      }, 1000);
+      }, 500);
     } else if (context?.prevValue !== undefined) {
       setPendingSave(false);
       setValue(context.prevValue);
