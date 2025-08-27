@@ -115,6 +115,7 @@ export function DataTable({
     position: { x: number; y: number };
     rowId: string;
   } | null>(null);
+  //eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localRecordCount, setLocalRecordCount] = useState(0);
 
   // Store focus state in a ref to avoid re-renders
@@ -407,7 +408,7 @@ export function DataTable({
       });
 
       forceUpdate();
-
+      //eslint-disable-next-line react-hooks/exhaustive-deps
     }, [records.length, columns, tableId]);
 
   useEffect(() => {
@@ -416,6 +417,7 @@ export function DataTable({
       handleCreateRow
     });
   }
+  //eslint-disable-next-line react-hooks/exhaustive-deps
 }, [onDataTableReady]);
 
   //handle insert above/below, delete, rename
@@ -530,10 +532,6 @@ export function DataTable({
 
       const deletedOrder = targetRow.order;
 
-      // Store original state for rollback
-      const originalRecords = records;
-      const originalCells = cells;
-
       // Remove row and update orders optimistically
       const updatedRecords = records
         .filter(r => r.id !== rowId)
@@ -563,8 +561,6 @@ export function DataTable({
 
   const handleRenameColumn = async(columnId: string, newName: string) => {
     try {
-      // Store original for rollback
-      const originalColumns = columns;
 
       // Optimistically update column name
       setColumns(old => old.map(col => 
@@ -586,9 +582,6 @@ export function DataTable({
 
   const handleDeleteColumn = async(columnId: string) => {
     try {
-      // Store original state for rollback
-      const originalColumns = columns;
-      const originalCells = cells;
 
       // Optimistically remove column
       setColumns(old => old.filter(col => col.id !== columnId));
