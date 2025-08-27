@@ -78,6 +78,7 @@ export const rowRouter = createTRPCRouter({
     .input(z.object({
       tableId: z.string(),
       targetRowId: z.string(),
+      id: z.string().optional(), 
     }))
     .mutation(async ({ ctx, input }) => {
       // Get the target row to find its order
@@ -108,6 +109,7 @@ export const rowRouter = createTRPCRouter({
         data: {
           tableId: input.tableId,
           order: newOrder,
+          id: input.id,
         },
       });
 
@@ -136,6 +138,7 @@ export const rowRouter = createTRPCRouter({
     .input(z.object({
       tableId: z.string(),
       targetRowId: z.string(),
+      id: z.string().optional(), 
     }))
     .mutation(async ({ ctx, input }) => {
       // Get the target row to find its order
@@ -166,6 +169,7 @@ export const rowRouter = createTRPCRouter({
         data: {
           tableId: input.tableId,
           order: newOrder,
+          id: input.id,
         },
       });
 

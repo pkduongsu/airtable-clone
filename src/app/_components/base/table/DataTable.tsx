@@ -18,6 +18,7 @@ import Spinner from "../../icons/Spinner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import Plus from "../../icons/Plus";
+import { CellContextMenu } from "../modals/CellContextMenu";
 
 import type { Column, Cell, Row as _Record } from "@prisma/client";
 import {
@@ -58,10 +59,6 @@ const columnHelper = createColumnHelper<TableRow>();
 
 interface DataTableProps {
   tableId: string;
-  onInsertRowAbove?: (tableId: string, rowId: string) => void;
-  onInsertRowBelow?: (tableId: string, rowId: string) => void;
-  onDeleteRow?: (tableId: string, rowId: string) => void;
-  onContextMenu?: (position: { x: number; y: number }, rowId: string) => void;
   hiddenColumns?: Set<string>;
   sortRules?: SortRule[];
   filterRules?: Array<{
@@ -76,8 +73,6 @@ interface DataTableProps {
   currentSearchIndex?: number;
   searchQuery?: string;
   scrollToRowId?: string | null;
-  onRenameColumn?: (columnId: string, newName: string) => void;
-  onDeleteColumn?: (columnId: string) => void;
   isApplyingFiltersOrSorts?: boolean;
   onRecordCountChange?: (count: number) => void;
   onBulkOperationStart?: (updateRecordCount: (additionalRows: number) => void) => void;
@@ -85,28 +80,26 @@ interface DataTableProps {
   setRecords: Dispatch<SetStateAction<_Record[]>>;
   columns: Column[];
   setColumns: Dispatch<SetStateAction<Column[]>>;
+  onDataTableReady?: (handlers: {
+    handleCreateRow: () => Promise<void>;
+  }) => void;
 }
 export function DataTable({ 
   tableId, 
-  onInsertRowAbove: _onInsertRowAbove, 
-  onInsertRowBelow: _onInsertRowBelow, 
-  onDeleteRow: _onDeleteRow, 
-  onContextMenu, 
   hiddenColumns = new Set(), 
   sortRules = [], 
   filterRules = [], 
   searchResults = [], 
   currentSearchIndex = -1, 
   searchQuery: searchValue = "", 
-  scrollToRowId, 
-  onRenameColumn, 
-  onDeleteColumn,
+  scrollToRowId,  
   onRecordCountChange,
   onBulkOperationStart,
   records,
   setRecords, //set local records state (local = optimistic updates)
   columns,
-  setColumns //set local columns state 
+  setColumns, //set local columns state 
+  onDataTableReady,
 }: DataTableProps) {
   
   const [cells, setCells] = useState<Cell[]>([]);
@@ -117,6 +110,12 @@ export function DataTable({
   const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const editedCellValuesRef = useRef<Map<string, string>>(new Map());
   const [, forceUpdate] = useReducer(x => x + 1, 0);
+  const [contextMenu, setContextMenu] = useState<{
+    isOpen: boolean;
+    position: { x: number; y: number };
+    rowId: string;
+  } | null>(null);
+  const [localRecordCount, setLocalRecordCount] = useState(0);
 
   // Store focus state in a ref to avoid re-renders
   const focusStateRef = useRef<{
@@ -198,6 +197,15 @@ export function DataTable({
       setCells(combinedCells);
     }
   }, [tableRecords, allRecords, setColumns, setRecords]);
+
+  //update records count: 
+  useEffect(() => {
+  const newCount = records.length;
+  setLocalRecordCount(newCount);
+  if (onRecordCountChange) {
+    onRecordCountChange(newCount);
+  }
+}, [records.length, onRecordCountChange]);
   
 
   const handleCellValueChange = useCallback((rowId: string, columnId: string, value: string) => {
@@ -254,18 +262,66 @@ export function DataTable({
     {
       onSuccess: async() => {
         console.log("column created");
-        await refetch();
-      //  await utils.table.getTableData.invalidate();
       },
+      onError: async() => {
+      await refetch();
+    }
     }
   );
 
   const createRowMutation = api.row.create.useMutation({
     onSuccess: async() => {
       console.log("row created");
-      await refetch();
-     // await utils.table.getTableData.invalidate();
     },
+    onError: async() => {
+      await refetch();
+    }
+  });
+
+  const insertRowAboveMutation = api.row.insertAbove.useMutation({
+    onSuccess: async() => {
+      console.log("above row created.")
+      await refetch();
+    },
+    onError: async() => {
+      await refetch();
+    }
+  });
+
+  const insertRowBelowMutation = api.row.insertBelow.useMutation({
+    onSuccess: async() => {
+      console.log("row below created");
+    },
+    onError: async() => {
+      await refetch();
+    }
+  });
+
+  const deleteRowMutation = api.row.delete.useMutation({
+    onSuccess: async() => {
+      console.log("row deleted.");
+    },
+    onError: async() => {
+      await refetch();
+    }
+  });
+  
+  const renameColumnMutation = api.column.rename.useMutation({
+    onSuccess: async() => {
+      console.log("row deleted.");
+    },
+    onError: async() => {
+      await refetch();
+    }
+  });
+
+  const deleteColumnMutation = api.column.delete.useMutation({
+    onSuccess: async() => {
+      console.log("row deleted.");
+    },
+    onError: async() => {
+      await refetch();
+    }
   });
 
   const handleCreateColumn = async(name:string, type: 'TEXT' | 'NUMBER') => {
@@ -318,8 +374,7 @@ export function DataTable({
     }
   };
 
-  const handleCreateRow = async() => {
-    try{
+  const handleCreateRow = useCallback(async() => {
       const tempRowId = crypto.randomUUID();
 
 
@@ -329,6 +384,10 @@ export function DataTable({
         order: records.length
       };
       setRecords((old) => [...old, tempRow]) //add temp row to local state to display immediately
+
+       if (onRecordCountChange) {
+        onRecordCountChange(records.length + 1);
+      }
 
       const newCells = columns.map(col => ({
       id: crypto.randomUUID(), // local id
@@ -349,8 +408,204 @@ export function DataTable({
 
       forceUpdate();
 
+    }, [records.length, columns, tableId]);
+
+  useEffect(() => {
+  if (onDataTableReady) {
+    onDataTableReady({
+      handleCreateRow
+    });
+  }
+}, [onDataTableReady]);
+
+  //handle insert above/below, delete, rename
+   const handleInsertRowAbove = async(targetRowId: string) => {
+    try {
+      const targetRow = records.find(r => r.id === targetRowId);
+      if (!targetRow) return;
+
+      const tempRowId = crypto.randomUUID();
+      const newOrder = targetRow.order;
+
+      // Update orders for existing rows optimistically
+      const updatedRecords = records.map(r => 
+        r.order >= newOrder ? { ...r, order: r.order + 1 } : r
+      );
+
+      // Create new row
+      const newRow: _Record = {
+        id: tempRowId,
+        tableId: tableId,
+        order: newOrder
+      };
+
+      // Add new row and sort
+      setRecords([...updatedRecords, newRow].sort((a, b) => a.order - b.order));
+
+       if (onRecordCountChange) {
+        onRecordCountChange(records.length + 1);
+      }
+
+      // Create cells for new row
+      const newCells = columns.map(col => ({
+        id: crypto.randomUUID(),
+        rowId: tempRowId,
+        columnId: col.id,
+        value: { text: "" },
+        tableId,
+      }));
+      setCells(old => [...old, ...newCells]);
+
+
+      await insertRowAboveMutation.mutateAsync({
+          tableId: tableId,
+          targetRowId: targetRowId,
+          id: tempRowId // Pass the temp ID to maintain consistency
+      });
+      
+
+      forceUpdate();
     } catch (error) {
-      console.error('Failed to create row:', error);
+      console.error('Failed to insert row above:', error);
+      // Revert optimistic update on error
+      await refetch();
+    }
+  }
+
+  const handleInsertRowBelow = async(targetRowId: string) => {
+    try {
+      const targetRow = records.find(r => r.id === targetRowId);
+      if (!targetRow) return;
+
+      const tempRowId = crypto.randomUUID();
+      const newOrder = targetRow.order + 1;
+
+      // Update orders for existing rows optimistically
+      const updatedRecords = records.map(r => 
+        r.order >= newOrder ? { ...r, order: r.order + 1 } : r
+      );
+
+      // Create new row
+      const newRow: _Record = {
+        id: tempRowId,
+        tableId: tableId,
+        order: newOrder
+      };
+
+      // Add new row and sort
+      setRecords([...updatedRecords, newRow].sort((a, b) => a.order - b.order));
+
+       if (onRecordCountChange) {
+        onRecordCountChange(records.length + 1);
+      }
+      // Create cells for new row
+      const newCells = columns.map(col => ({
+        id: crypto.randomUUID(),
+        rowId: tempRowId,
+        columnId: col.id,
+        value: { text: "" },
+        tableId,
+      }));
+      setCells(old => [...old, ...newCells]);
+
+      // Call parent mutation if provided, otherwise use local mutation
+
+      await insertRowBelowMutation.mutateAsync({
+        tableId: tableId,
+        targetRowId: targetRowId,
+        id: tempRowId
+      });
+
+      forceUpdate();
+    } catch (error) {
+      console.error('Failed to insert row below:', error);
+      await refetch();
+    }
+  }
+
+  const handleDeleteRow = async(rowId: string) => {
+    try {
+      const targetRow = records.find(r => r.id === rowId);
+      if (!targetRow) return;
+
+      const deletedOrder = targetRow.order;
+
+      // Store original state for rollback
+      const originalRecords = records;
+      const originalCells = cells;
+
+      // Remove row and update orders optimistically
+      const updatedRecords = records
+        .filter(r => r.id !== rowId)
+        .map(r => r.order > deletedOrder ? { ...r, order: r.order - 1 } : r);
+
+      setRecords(updatedRecords);
+
+      if (onRecordCountChange) {
+        onRecordCountChange(updatedRecords.length);
+      }
+
+      // Remove cells for deleted row
+      setCells(old => old.filter(c => c.rowId !== rowId));
+
+
+      await deleteRowMutation.mutateAsync({
+        tableId: tableId,
+        rowId: rowId
+      });
+
+      forceUpdate();
+    } catch (error) {
+      console.error('Failed to delete row:', error);
+      await refetch();
+    }
+  }
+
+  const handleRenameColumn = async(columnId: string, newName: string) => {
+    try {
+      // Store original for rollback
+      const originalColumns = columns;
+
+      // Optimistically update column name
+      setColumns(old => old.map(col => 
+        col.id === columnId ? { ...col, name: newName } : col
+      ));
+
+
+      await renameColumnMutation.mutateAsync({
+        columnId: columnId,
+        name: newName
+      });
+
+      forceUpdate();
+    } catch (error) {
+      console.error('Failed to rename column:', error);
+      await refetch();
+    }
+  }
+
+  const handleDeleteColumn = async(columnId: string) => {
+    try {
+      // Store original state for rollback
+      const originalColumns = columns;
+      const originalCells = cells;
+
+      // Optimistically remove column
+      setColumns(old => old.filter(col => col.id !== columnId));
+
+      // Remove cells for deleted column
+      setCells(old => old.filter(c => c.columnId !== columnId));
+
+
+      await deleteColumnMutation.mutateAsync({
+        columnId: columnId
+      });
+      
+
+      forceUpdate();
+    } catch (error) {
+      console.error('Failed to delete column:', error);
+      await refetch();
     }
   }
 
@@ -626,11 +881,23 @@ export function DataTable({
   // Handle context menu (insert row above/below)
   const handleContextMenuClick = useCallback((event: React.MouseEvent, rowId: string) => {
     event.preventDefault();
-    
-    if (onContextMenu) {
-      onContextMenu({ x: event.clientX, y: event.clientY }, rowId);
-    }
-  }, [onContextMenu]);
+    event.stopPropagation();
+
+    const rect = tableContainerRef.current?.getBoundingClientRect();
+
+    setContextMenu({
+      isOpen: true,
+      position: { 
+        x: event.clientX - (rect?.left ?? 0),
+        y: event.clientY - (rect?.top ?? 0),  
+       },
+      rowId,
+    });
+  }, []);
+
+  const handleContextMenuClose = useCallback(() => {
+    setContextMenu(null);
+  }, []);
 
   // Handle column actions (dropdown menu)
   const handleColumnAction = useCallback((position: { x: number; y: number }, column: { id: string; name: string }) => {
@@ -837,6 +1104,7 @@ export function DataTable({
     }
   }, [handleCellDeselection]);
 
+
   // Early return for loading or no data
   if (!tableId) {
     return <div className="flex-grow bg-white p-4">No table selected</div>;
@@ -1019,12 +1287,8 @@ export function DataTable({
         position={columnModal.position}
         column={columnModal.column}
         onClose={() => setColumnModal({ isOpen: false, position: null, column: null })}
-        onRename={(columnId, newName) => {
-          onRenameColumn?.(columnId, newName);
-        }}
-        onDelete={(columnId) => {
-          onDeleteColumn?.(columnId);
-        }}
+        onRename={handleRenameColumn}
+        onDelete={handleDeleteColumn}
       />
 
       {/* Add Column Modal */}
@@ -1038,6 +1302,19 @@ export function DataTable({
         }}
         existingColumnNames={columns.map(col => col.name)}
       />
+
+  
+    {/* Context Menu - rendered outside all containers to avoid positioning issues */}
+    {contextMenu && (
+      <CellContextMenu
+        isOpen={contextMenu.isOpen}
+        position={contextMenu.position}
+        onClose={handleContextMenuClose}
+        onInsertRowAbove={() => handleInsertRowAbove(contextMenu.rowId)}
+        onInsertRowBelow={() => handleInsertRowBelow(contextMenu.rowId)}
+        onDeleteRow={() => handleDeleteRow(contextMenu.rowId)}
+      />
+    )}
 
     </div>
   );

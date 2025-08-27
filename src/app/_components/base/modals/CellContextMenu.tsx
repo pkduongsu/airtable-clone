@@ -81,7 +81,7 @@ export function CellContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed bg-white border border-border-default rounded-[6px] shadow-lg z-50 py-1 min-w-[180px]"
+      className="absolute bg-white border border-border-default rounded-[6px] shadow-lg z-50 py-1 min-w-[180px]"
       style={{
         left: `${menuPosition.x}px`,
         top: `${menuPosition.y}px`,

@@ -14,13 +14,10 @@ import  Toolbar  from "../_components/base/controls/Toolbar";
 import { DataTable } from "../_components/base/table/DataTable";
 import { ViewSidebar } from "../_components/base/controls/ViewSidebar";
 import { SummaryBar } from "../_components/base/controls/SummaryBar";
-import { CellContextMenu } from "../_components/base/modals/CellContextMenu";
 import { type FilterRule } from "../_components/base/modals/FilterModal";  
 import { type ViewConfig } from "../_components/base/modals/CreateViewModal";
 import { useSortManagement } from "../_components/base/hooks/useSortManagement";
-import { useRowMutations } from "../_components/base/hooks/useRowMutations";
 import { useFilterManagement } from "../_components/base/hooks/useFilterManagement";
-import { useColumnMutations } from "../_components/base/hooks/useColumnMutations";
 import {type Column, type Row as _Record} from "@prisma/client";
 
 type SearchResult = {
@@ -50,13 +47,10 @@ function BasePageContent() {
   const [sidebarHovered, setSidebarHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280); //for resizing main content area
   const [isResizing, setIsResizing] = useState(false);
+  const [dataTableHandlers, setDataTableHandlers] = useState<{
+  handleCreateRow: () => Promise<void>;
+} | null>(null);
   
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    isOpen: boolean;
-    position: { x: number; y: number };
-    rowId: string;
-  } | null>(null);
 
   // Bulk loading state
   const [isBulkLoading, setIsBulkLoading] = useState(false);
@@ -227,17 +221,6 @@ function BasePageContent() {
   const updateTableMutation = api.table.update.useMutation();
   const deleteTableMutation = api.table.delete.useMutation();
   
-  const {
-    createRowMutation,
-    bulkInsertRowsMutation,
-    insertRowAboveMutation,
-    insertRowBelowMutation,
-    deleteRowMutation,
-    handleAddRow: handleAddRowFromHook,
-    handleInsertRowAbove,
-    handleInsertRowBelow,
-    handleDeleteRow,
-  } = useRowMutations();
 
   const handleCreateTable = async () => {
     try {
@@ -303,23 +286,6 @@ function BasePageContent() {
     }
   };
 
-  const handleAddRow = async () => {
-    return handleAddRowFromHook(selectedTable);
-  };
-
-  // Column mutations are now provided by useColumnMutations hook
-
-  const handleContextMenu = (position: { x: number; y: number }, rowId: string) => {
-    setContextMenu({
-      isOpen: true,
-      position,
-      rowId,
-    });
-  };
-
-  const handleContextMenuClose = () => {
-    setContextMenu(null);
-  };
 
   const insertFirstBatch = api.row.insertFirstBatch.useMutation();
   const insertRemainingBatches = api.row.insertRemainingBatches.useMutation();
@@ -357,8 +323,6 @@ function BasePageContent() {
     setIsBulkLoading(false);
   }
 };
-
-  // Column handlers are now provided by useColumnMutations hook
 
   // Filter handlers are now provided by useFilterManagement hook
 
@@ -447,26 +411,39 @@ function BasePageContent() {
   }, [selectedTable]);
 
   // Data processing logic moved to DataTable component
-
-  // Column mutations hook (after tableData is defined)
-  const {
-    renameColumnMutation,
-    deleteColumnMutation,
-    handleRenameColumn,
-    handleDeleteColumn,
-    handleToggleColumn,
-    handleHideAllColumns,
-    handleShowAllColumns,
-  } = useColumnMutations({
-    selectedTable,
-    triggerViewSave,
-    sortRules,
-    filterRulesRef,
-    hiddenColumns,
-    setHiddenColumns,
-    tableData,
+  const handleToggleColumn = useCallback((columnId: string) => {
+  setHiddenColumns(prev => {
+    const newSet = new Set(prev);
+    if (newSet.has(columnId)) {
+      newSet.delete(columnId);
+    } else {
+      newSet.add(columnId);
+    }
+    return newSet;
   });
+  
+  // Move the save outside setState to avoid potential issues
+  setTimeout(() => {
+    const currentHidden = hiddenColumns.has(columnId) 
+      ? new Set([...hiddenColumns].filter(id => id !== columnId))
+      : new Set([...hiddenColumns, columnId]);
+    triggerViewSave(sortRules, filterRulesRef.current, currentHidden);
+  }, 100);
+}, [hiddenColumns, sortRules, triggerViewSave]);
 
+const handleHideAllColumns = useCallback(() => {
+  if (tableData?.columns) {
+    const allColumnIds = new Set(tableData.columns.map(col => col.id));
+    setHiddenColumns(allColumnIds);
+    setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current, allColumnIds), 100);
+  }
+}, [tableData?.columns, sortRules, triggerViewSave]);
+
+const handleShowAllColumns = useCallback(() => {
+  const emptySet = new Set<string>();
+  setHiddenColumns(emptySet);
+  setTimeout(() => triggerViewSave(sortRules, filterRulesRef.current, emptySet), 100);
+}, [sortRules, triggerViewSave]);
   // Row type is defined in the useFilterManagement hook
 
   // Client-side filtering function is now provided by useFilterManagement hook
@@ -486,29 +463,16 @@ function BasePageContent() {
     const tableOperationsPending = createTableMutation.isPending ||
                                   updateTableMutation.isPending ||
                                   deleteTableMutation.isPending ||
-                                  createRowMutation.isPending ||
-                                  insertRowAboveMutation.isPending ||
-                                  insertRowBelowMutation.isPending ||
-                                  deleteRowMutation.isPending ||
-                                  bulkInsertRowsMutation.isPending ||
                                   updateViewMutation.isPending ||
-                                  renameColumnMutation.isPending ||
-                                  deleteColumnMutation.isPending;
-    
+                                  isBulkLoading;
     // Check global mutation tracker for cell operations and other tracked mutations
     return tableOperationsPending || hasActiveMutations;
   }, [
     createTableMutation.isPending,
     updateTableMutation.isPending,
     deleteTableMutation.isPending,
-    createRowMutation.isPending,
-    insertRowAboveMutation.isPending,
-    insertRowBelowMutation.isPending,
-    deleteRowMutation.isPending,
-    bulkInsertRowsMutation.isPending,
+    isBulkLoading,
     updateViewMutation.isPending,
-    renameColumnMutation.isPending,
-    deleteColumnMutation.isPending,
     hasActiveMutations,
   ]);
 
@@ -643,10 +607,6 @@ function BasePageContent() {
                 {selectedTable ? (
                   <DataTable 
                     tableId={selectedTable}
-                    onInsertRowAbove={handleInsertRowAbove}
-                    onInsertRowBelow={handleInsertRowBelow}
-                    onDeleteRow={handleDeleteRow}
-                    onContextMenu={handleContextMenu}
                     hiddenColumns={hiddenColumns}
                     sortRules={sortRules}
                     filterRules={filterRules}
@@ -654,9 +614,8 @@ function BasePageContent() {
                     currentSearchIndex={currentSearchIndex}
                     searchQuery={searchQuery}
                     scrollToRowId={scrollToRowId}
-                    onRenameColumn={handleRenameColumn}
-                    onDeleteColumn={handleDeleteColumn}
                     onRecordCountChange={setRecordCount}
+                    onDataTableReady={setDataTableHandlers}
                     records={records}
                     setRecords={setRecords}
                     columns={columns}
@@ -673,7 +632,7 @@ function BasePageContent() {
               </main>
               <SummaryBar 
                 recordCount={recordCount} 
-                onAddRow={handleAddRow} 
+                onAddRow={() => dataTableHandlers?.handleCreateRow()} 
                 onBulkAddRows={handleBulkAddRowsWrapper}
                 isBulkLoading={isBulkLoading}
               />
@@ -681,18 +640,6 @@ function BasePageContent() {
           </div>
         </div>
     </div>
-
-    {/* Context Menu - rendered outside all containers to avoid positioning issues */}
-    {contextMenu && (
-      <CellContextMenu
-        isOpen={contextMenu.isOpen}
-        position={contextMenu.position}
-        onClose={handleContextMenuClose}
-        onInsertRowAbove={() => handleInsertRowAbove(selectedTable ?? '', contextMenu.rowId)}
-        onInsertRowBelow={() => handleInsertRowBelow(selectedTable ?? '', contextMenu.rowId)}
-        onDeleteRow={() => handleDeleteRow(selectedTable ?? '', contextMenu.rowId)}
-      />
-    )}
   </div>
   );
 }
