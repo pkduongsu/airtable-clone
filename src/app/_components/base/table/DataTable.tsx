@@ -188,8 +188,6 @@ export function DataTable({
     return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
   }, [tableRecords]);
 
-
-
 useEffect(() => {
   if (!tableRecords) return;
 
@@ -198,7 +196,7 @@ useEffect(() => {
 
   setColumns(tableRecords?.pages[0]?.columns ?? []);
 
-  // Update records and track optimistic ones
+  // Update records - preserve optimistic ones
   setRecords(prev => {
     const serverIds = new Set(serverRecords.map(r => r.id));
     const optimisticRecords = prev.filter(r => 
@@ -211,31 +209,26 @@ useEffect(() => {
     return [...optimisticRecords, ...serverRecords];
   });
 
-  // Preserve cells for optimistic rows and edited cells
   setCells(prev => {
+    // Create a map of server cells
     const serverCellMap = new Map(
       serverCells.map(c => [`${c.rowId}-${c.columnId}`, c])
     );
     
-    // Keep cells that meet ANY of these conditions:
-    // 1. They belong to an optimistic row
-    // 2. They have unsaved edits
-    // 3. They're not yet on the server
-    const cellsToKeep = prev.filter(c => {
+    // Keep optimistic cells that aren't on the server yet
+    const optimisticCells = prev.filter(c => {
       const key = `${c.rowId}-${c.columnId}`;
-      const isForOptimisticRow = optimisticRowIdsRef.current.has(c.rowId);
-      const hasUnsavedEdit = editedCellValuesRef.current.has(key);
-      const notOnServer = !serverCellMap.has(key);
-      
-      return (isForOptimisticRow || hasUnsavedEdit) && notOnServer;
+      // Keep if it's for an optimistic row that exists AND not on server
+      const isForOptimisticRow = records.some(r => 
+        r.id === c.rowId && !serverRecords.some(sr => sr.id === r.id)
+      );
+      return isForOptimisticRow && !serverCellMap.has(key);
     });
     
-    // Merge kept cells with server cells
-    return [...cellsToKeep, ...serverCells];
+    return [...optimisticCells, ...serverCells];
   });
   //eslint-disable-next-line react-hooks/exhaustive-deps
-}, [tableId, tableRecords, allRecords]);
-
+}, [tableId, tableRecords, allRecords,]); 
 
 
   //update records count: 
@@ -266,8 +259,8 @@ useEffect(() => {
     const savedValue = cells.find(c => c.rowId === rowId && c.columnId === columnId)?.value;
     if (savedValue) {
       const currentValue = editedCellValuesRef.current.get(key);
-      const normalizedSavedValue = typeof savedValue === 'object' && savedValue !== null
-        ? ('text' in savedValue ? savedValue.text : JSON.stringify(savedValue))
+      const normalizedSavedValue = typeof savedValue === 'object' && 'text' in savedValue 
+        ? savedValue.text 
         : String(savedValue);
       
       if (currentValue === normalizedSavedValue) {
@@ -322,7 +315,6 @@ const rowData = useMemo(() => {
   }
 
   return Object.values(map);
-  //eslint-disable-next-line react-hooks/exhaustive-deps
 }, [records, cells, columns, editedCells]);
 
 

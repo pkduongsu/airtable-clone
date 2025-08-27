@@ -54,7 +54,6 @@ export function EditableCell({
   const [lastSaved, setLastSaved] = useState(normalizeToString(initialValue));
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [pendingSave, setPendingSave] = useState(false);
   
   // Compute states for visual highlighting
   
@@ -70,7 +69,7 @@ export function EditableCell({
     onError: (err, _, context) => {
       console.error('Cell update error:', err);
     
-    if (err.message?.includes('Invalid `ctx.db.cell.createMany()` invocation') && pendingSave) {
+    if (err.message?.includes('Foreign key constraint') && pendingSave) {
       // Retry after delay only if we still have pending changes //add a retry logic to prevent race cond
       setTimeout(() => {
         if (value !== lastSaved) {
@@ -80,7 +79,7 @@ export function EditableCell({
             value: { text: value }
           });
         }
-      }, 500);
+      }, 1000);
     } else if (context?.prevValue !== undefined) {
       setPendingSave(false);
       setValue(context.prevValue);
@@ -88,7 +87,6 @@ export function EditableCell({
     }
     },
     onSuccess: () => {
-      setPendingSave(false);
       setLastSaved(value);
       if (onCellSaved) {
       onCellSaved(rowId, columnId);
@@ -104,14 +102,9 @@ export function EditableCell({
   useEffect(() => {
     const timer = setTimeout(() => {
 
-       if (value === lastSaved) {
-        setPendingSave(false);
-        return;
+      if (value !== lastSaved) {
+        void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}})
       }
-
-      setPendingSave(true);
-      void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}})
-
     }, 500);
 
     return () => clearTimeout(timer);
