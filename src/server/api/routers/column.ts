@@ -46,6 +46,7 @@ export const columnRouter = createTRPCRouter({
             ? { number: null }   // or 0 if you want a real numeric default
             : { text: "" },
         })),
+        skipDuplicates: true,
       });
     }
 

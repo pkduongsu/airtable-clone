@@ -55,17 +55,24 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const deleteBaseMutation = api.base.delete.useMutation();
   const createBaseMutation = api.base.create.useMutation({
     onSuccess: (newBase) => {
-      // Add the new base to the cache so it appears when user navigates back
-      utils.base.list.setData(undefined, (oldData) => {
-        const baseWithTables = {
-          ...newBase,
-          tables: [{ id: "temp", name: "Table 1" }] // Matches the sample table created
-        };
-        if (!oldData) return [baseWithTables];
-        return [baseWithTables, ...oldData];
-      });
-      router.push(`/${newBase.id}`);
-    },
+      if (!newBase) return;
+    utils.base.list.setData(undefined, (oldData) => {      
+      const baseWithTables = {
+        id: newBase.id,
+        userId: newBase.userId,
+        name: newBase.name,
+        createdAt: newBase.createdAt,
+        updatedAt: newBase.updatedAt,
+        tables: newBase.tables.map((t) => ({
+          id: t.id,
+          name: t.name,
+        })),
+      }
+      return [...(oldData ?? []), baseWithTables];
+    });
+
+    router.push(`/${newBase.id}`);
+  },
   });
 
   const handleDeleteBase = async (baseId: string, baseName: string) => {

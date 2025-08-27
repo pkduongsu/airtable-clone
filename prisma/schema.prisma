@@ -128,9 +128,6 @@ model Cell {
   column   Column  @relation(fields: [columnId], references: [id])
   value    Json?   // Store different types as JSON
   
-  @@index([value], type: Gin) // For JSONB search
-  @@index([columnId]) // Separate B-tree index for columnId
-  @@index([rowId])
   @@unique([rowId, columnId])
 }
 

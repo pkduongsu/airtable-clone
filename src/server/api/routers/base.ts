@@ -69,7 +69,22 @@ export const baseRouter = createTRPCRouter({
         });
       }
 
-      return base;
+      return await ctx.db.base.findFirst({
+        where: { id: base.id },
+        include: {
+          tables: {
+            include: {
+              columns: true,
+              rows: {
+                include: {
+                  cells: true, 
+                },
+              },
+            },
+          },
+        },
+      });
+
     }),
 
   list: protectedProcedure.query(async ({ ctx }) => {

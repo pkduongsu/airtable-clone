@@ -49,37 +49,64 @@ export const cellRouter = createTRPCRouter({
     }))
     .mutation(async ({ ctx, input }) => {
       // Prepare the value based on type
-      const cellValue = typeof input.value === 'string' 
-        ? { text: input.value }
-        : typeof input.value === 'number'
-        ? { number: input.value }
-        : input.value;
+      // const cellValue = typeof input.value === 'string' 
+      //   ? { text: input.value }
+      //   : typeof input.value === 'number'
+      //   ? { number: input.value }
+      //   : input.value;
 
-      // Find existing cell first, then update or create
-      const existingCell = await ctx.db.cell.findFirst({
-        where: {
-          rowId: input.rowId,
-          columnId: input.columnId,
-        }
-      });
+      // // Find existing cell first, then update or create
+      // const existingCell = await ctx.db.cell.findFirst({
+      //   where: {
+      //     rowId: input.rowId,
+      //     columnId: input.columnId,
+      //   }
+      // });
 
-      if (existingCell) {
-        // Update existing cell
-        const cell = await ctx.db.cell.update({
-          where: { id: existingCell.id },
-          data: { value: cellValue }
-        });
-        return cell;
-      } else {
-        // Create new cell
-        const cell = await ctx.db.cell.create({
-          data: {
-            rowId: input.rowId,
-            columnId: input.columnId,
-            value: cellValue
-          }
-        });
-        return cell;
-      }
+      // if (existingCell) {
+      //   // Update existing cell
+      //   const cell = await ctx.db.cell.update({
+      //     where: { id: existingCell.id },
+      //     data: { value: cellValue }
+      //   });
+      //   return cell;
+      // } else {
+      //   // Create new cell
+      //   const cell = await ctx.db.cell.create({
+      //     data: {
+      //       rowId: input.rowId,
+      //       columnId: input.columnId,
+      //       value: cellValue
+      //     }
+      //   });
+      //   return cell;
+      // }
+
+     const normalizedValue =
+  typeof input.value === "string"
+    ? { text: input.value }
+    : typeof input.value === "number"
+    ? { number: input.value }
+    : input.value; // if already object { text: string }
+
+const cell = await ctx.db.cell.upsert({
+  where: {
+    rowId_columnId: {
+      rowId: input.rowId,
+      columnId: input.columnId,
+    },
+  },
+  update: {
+    value: normalizedValue,   
+  },
+  create: {
+    rowId: input.rowId,
+    columnId: input.columnId,
+    value: normalizedValue, 
+  },
+});
+    return cell;
+
+
     }),
 });

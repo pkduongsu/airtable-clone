@@ -186,18 +186,29 @@ export function DataTable({
     return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
   }, [tableRecords]);
 
-  // Critical state update useEffect
   useEffect(() => {
-    console.log(`entering critical useEffect:`);
+  if (!tableRecords) return;
 
-    if (tableRecords) {
-      console.log(`setting the col, rec, cells`);
-      setColumns(tableRecords?.pages[0]?.columns ?? []); 
-      setRecords(allRecords);
-      const combinedCells = allRecords.flatMap((r) => r.cells);
-      setCells(combinedCells);
-    }
-  }, [tableRecords, allRecords, setColumns, setRecords]);
+  const serverRecords = allRecords;
+  const serverCells = allRecords.flatMap(r => r.cells);
+
+  setColumns(tableRecords?.pages[0]?.columns ?? []);
+
+  //merge rows (keep optimistic ones for this table)
+  setRecords(prev => {
+    const serverIds = new Set(serverRecords.map(r => r.id));
+    return [
+      ...prev.filter(r => r.tableId === tableId && !serverIds.has(r.id)),
+      ...serverRecords,
+    ];
+  });
+
+  //cells: trust server snapshot only
+  // edited values are preserved via editedCellValuesRef in rowData
+  setCells(serverCells);
+  //eslint-disable-next-line react-hooks/exhaustive-deps
+}, [tableId, tableRecords, allRecords]);
+
 
   //update records count: 
   useEffect(() => {
@@ -213,6 +224,7 @@ export function DataTable({
     const key = `${rowId}-${columnId}`;
     editedCellValuesRef.current.set(key, value);
     //let Editable Cell handle debounced state
+    forceUpdate();
   }, []);
 
   // Transform row data
@@ -275,7 +287,7 @@ export function DataTable({
       console.log("row created");
     },
     onError: async() => {
-      await refetch();
+     // await refetch();
     }
   });
 
@@ -341,14 +353,14 @@ export function DataTable({
 
       setColumns((old) => [...old, tempColumn]); //optimistically add rows
     
-      const tempCells = records.map((row) => ({
-        id: crypto.randomUUID(),
-        rowId: row.id,
-        columnId: tempColId, // Real ID
-        value: { text: ""},
-      }));
+      // const tempCells = records.map((row) => ({
+      //   id: crypto.randomUUID(),
+      //   rowId: row.id,
+      //   columnId: tempColId, // Real ID
+      //   value: { text: ""},
+      // }));
     
-      setCells((old) => [...old, ...tempCells]);
+      // setCells((old) => [...old, ...tempCells]);
 
       //problem is edits happen between here
 
@@ -411,14 +423,11 @@ export function DataTable({
       //eslint-disable-next-line react-hooks/exhaustive-deps
     }, [records.length, columns, tableId]);
 
-  useEffect(() => {
-  if (onDataTableReady) {
-    onDataTableReady({
-      handleCreateRow
-    });
-  }
-  //eslint-disable-next-line react-hooks/exhaustive-deps
-}, [onDataTableReady]);
+    useEffect(() => {
+  if (!onDataTableReady) return;
+  onDataTableReady({ handleCreateRow });
+}, [onDataTableReady, handleCreateRow]);
+
 
   //handle insert above/below, delete, rename
    const handleInsertRowAbove = async(targetRowId: string) => {
@@ -798,7 +807,7 @@ export function DataTable({
       `input[data-cell-id="${targetRowId}-${targetColumnId}"]`
     ) as HTMLInputElement | null;
     if (cellInput) {
-      cellInput.focus();
+      cellInput.focus({ preventScroll: true });
       cellInput.select();
     }
     focusTimeoutRef.current = null;

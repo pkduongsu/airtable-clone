@@ -6,7 +6,7 @@ import { api } from "~/trpc/react";
 
 interface EditableCellProps {
   tableId: string;
-  initialValue: string;
+  initialValue: string | number | { text: string } | null;
   className?: string;
   onSelect?: () => void;
   onDeselect?: () => void;
@@ -39,15 +39,23 @@ export function EditableCell({
   columnType = "TEXT",
   onValueChange,
 }: EditableCellProps) {
-  const [value, setValue] = useState(initialValue);
-  const [lastSaved, setLastSaved] = useState(initialValue);
+
+  
+  const normalizeToString = (val: string | number | { text: string } | null): string => {
+  if (typeof val === "string") return val;
+  if (typeof val === "number") return String(val);
+  if (typeof val === "object" && val?.text) return val.text;
+  return "";
+};
+
+  const [value, setValue] = useState(normalizeToString(initialValue));
+  const [lastSaved, setLastSaved] = useState(normalizeToString(initialValue));
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   
   // Compute states for visual highlighting
   
   const utils = api.useUtils();
-
   
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update', { rowId, columnId }],
@@ -66,7 +74,6 @@ export function EditableCell({
     },
     onSettled: () => {
         void utils.table.getById.invalidate({ id: tableId });
-        //void utils.table.getTableData.invalidate();
     }
   });
   
@@ -76,7 +83,7 @@ export function EditableCell({
     const timer = setTimeout(() => {
 
       if (value !== lastSaved) {
-        void updateCellMutation.mutateAsync({ columnId, rowId, value})
+        void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}})
       }
     }, 500);
 
@@ -87,14 +94,17 @@ export function EditableCell({
   //triggers when database resets and initialValue changes to the newest in db
   useEffect(() => {
     if(initialValue !== value && value === lastSaved) {
-        setValue(initialValue);
-        setLastSaved(initialValue);
-        onValueChange?.(rowId, columnId, initialValue);
+        setValue(value);
+        setLastSaved(value);
+        onValueChange?.(rowId, columnId, initialValue as string);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValue]);
 
   const handleBlur = () => {
+    if (value !== lastSaved) {
+      updateCellMutation.mutate({ rowId, columnId, value });
+    }
     setIsFocused(false);
   };
 
