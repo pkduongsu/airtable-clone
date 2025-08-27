@@ -61,6 +61,7 @@ export function EditableCell({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
       await utils.table.getById.cancel();
+      setLastSaved(value);
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
@@ -96,7 +97,7 @@ export function EditableCell({
     if(initialValue !== value && value === lastSaved) {
         setValue(value);
         setLastSaved(value);
-        onValueChange?.(rowId, columnId, initialValue as string);
+        onValueChange?.(rowId, columnId, value);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValue]);
