@@ -443,6 +443,8 @@ export function DataTable({
         r.order >= newOrder ? { ...r, order: r.order + 1 } : r
       );
 
+      
+
       // Create new row
       const newRow: _Record = {
         id: tempRowId,
