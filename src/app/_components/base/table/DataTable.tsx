@@ -117,6 +117,7 @@ export function DataTable({
   } | null>(null);
   //eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localRecordCount, setLocalRecordCount] = useState(0);
+  const optimisticRowIdsRef = useRef<Set<string>>(new Set());
 
   // Store focus state in a ref to avoid re-renders
   const focusStateRef = useRef<{
@@ -186,7 +187,7 @@ export function DataTable({
     return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
   }, [tableRecords]);
 
-  useEffect(() => {
+useEffect(() => {
   if (!tableRecords) return;
 
   const serverRecords = allRecords;
@@ -194,7 +195,7 @@ export function DataTable({
 
   setColumns(tableRecords?.pages[0]?.columns ?? []);
 
-  //merge rows (keep optimistic ones for this table)
+  // Update records - preserve optimistic ones
   setRecords(prev => {
     const serverIds = new Set(serverRecords.map(r => r.id));
     return [
@@ -203,11 +204,26 @@ export function DataTable({
     ];
   });
 
-  //cells: trust server snapshot only
-  // edited values are preserved via editedCellValuesRef in rowData
-  setCells(serverCells);
+  setCells(prev => {
+    // Create a map of server cells
+    const serverCellMap = new Map(
+      serverCells.map(c => [`${c.rowId}-${c.columnId}`, c])
+    );
+    
+    // Keep optimistic cells that aren't on the server yet
+    const optimisticCells = prev.filter(c => {
+      const key = `${c.rowId}-${c.columnId}`;
+      // Keep if it's for an optimistic row that exists AND not on server
+      const isForOptimisticRow = records.some(r => 
+        r.id === c.rowId && !serverRecords.some(sr => sr.id === r.id)
+      );
+      return isForOptimisticRow && !serverCellMap.has(key);
+    });
+    
+    return [...optimisticCells, ...serverCells];
+  });
   //eslint-disable-next-line react-hooks/exhaustive-deps
-}, [tableId, tableRecords, allRecords]);
+}, [tableId, tableRecords, allRecords,]); 
 
 
   //update records count: 
@@ -402,6 +418,8 @@ export function DataTable({
         onRecordCountChange(records.length + 1);
       }
 
+      optimisticRowIdsRef.current.add(tempRowId);
+
       const newCells = columns.map(col => ({
       id: crypto.randomUUID(), // local id
       rowId: tempRowId,
@@ -413,12 +431,24 @@ export function DataTable({
 
     //but then , if i want the cells to actually be saved, we need a real record
     //so what if I just create a record and does not invalidate?
-
+    try{
      await createRowMutation.mutateAsync({
         id: tempRowId,
         tableId: tableId, 
       });
-
+    } catch (error) {
+      console.error("Failed to create row:", error);
+    
+      // Remove from tracking on error
+      optimisticRowIdsRef.current.delete(tempRowId);
+      
+      setRecords(old => old.filter(r => r.id !== tempRowId));
+      setCells(old => old.filter(c => c.rowId !== tempRowId));
+      
+      if (onRecordCountChange) {
+        onRecordCountChange(records.length);
+      }
+      }
       forceUpdate();
       //eslint-disable-next-line react-hooks/exhaustive-deps
     }, [records.length, columns, tableId]);
