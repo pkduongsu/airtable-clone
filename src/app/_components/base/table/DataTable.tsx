@@ -286,9 +286,9 @@ useEffect(() => {
     // If Prisma already included the relation, keep it; otherwise attach from map
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
     const col = (c as any).column ?? colById.get(c.columnId);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-    if (!col) return { ...(c as any), column: { name: "", id: c.columnId, tableId, type: "TEXT", order: 0, width: 179 } } as CellWithColumn; // fallback to satisfy TS, but ideally never hits
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (!col) return { ...(c as any), column: { name: "", id: c.columnId, tableId, type: "TEXT", order: 0, width: 179 } } as CellWithColumn; // fallback to satisfy TS, but ideally never hits
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
     return { ...(c as any), column: col } as CellWithColumn;
   });
 
