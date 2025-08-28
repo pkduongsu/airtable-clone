@@ -230,10 +230,7 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
     {
       tableId: tableId,
       limit: PAGE_LIMIT,
-      sortRules: sortRules.map(rule => ({
-        columnId: rule.columnId,
-        direction: rule.direction
-      })),
+      sortRules: [],
       filterRules: filterRules,
     },
     {
@@ -490,6 +487,53 @@ const filteredData = useMemo(() => {
     })
   );
 }, [rowData, filterRules, columns]);
+
+const sortedData = useMemo(() => {
+  if (!sortRules?.length) return filteredData;
+
+  const colTypeById = new Map(columns.map(c => [c.id, c.type]));
+
+  const getComparable = (row: TableRow, colId: string) => {
+    const raw = row[colId];
+    const type = colTypeById.get(colId) ?? 'TEXT';
+
+    if (type === 'NUMBER') {
+      const n = Number(raw);
+      // Put non-numbers at the bottom for asc, top for desc (handled via comparator sign)
+      return Number.isNaN(n) ? Number.NEGATIVE_INFINITY : n;
+    }
+    //eslint-disable-next-line @typescript-eslint/no-base-to-string
+    return (raw ?? '').toString().toLowerCase();
+  };
+
+  const out = [...filteredData];
+
+  out.sort((a, b) => {
+    for (const rule of sortRules) {
+      const av = getComparable(a, rule.columnId);
+      const bv = getComparable(b, rule.columnId);
+      let cmp = 0;
+
+      if (typeof av === 'number' && typeof bv === 'number') {
+        cmp = av - bv;
+      } else {
+        // localeCompare with numeric handles "2" < "10" sensibly for text
+        cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+      }
+
+      if (cmp !== 0) {
+        return rule.direction === 'asc' ? cmp : -cmp;
+      }
+    }
+
+    // Stable tie-breaker: original loaded order
+    const ai = recordsRef.current.findIndex(r => r.id === a.id);
+    const bi = recordsRef.current.findIndex(r => r.id === b.id);
+    return ai - bi;
+  });
+
+  return out;
+}, [filteredData, sortRules, columns]);
 
 
 
@@ -1329,10 +1373,10 @@ const filteredData = useMemo(() => {
       data: filteredData, //uses this so that it merges record and cells in render time, whereas if separate, cells get rendered after.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo]);
+  }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo, sortRules, filterRules]);
 
   const table = useReactTable({
-    data,
+    data: sortedData,
     columns: allColumns,
     getCoreRowModel: getCoreRowModel(),
     enableColumnResizing: true,
@@ -1354,7 +1398,7 @@ const filteredData = useMemo(() => {
     if (tableId) {
       void refetchRecords();
     }
-  }, [sortRules, filterRules, searchValue, refetchRecords, tableId]);
+  }, [filterRules, searchValue, refetchRecords, tableId]);
 
   // Handle clicking outside cells to deselect
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
