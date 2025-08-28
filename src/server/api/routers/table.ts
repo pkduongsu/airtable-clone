@@ -213,7 +213,7 @@ export const tableRouter = createTRPCRouter({
     .input(z.object({ 
       tableId: z.string(),
       limit: z.number().min(1).max(1000).default(100),
-      cursor: z.number().default(0),
+      cursor: z.number().default(1),
       sortRules: z.array(z.object({
         columnId: z.string(),
         direction: z.enum(['asc', 'desc'])

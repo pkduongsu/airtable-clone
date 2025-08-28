@@ -36,7 +36,7 @@ import {
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-const PAGE_LIMIT = 50;
+const PAGE_LIMIT = 100;
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -118,16 +118,8 @@ export function DataTable({
   //eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localRecordCount, setLocalRecordCount] = useState(0);
   const optimisticRowIdsRef = useRef<Set<string>>(new Set());
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const optimisticColumnIdsRef = useRef<Set<string>>(new Set());
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const tempToRealColumnIdRef = useRef<Map<string, string>>(new Map());
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const tempToRealRowIdRef = useRef<Map<string, string>>(new Map());
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const draftCellsRef = useRef<Map<string, string>>(new Map()); // Separate from editedCellValuesRef
   const rowUiKeyRef = useRef<Map<string, string>>(new Map());
-const columnUiKeyRef = useRef<Map<string, string>>(new Map());
+  const columnUiKeyRef = useRef<Map<string, string>>(new Map());
 
 const pendingRowIdsRef = useRef<Set<string>>(new Set());
 const pendingColumnIdsRef = useRef<Set<string>>(new Set());
@@ -235,7 +227,7 @@ const flushColumn = async (colId: string) => {
         columnId: rule.columnId,
         direction: rule.direction
       })),
-      filterRules: filterRules
+      filterRules: filterRules,
     },
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
@@ -272,9 +264,13 @@ useEffect(() => {
    setRecords(prev => {
     const serverIds = new Set(serverRecords.map(r => r.id));
     const carry = prev.filter(
-      r => pendingRowIdsRef.current.has(r.id) && !serverIds.has(r.id)
+      r => r.tableId === tableId && !serverIds.has(r.id)
     );
-    return [...carry, ...serverRecords];
+    
+    const next = [...carry, ...serverRecords];
+    recordsRef.current = next;
+    return next;
+
   });
 
   setCells(prev => {
@@ -309,6 +305,11 @@ useEffect(() => {
       const presentKey = `${row.id}-${col.id}`;      // server identity
       if (serverCellMap.has(presentKey)) continue;   // server already has it
 
+      //if a local cell already exists from the previous synth, keep the cell, regardless of pending draft
+      const existingCell = prevMap.get(presentKey);
+      if (existingCell) {synthesized.push(existingCell); continue;} 
+
+      //only when we don't have local cell, decide whether to create one
       const draftKey = stableCellKey(row.id, col.id); // UI-stable draft key
       const hasDraft = editedCellValuesRef.current.has(draftKey);
       const isPending =
@@ -317,14 +318,6 @@ useEffect(() => {
 
       if (!isPending && !hasDraft) continue;
 
-      // Reuse existing synthesized/local cell if present
-      const existing = prevMap.get(presentKey);
-      if (existing) {
-        synthesized.push(existing);
-      } else {
-        // Attach the Column object to satisfy the state type
-        const colObj = colById.get(col.id);
-        if (!colObj) continue; // should not happen, but guard
 
         synthesized.push({
           id: `synthetic-${presentKey}`,   // deterministic (no flicker/remount)
@@ -333,11 +326,11 @@ useEffect(() => {
           value: hasDraft
             ? { text: editedCellValuesRef.current.get(draftKey)! }
             : { text: "" },
-          column: colObj,
+          column: colById.get(col.id)!,
         });
       }
     }
-  }
+
 
   // Merge: server wins; add synthesized only for missing pairs
   const merged: CellWithColumn[] = [...serverCellsWithColumn];
@@ -362,8 +355,7 @@ useEffect(() => {
 
 const updateCellMutation = api.cell.update.useMutation();
   
-
-  const handleCellValueChange = useCallback((rowId: string, columnId: string, value: string) => {
+const handleCellValueChange = useCallback((rowId: string, columnId: string, value: string) => {
     const key = stableCellKey(rowId, columnId);
     editedCellValuesRef.current.set(key, value);
     //let Editable Cell handle debounced state
@@ -506,7 +498,11 @@ const rowData = useMemo(() => {
         width: 179     
       };
 
-      setColumns((old) => [...old, tempColumn]); //optimistically add columns
+      setColumns((old) => {
+        const next = [...old, tempColumn];
+        columnsRef.current = next;
+        return next;
+      }); //optimistically add columns
     
       const tempCells = records.map((row) => ({
         id: crypto.randomUUID(),
@@ -547,7 +543,6 @@ const rowData = useMemo(() => {
   const handleCreateRow = useCallback(async() => {
       const tempRowId = crypto.randomUUID();
 
-    
       rowUiKeyRef.current.set(tempRowId, tempRowId);
       pendingRowIdsRef.current.add(tempRowId)
 
@@ -556,7 +551,11 @@ const rowData = useMemo(() => {
         tableId: tableId,
         order: records.length
       };
-      setRecords((old) => [...old, tempRow]) //add temp row to local state to display immediately
+      setRecords((old) => {
+        const next = [...old, tempRow];
+        recordsRef.current = next;
+        return next;
+      }) //add temp row to local state to display immediately
 
        if (onRecordCountChange) {
         onRecordCountChange(records.length + 1);
@@ -616,6 +615,10 @@ const rowData = useMemo(() => {
       if (!targetRow) return;
 
       const tempRowId = crypto.randomUUID();
+
+      pendingRowIdsRef.current.add(tempRowId);
+      rowUiKeyRef.current.set(tempRowId, tempRowId);
+
       const newOrder = targetRow.order;
 
       // Update orders for existing rows optimistically
@@ -623,7 +626,6 @@ const rowData = useMemo(() => {
         r.order >= newOrder ? { ...r, order: r.order + 1 } : r
       );
 
-      
 
       // Create new row
       const newRow: _Record = {
@@ -633,7 +635,12 @@ const rowData = useMemo(() => {
       };
 
       // Add new row and sort
-      setRecords([...updatedRecords, newRow].sort((a, b) => a.order - b.order));
+      //eslint-disable-next-line @typescript-eslint/no-unused-vars
+      setRecords((old) => {
+        const next = [...updatedRecords, newRow].sort((a, b) => a.order - b.order)
+        recordsRef.current = next;
+        return next;
+      });
 
        if (onRecordCountChange) {
         onRecordCountChange(records.length + 1);
@@ -650,11 +657,16 @@ const rowData = useMemo(() => {
       setCells(old => [...old, ...newCells]);
 
 
-      await insertRowAboveMutation.mutateAsync({
+      try {
+        await insertRowAboveMutation.mutateAsync({
           tableId: tableId,
           targetRowId: targetRowId,
           id: tempRowId // Pass the temp ID to maintain consistency
       });
+    } finally {
+        pendingRowIdsRef.current.delete(tempRowId);
+        void flushRow(tempRowId);
+    };
       
 
       setUpdateTrigger(prev => prev + 1);
@@ -673,6 +685,9 @@ const rowData = useMemo(() => {
       const tempRowId = crypto.randomUUID();
       const newOrder = targetRow.order + 1;
 
+      pendingRowIdsRef.current.add(tempRowId);
+      rowUiKeyRef.current.set(tempRowId, tempRowId);
+
       // Update orders for existing rows optimistically
       const updatedRecords = records.map(r => 
         r.order >= newOrder ? { ...r, order: r.order + 1 } : r
@@ -686,7 +701,12 @@ const rowData = useMemo(() => {
       };
 
       // Add new row and sort
-      setRecords([...updatedRecords, newRow].sort((a, b) => a.order - b.order));
+      //eslint-disable-next-line @typescript-eslint/no-unused-vars
+      setRecords((old) => {
+        const next = [...updatedRecords, newRow].sort((a, b) => a.order - b.order)
+        recordsRef.current = next;
+        return next;
+    });
 
        if (onRecordCountChange) {
         onRecordCountChange(records.length + 1);
@@ -703,11 +723,15 @@ const rowData = useMemo(() => {
 
       // Call parent mutation if provided, otherwise use local mutation
 
-      await insertRowBelowMutation.mutateAsync({
+      try {await insertRowBelowMutation.mutateAsync({
         tableId: tableId,
         targetRowId: targetRowId,
         id: tempRowId
       });
+    } finally {
+        pendingRowIdsRef.current.delete(tempRowId);
+        void flushRow(tempRowId);
+    };
 
       setUpdateTrigger(prev => prev + 1);
     } catch (error) {
@@ -1224,62 +1248,13 @@ const rowData = useMemo(() => {
       columnSizing,
     },
     onColumnSizingChange: setColumnSizing,
+    autoResetAll: false,
+    autoResetPageIndex: false,
+    autoResetExpanded: false,
   });
 
-  // Handlers for table interaction
-
-  const { rows } = table.getRowModel();
-
-  // Setup virtualizer for rows
-  const rowVirtualizer = useVirtualizer({
-    count: rows.length > PAGE_LIMIT 
-    ? (tableData?._count?.rows ?? rows.length) // trust server count when big
-    : rows.length,
-    estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
-    getScrollElement: () => tableContainerRef.current,
-    measureElement:
-      typeof window !== 'undefined' &&
-      !navigator.userAgent.includes('Firefox')
-        ? element => element?.getBoundingClientRect().height
-        : undefined,
-    overscan: 5, // Optimized for better performance and smoother scrolling
-  });
-
-  // Scroll to specific row when scrollToRowId changes
-  useEffect(() => {
-    if (scrollToRowId) {
-      const rowIndex = data.findIndex(row => row.id === scrollToRowId);
-      if (rowIndex >= 0) {
-        rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
-      }
-    }
-  }, [scrollToRowId, data, rowVirtualizer]);
 
   
-
-  useEffect(() => {
-  const virtualItems = rowVirtualizer.getVirtualItems();
-  const endIndex = virtualItems[virtualItems.length - 1]?.index ?? 0;
-  const loaded = tableRecords?.pages.flatMap(p => p.rows).length ?? 0;
-
-  if (endIndex + 2 * PAGE_LIMIT > loaded && hasNextPage && !isFetchingNextPage) {
-    void fetchNextPage();
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [rowVirtualizer.getVirtualItems(), hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-
-
-
-
-  // Auto-scroll to navigated cell
-  useEffect(() => {
-    if (navigatedCell && rowVirtualizer) {
-      rowVirtualizer.scrollToIndex(navigatedCell.rowIndex, { align: 'center' });
-    }
-  }, [navigatedCell, rowVirtualizer]);
-
-
   // Data refetch when parameters change
   useEffect(() => {
     if (tableId) {
@@ -1294,6 +1269,37 @@ const rowData = useMemo(() => {
       handleCellDeselection();
     }
   }, [handleCellDeselection]);
+
+  // Handlers for table interaction
+
+  const { rows } = table.getRowModel();
+
+  // Setup virtualizer for rows
+  const rowVirtualizer = useVirtualizer({
+    count:  Math.max(rows.length , 2),
+    estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
+    getScrollElement: () => tableContainerRef.current,
+    overscan: 24 // Optimized for better performance and smoother scrolling
+  });
+
+  // Scroll to specific row when scrollToRowId changes
+  useEffect(() => {
+    if (scrollToRowId) {
+      const rowIndex = data.findIndex(row => row.id === scrollToRowId);
+      if (rowIndex >= 0) {
+        rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
+      }
+    }
+  }, [scrollToRowId, data, rowVirtualizer]);
+
+
+  const handleScroll = useCallback(() => {
+    if(hasNextPage && !isFetchingNextPage)
+    {
+      void fetchNextPage();
+    }
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
+
 
 
   // Early return for loading or no data
@@ -1328,8 +1334,12 @@ const rowData = useMemo(() => {
         paddingBottom: '70px',
       }}
       onClick={handleContainerClick}
+      onScroll={handleScroll}
       tabIndex={0}
-      onFocus={() => {
+      onFocus={(e) => {
+
+        //prevent jumping to row 0
+        if (e.target !== e.currentTarget) return;
         // Ensure we have a navigated cell when table gets focus
         if (!navigatedCell && !selectedCell && records.length > 0 && columns.length > 0) {
           setNavigatedCell({ rowIndex: 0, columnIndex: 0 });
@@ -1343,7 +1353,6 @@ const rowData = useMemo(() => {
         }}
       >
         <table 
-          key={`search-${currentSearchIndex}-${searchMatchInfo.currentResult}`}
           style={{ display: 'grid', width: '100%' }}
         >
           <TableHeader
@@ -1361,42 +1370,8 @@ const rowData = useMemo(() => {
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index];
-              const rowId = row?.original?.id;
-              const isRowLoaded = !!rowId;
               
-              // Show skeleton for unloaded virtual items (beyond loaded records or without data)
-              if (!isRowLoaded || virtualRow.index >= records.length) {
-                return (
-                  <tr
-                    key={`loading-${virtualRow.index}`}
-                    style={{ 
-                      transform: `translateY(${virtualRow.start}px)`,
-                      display: 'flex',
-                      position: 'absolute',
-                      width: table.getCenterTotalSize(),
-                    }}
-                    className="h-8 border-b border-border-default bg-white"
-                  >
-                    {/* Row number skeleton */}
-                    <td
-                      className="px-2 text-center border-r border-border-default"
-                      style={{ width: 87, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      <Spinner size={12} />
-                    </td>
-                    {/* Data column skeletons */}
-                    {columns.filter(col => !hiddenColumns.has(col.id)).map((col) => (
-                      <td
-                        key={`${virtualRow.index}-${col.id}`}
-                        className="px-2 text-center border-r border-border-default"
-                        style={{ width: 179, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                      >
-                        <Spinner size={12} />
-                      </td>
-                    ))}
-                  </tr>
-                );
-              }
+              if (!row) return null; //removed skeleton rows.
 
               const stableRowKey = rowUiKeyRef.current.get(row?.original?.id) ?? row?.original?.id;
               
@@ -1404,14 +1379,15 @@ const rowData = useMemo(() => {
               return (
                 <tr
                   data-index={virtualRow.index}
-                  ref={(node) => rowVirtualizer.measureElement(node)}
                   key={stableRowKey}
                   className="group border-b border-border-default hover:bg-[#f8f8f8] bg-white"
                   style={{
                     display: 'flex',
                     position: 'absolute',
-                    transform: `translateY(${virtualRow.start}px)`,
+                    transform: `translate3d(0, ${virtualRow.start}px, 0)`,
+                    willChange: 'transform',
                     width: table.getCenterTotalSize(),
+                    height: `${virtualRow.size}px`,
                   }}
                 >
                   {row.getVisibleCells().map((cell) => {
