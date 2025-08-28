@@ -173,13 +173,13 @@ function EditableCell({
 
   // Determine cell styling based on state
   const getCellClassName = () => {
-    const baseClasses = "w-full h-full px-2 py-1 text-sm text-gray-900 cursor-text border border-transparent";
+    const baseClasses = "w-full h-full px-2 py-1 text-sm text-gray-900 cursor-text border border-b border-transparent";
     
     if (isFocused) {
       // Editing state - strong blue border and background
       return `${baseClasses} !bg-white !border-2 !border-blue-600 shadow-sm`;
     } else if (isSearchMatch) {
-      return `${baseClasses} ${isCurrentSearchResult ? '!bg-orange-300' : '!bg-yellow-100'} hover:bg-gray-50`;
+      return `${baseClasses} ${isCurrentSearchResult ? '!bg-orange-300' : '!bg-yellow-100'} hover:bg-gray-50 border-border-default border`;
     } else {
       return `${baseClasses} hover:bg-gray-50 border-border-default ${getCellBackgroundColor()}`;
     }

@@ -1275,7 +1275,7 @@ const rowData = useMemo(() => {
 
   // Setup virtualizer for rows
   const rowVirtualizer = useVirtualizer({
-    count: rows.length,
+    count:  Math.max(rows.length , 2),
     estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
     getScrollElement: () => tableContainerRef.current,
     overscan: 24 // Optimized for better performance and smoother scrolling
@@ -1291,22 +1291,13 @@ const rowData = useMemo(() => {
     }
   }, [scrollToRowId, data, rowVirtualizer]);
 
-  const virtualItems = rowVirtualizer.getVirtualItems();
 
-  useEffect(() => {
-  const endIndex = virtualItems[virtualItems.length - 1]?.index ?? 0;
-  const loaded = tableRecords?.pages.flatMap(p => p.rows).length ?? 0;
-
-  if (!hasNextPage || isFetchingNextPage || !endIndex) return;
-
-  if (endIndex >= records.length -1 ) 
-  {
-    
+  const handleScroll = useCallback(() => {
+    if(hasNextPage && !isFetchingNextPage)
+    {
       void fetchNextPage();
-  }
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [virtualItems, hasNextPage, isFetchingNextPage, records]);
+    }
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
 
 
 
@@ -1342,6 +1333,7 @@ const rowData = useMemo(() => {
         paddingBottom: '70px',
       }}
       onClick={handleContainerClick}
+      onScroll={handleScroll}
       tabIndex={0}
       onFocus={(e) => {
 
