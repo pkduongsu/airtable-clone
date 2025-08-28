@@ -127,6 +127,7 @@ const getRowUiKey = (rowId: string) => rowUiKeyRef.current.get(rowId) ?? rowId;
 const getColUiKey = (colId: string) => columnUiKeyRef.current.get(colId) ?? colId;
 const stableCellKey = (rowId: string, colId: string) => `${getRowUiKey(rowId)}::${getColUiKey(colId)}`;
 
+const pendingSearchScrollRef = useRef<{ rowId: string; columnId?: string } | null>(null);
 
 const cellRenderKey = (rowId: string, columnId: string) => {
   const rk = rowUiKeyRef.current.get(rowId) ?? rowId;
@@ -434,7 +435,17 @@ const filteredData = useMemo(() => {
   if (!filterRules?.length) return rowData;
 
   const colTypeById = new Map(columns.map(c => [c.id, c.type]));
-  const toStr = (v: unknown) => (v ?? "").toString();
+  const toStr = (v: unknown): string => {
+    if (v == null) return "";
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+      return String(v);
+    }
+    if (typeof v === "object" && v !== null) {
+      return JSON.stringify(v);
+    }
+    // Fallback for other types
+    return "";
+  };
 
   return rowData.filter((row) =>
     filterRules.every((rule) => {
@@ -919,6 +930,12 @@ const filteredData = useMemo(() => {
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
 
+  /////////////////////////////////////////////////
+            //SEARCH LOGIC HANDLING//
+  ////////////////////////////////////////////////
+
+  
+
   // Calculate search match information
   const searchMatchInfo = useMemo(() => {
     if (!searchResults || searchResults.length === 0) {
@@ -1349,6 +1366,61 @@ const filteredData = useMemo(() => {
       }
     }
   }, [scrollToRowId, data, rowVirtualizer]);
+
+  //scroll to the navigated search index: 
+  const ensureLoadedAndScrollTo = useCallback(
+  async (rowId: string, rowOrder?: number, columnId?: string) => {
+    // 1) If row is already in memory, scroll now
+    let idx = recordsRef.current.findIndex(r => r.id === rowId);
+    if (idx >= 0) {
+      rowVirtualizer.scrollToIndex(idx, { align: 'center' });
+      // Give the virtualizer a beat to render, then focus the exact cell
+      requestAnimationFrame(() => {
+        const el = tableContainerRef.current?.querySelector<HTMLInputElement>(
+          `[data-cell-id="${rowId}-${columnId ?? ''}"]`
+        );
+        // First bring cell into view horizontally (if needed), then focus without re-scrolling
+        el?.scrollIntoView({ block: 'center', inline: 'center' });
+        el?.focus({ preventScroll: true });
+      });
+      return;
+    }
+
+    // 2) Not loaded yet: use rowOrder to fetch enough pages
+    if (typeof rowOrder === 'number') {
+      const needCount = rowOrder + 1; // 0-based rowOrder
+      let loaded = recordsRef.current.length;
+
+      // Fetch pages until we have at least `needCount` rows or run out of pages
+      while (loaded < needCount && hasNextPage) {
+        await fetchNextPage();
+        loaded = recordsRef.current.length;
+      }
+
+      // Try again after loading
+      idx = recordsRef.current.findIndex(r => r.id === rowId);
+      if (idx >= 0) {
+        rowVirtualizer.scrollToIndex(idx, { align: 'center' });
+        requestAnimationFrame(() => {
+          const el = tableContainerRef.current?.querySelector<HTMLInputElement>(
+            `[data-cell-id="${rowId}-${columnId ?? ''}"]`
+          );
+          el?.scrollIntoView({ block: 'center', inline: 'center' });
+          el?.focus({ preventScroll: true });
+        });
+      }
+    }
+  },
+  [fetchNextPage, hasNextPage, rowVirtualizer]
+);
+
+useEffect(() => {
+  const result = searchResults[currentSearchIndex];
+  if (!result || result.type !== 'cell' || !result.rowId) return;
+
+  pendingSearchScrollRef.current = { rowId: result.rowId, columnId: result.columnId };
+  void ensureLoadedAndScrollTo(result.rowId, result.rowOrder, result.columnId);
+}, [currentSearchIndex, searchResults, ensureLoadedAndScrollTo]);
 
 
   const handleScroll = useCallback(() => {
