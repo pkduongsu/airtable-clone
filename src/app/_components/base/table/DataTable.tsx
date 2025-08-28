@@ -609,6 +609,20 @@ const filteredData = useMemo(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },  [columns, tableId, records]);
 
+
+// compute optimistic order so that it always add the row on the bottom of the table
+  const getNextGlobalRowOrder = () => {
+    const serverTotal = tableData?._count?.rows ?? 0; // real total from DB
+    const maxLoadedOrder =
+      (allRecords?.length
+        ? Math.max(...allRecords.map(r => r.order ?? -1))
+        : -1) + 1; // next after highest loaded
+
+    // also offset by how many optimistic rows you’ve added but not confirmed yet
+    return Math.max(serverTotal, maxLoadedOrder) + pendingRowIdsRef.current.size;
+  };
+    
+
   const handleCreateRow = useCallback(async() => {
       const tempRowId = crypto.randomUUID();
 
@@ -618,7 +632,7 @@ const filteredData = useMemo(() => {
       const tempRow: _Record = {
         id: tempRowId,
         tableId: tableId,
-        order: records.length
+        order: getNextGlobalRowOrder()
       };
       setRecords((old) => {
         const next = [...old, tempRow];
@@ -643,8 +657,6 @@ const filteredData = useMemo(() => {
 
     //but then , if i want the cells to actually be saved, we need a real record
     //so what if I just create a record and does not invalidate?
-
-   
     try{
       await createRowMutation.mutateAsync({
         id: tempRowId,
