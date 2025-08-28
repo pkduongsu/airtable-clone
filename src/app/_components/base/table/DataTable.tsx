@@ -299,15 +299,13 @@ useEffect(() => {
 
   // Fast lookups
   const colById = new Map(nextColumns.map(c => [c.id, c]));
-  const serverCellsWithColumn: CellWithColumn[] = serverCells.map((c) => {
-    // If Prisma already included the relation, keep it; otherwise attach from map
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
-    const col = (c as any).column ?? colById.get(c.columnId);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (!col) return { ...(c as any), column: { name: "", id: c.columnId, tableId, type: "TEXT", order: 0, width: 179 } } as CellWithColumn; // fallback to satisfy TS, but ideally never hits
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-    return { ...(c as any), column: col } as CellWithColumn;
-  });
+  const serverCellsWithColumn: CellWithColumn[] = serverCells
+   .map((c) => {
+     const col = (c as any).column ?? colById.get(c.columnId);
+     if (!col) return null;
+     return { ...(c as any), column: col } as CellWithColumn;
+   })
+   .filter((x): x is CellWithColumn => x !== null);
 
   const serverCellMap = new Map<string, CellWithColumn>(
     serverCellsWithColumn.map(c => [`${c.rowId}-${c.columnId}`, c])

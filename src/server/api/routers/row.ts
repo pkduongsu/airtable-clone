@@ -29,6 +29,47 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
   }
 };
 
+const MAX_CELLS_PER_TX = 50_000; // tune for your DB tier; 20–80k is typical
+
+async function computeBatchRows(ctx: any, tableId: string) {
+  const columnCount = await ctx.db.column.count({ where: { tableId } });
+  // keep at least 500 rows so we’re not too chatty
+  return Math.max(500, Math.floor(MAX_CELLS_PER_TX / Math.max(1, columnCount)));
+}
+
+/**
+ * - Inserts N rows with sequential "order"
+ * - Inserts cells for all columns of the table via CROSS JOIN
+ * - Provides default empty value to keep it lightweight
+ *
+ * Requires Postgres. Ensure:
+ *   CREATE EXTENSION IF NOT EXISTS pgcrypto;
+ *   ALTER TABLE "Cell" ALTER COLUMN "value" SET DEFAULT '{"text": ""}'::jsonb;
+ */
+async function insertBatchSQL(ctx: any, args: { tableId: string; startOrder: number; rows: number }) {
+  const { tableId, startOrder, rows } = args;
+  // Keep each batch bounded and fast
+  return ctx.db.$executeRawUnsafe(`
+    BEGIN;
+    SET LOCAL statement_timeout = '60s';
+    SET LOCAL synchronous_commit = off;
+
+    WITH new_rows AS (
+      INSERT INTO "Row" ("id","tableId","order")
+      SELECT gen_random_uuid(), $1, $2 + gs.n
+      FROM generate_series(0, $3 - 1) AS gs(n)
+      RETURNING id
+    )
+    INSERT INTO "Cell" ("id","rowId","columnId","value")
+    SELECT gen_random_uuid(), r.id, c.id, '{"text": ""}'::jsonb
+    FROM new_rows r
+    CROSS JOIN "Column" c
+    WHERE c."tableId" = $1;
+
+    COMMIT;
+  `, tableId, startOrder, rows);
+}
+
 export const rowRouter = createTRPCRouter({
   create: protectedProcedure
     .input(z.object({
@@ -305,10 +346,7 @@ export const rowRouter = createTRPCRouter({
     }),
 
   insertFirstBatch: protectedProcedure
-  .input(z.object({
-    tableId: z.string(),
-    count: z.number().default(100000),
-  }))
+  .input(z.object({ tableId: z.string(), count: z.number().default(100000) }))
   .mutation(async ({ ctx, input }) => {
     const { tableId, count } = input;
 
@@ -321,92 +359,66 @@ export const rowRouter = createTRPCRouter({
       where: { tableId },
       _max: { order: true },
     });
-
     const startOrder = (maxOrderResult._max.order ?? -1) + 1;
-    const batchSize = 5000;
 
-    const batchCount = Math.min(count, batchSize);
+    // very small first batch for instant “see rows added”
+    const capByCols = await computeBatchRows(ctx, tableId);
+    const FIRST_BATCH_ROWS = Math.min(count, Math.min(1000, capByCols)); // <= 1000
 
-    // rows
-    const rowsData = Array.from({ length: batchCount }, (_, i) => ({
+    // Keep Faker here so the user sees realistic data immediately
+    const rowsData = Array.from({ length: FIRST_BATCH_ROWS }, (_, i) => ({
       tableId,
       order: startOrder + i,
     }));
     const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
 
-    // cells
-    const cellsData: Array<{
-      rowId: string;
-      columnId: string;
-      value: { text: string };
-    }> = [];
+    const cellsData: Array<{ rowId: string; columnId: string; value: { text: string } }> = [];
     for (const row of insertedRows) {
       for (const column of columns) {
-        const fakeValue = generateFakeValue(column.name, column.type);
-        cellsData.push({
-          rowId: row.id,
-          columnId: column.id,
-          value: { text: fakeValue },
-        });
+        const v = generateFakeValue(column.name, column.type);
+        cellsData.push({ rowId: row.id, columnId: column.id, value: { text: v } });
       }
     }
     if (cellsData.length > 0) {
-      await ctx.db.cell.createMany({ data: cellsData });
+      await ctx.db.cell.createMany({ data: cellsData }); // small enough
     }
 
     return {
       success: true,
-      insertedCount: batchCount,
-      remaining: count - batchCount,
-      nextStartOrder: startOrder + batchCount,
+      insertedCount: FIRST_BATCH_ROWS,
+      remaining: count - FIRST_BATCH_ROWS,
+      nextStartOrder: startOrder + FIRST_BATCH_ROWS,
     };
   }),
 
   insertRemainingBatches: protectedProcedure
   .input(z.object({
     tableId: z.string(),
-    remaining: z.number(),
-    nextStartOrder: z.number(),
+    remaining: z.number(),       // how many still to add
+    nextStartOrder: z.number(),  // where to continue
   }))
   .mutation(async ({ ctx, input }) => {
-    const { tableId, remaining, nextStartOrder } = input;
-    const columns = await ctx.db.column.findMany({ where: { tableId } });
-    const batchSize = 5000;
-    const batches = Math.ceil(remaining / batchSize);
+    const { tableId, remaining } = input;
 
-    for (let batch = 0; batch < batches; batch++) {
-      const batchStart = batch * batchSize;
-      const batchEnd = Math.min(batchStart + batchSize, remaining);
-      const batchCount = batchEnd - batchStart;
-
-      // rows
-      const rowsData = Array.from({ length: batchCount }, (_, i) => ({
-        tableId,
-        order: nextStartOrder + batchStart + i,
-      }));
-      const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
-
-      // cells
-      const cellsData: Array<{
-        rowId: string;
-        columnId: string;
-        value: { text: string };
-      }> = [];
-      for (const row of insertedRows) {
-        for (const column of columns) {
-          const fakeValue = generateFakeValue(column.name, column.type);
-          cellsData.push({
-            rowId: row.id,
-            columnId: column.id,
-            value: { text: fakeValue },
-          });
-        }
-      }
-      if (cellsData.length > 0) {
-        await ctx.db.cell.createMany({ data: cellsData });
-      }
+    if (remaining <= 0) {
+      return { success: true, insertedThisBatch: 0, remaining: 0, nextStartOrder: input.nextStartOrder, done: true };
     }
 
-    return { success: true, insertedCount: remaining };
+    // dynamic batch sizing by column count → caps TOTAL cells per transaction
+    const batchRows = Math.min(await computeBatchRows(ctx, tableId), remaining);
+
+    await insertBatchSQL(ctx, {
+      tableId,
+      startOrder: input.nextStartOrder,
+      rows: batchRows,
+    });
+
+    return {
+      success: true,
+      insertedThisBatch: batchRows,
+      remaining: remaining - batchRows,
+      nextStartOrder: input.nextStartOrder + batchRows,
+      done: remaining - batchRows <= 0,
+    };
   }),
 });

@@ -295,11 +295,21 @@ function BasePageContent() {
 
     setIsBulkLoading(true);
 
+    const lastInvalidateRef = { current: 0 };
+  const throttledInvalidate = () => {
+    const now = Date.now();
+    if (now - lastInvalidateRef.current >= 2000) {
+      lastInvalidateRef.current = now;
+      void utils.table.getTableData.invalidate({ tableId: selectedTable });
+    }
+  };
+
+
     try {
     // first batch (instant feedback)
     const first = await insertFirstBatch.mutateAsync({
       tableId: selectedTable,
-      count: 100000,
+      count: 1500,
     });
 
     // refetch immediately so user sees new rows
