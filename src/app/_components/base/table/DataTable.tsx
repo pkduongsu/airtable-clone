@@ -626,7 +626,6 @@ const rowData = useMemo(() => {
         r.order >= newOrder ? { ...r, order: r.order + 1 } : r
       );
 
-      
 
       // Create new row
       const newRow: _Record = {
@@ -636,6 +635,7 @@ const rowData = useMemo(() => {
       };
 
       // Add new row and sort
+      //eslint-disable-next-line @typescript-eslint/no-unused-vars
       setRecords((old) => {
         const next = [...updatedRecords, newRow].sort((a, b) => a.order - b.order)
         recordsRef.current = next;
@@ -701,6 +701,7 @@ const rowData = useMemo(() => {
       };
 
       // Add new row and sort
+      //eslint-disable-next-line @typescript-eslint/no-unused-vars
       setRecords((old) => {
         const next = [...updatedRecords, newRow].sort((a, b) => a.order - b.order)
         recordsRef.current = next;
