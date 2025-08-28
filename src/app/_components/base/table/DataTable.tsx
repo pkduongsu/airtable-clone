@@ -6,13 +6,12 @@ import React, {
   useMemo,
   useCallback,
   useRef,
-  useReducer,
   type Dispatch,
   type SetStateAction
 } from "react";
 import { api } from "~/trpc/react";
 import { TableHeader } from "./TableHeader";
-import { EditableCell } from "./EditableCell";
+import { MemoEditableCell } from "./EditableCell";
 import { RowNumberHeader } from "./RowNumberHeader";
 import Spinner from "../../icons/Spinner";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -109,7 +108,7 @@ export function DataTable({
   const [selectedCell, setSelectedCell] = useState<{rowId: string, columnId: string} | null>(null);
   const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const editedCellValuesRef = useRef<Map<string, string>>(new Map());
-  const [, forceUpdate] = useReducer(x => x + 1, 0);
+  const [updateTrigger, setUpdateTrigger] = useState(0);
   const [contextMenu, setContextMenu] = useState<{
     isOpen: boolean;
     position: { x: number; y: number };
@@ -118,6 +117,34 @@ export function DataTable({
   //eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [localRecordCount, setLocalRecordCount] = useState(0);
   const optimisticRowIdsRef = useRef<Set<string>>(new Set());
+  const optimisticColumnIdsRef = useRef<Set<string>>(new Set());
+  const tempToRealColumnIdRef = useRef<Map<string, string>>(new Map());
+  const tempToRealRowIdRef = useRef<Map<string, string>>(new Map());
+  const draftCellsRef = useRef<Map<string, string>>(new Map()); // Separate from editedCellValuesRef
+  const rowUiKeyRef = useRef<Map<string, string>>(new Map());
+const columnUiKeyRef = useRef<Map<string, string>>(new Map());
+
+const pendingRowIdsRef = useRef<Set<string>>(new Set());
+const pendingColumnIdsRef = useRef<Set<string>>(new Set());
+
+const getRowUiKey = (rowId: string) => rowUiKeyRef.current.get(rowId) ?? rowId;
+const getColUiKey = (colId: string) => columnUiKeyRef.current.get(colId) ?? colId;
+const stableCellKey = (rowId: string, colId: string) => `${getRowUiKey(rowId)}::${getColUiKey(colId)}`;
+
+
+const cellRenderKey = (rowId: string, columnId: string) => {
+  const rk = rowUiKeyRef.current.get(rowId) ?? rowId;
+  const ck = columnUiKeyRef.current.get(columnId) ?? columnId;
+  return `${rk}-${ck}`;
+};
+
+  //fresh snapshots:
+  const recordsRef = useRef(records);
+useEffect(() => { recordsRef.current = records; }, [records]);
+
+const columnsRef = useRef(columns);
+useEffect(() => { columnsRef.current = columns; }, [columns]);
+
 
   // Store focus state in a ref to avoid re-renders
   const focusStateRef = useRef<{
@@ -131,6 +158,38 @@ export function DataTable({
     selectedRowId: null,
     selectedColumnId: null,
   });
+
+  const flushRow = async (rowId: string) => {
+  // only flush into columns that are already real
+  const work: Promise<unknown>[] = [];
+  for (const col of columnsRef.current) {
+    if (pendingColumnIdsRef.current.has(col.id)) continue;
+    const k = stableCellKey(rowId, col.id);
+    const v = editedCellValuesRef.current.get(k);
+    if (v != null) {
+      work.push(updateCellMutation.mutateAsync({
+        rowId, columnId: col.id, value: { text: v }
+      }));
+    }
+  }
+  await Promise.all(work);
+};
+
+const flushColumn = async (colId: string) => {
+  // only flush into rows that are already real
+  const work: Promise<unknown>[] = [];
+  for (const r of recordsRef.current) {
+    if (pendingRowIdsRef.current.has(r.id)) continue;
+    const k = stableCellKey(r.id, colId);
+    const v = editedCellValuesRef.current.get(k);
+    if (v != null) {
+      work.push(updateCellMutation.mutateAsync({
+        rowId: r.id, columnId: colId, value: { text: v }
+      }));
+    }
+  }
+  await Promise.all(work);
+};
 
   // Ref to track focus timeout to avoid multiple simultaneous focuses
   const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -187,44 +246,101 @@ export function DataTable({
     return tableRecords?.pages.flatMap((page) => page.rows) ?? [];
   }, [tableRecords]);
 
+// Updated useEffect for syncing with tableRecords
 useEffect(() => {
   if (!tableRecords) return;
 
   const serverRecords = allRecords;
   const serverCells = allRecords.flatMap(r => r.cells);
-
-  setColumns(tableRecords?.pages[0]?.columns ?? []);
+  const serverColumns = tableRecords?.pages[0]?.columns ?? [];
+  
+  // Preserve both optimistic columns AND their edited values
+  setColumns(prev => {
+    const serverColumnIds = new Set(serverColumns.map(c => c.id));
+    const optimisticColumns = prev.filter(c => 
+      pendingColumnIdsRef.current.has(c.id) && !serverColumnIds.has(c.id)
+    );
+    return [...serverColumns, ...optimisticColumns];
+  });
 
   // Update records - preserve optimistic ones
-  setRecords(prev => {
+   setRecords(prev => {
     const serverIds = new Set(serverRecords.map(r => r.id));
-    return [
-      ...prev.filter(r => r.tableId === tableId && !serverIds.has(r.id)),
-      ...serverRecords,
-    ];
+    const carry = prev.filter(
+      r => pendingRowIdsRef.current.has(r.id) && !serverIds.has(r.id)
+    );
+    return [...carry, ...serverRecords];
   });
 
   setCells(prev => {
-    // Create a map of server cells
-    const serverCellMap = new Map(
-      serverCells.map(c => [`${c.rowId}-${c.columnId}`, c])
-    );
-    
-    // Keep optimistic cells that aren't on the server yet
-    const optimisticCells = prev.filter(c => {
-      const key = `${c.rowId}-${c.columnId}`;
-      // Keep if it's for an optimistic row that exists AND not on server
-      const isForOptimisticRow = records.some(r => 
-        r.id === c.rowId && !serverRecords.some(sr => sr.id === r.id)
-      );
-      return isForOptimisticRow && !serverCellMap.has(key);
-    });
-    
-    return [...optimisticCells, ...serverCells];
-  });
-  //eslint-disable-next-line react-hooks/exhaustive-deps
-}, [tableId, tableRecords, allRecords,]); 
+  type CellWithColumn = Cell & { column: Column };
 
+  // Fast lookups
+  const colById = new Map(columnsRef.current.map(c => [c.id, c]));
+  const serverCellsWithColumn: CellWithColumn[] = serverCells.map((c) => {
+    // If Prisma already included the relation, keep it; otherwise attach from map
+    const col = (c as any).column ?? colById.get(c.columnId);
+    if (!col) return { ...(c as any), column: { name: "", id: c.columnId, tableId, type: "TEXT", order: 0, width: 179 } } as CellWithColumn; // fallback to satisfy TS, but ideally never hits
+    return { ...(c as any), column: col } as CellWithColumn;
+  });
+
+  const serverCellMap = new Map<string, CellWithColumn>(
+    serverCellsWithColumn.map(c => [`${c.rowId}-${c.columnId}`, c])
+  );
+  const prevMap = new Map<string, CellWithColumn>(
+    (prev as CellWithColumn[]).map(c => [`${c.rowId}-${c.columnId}`, c])
+  );
+
+  const synthesized: CellWithColumn[] = [];
+
+  const rows = recordsRef.current;
+  const cols = columnsRef.current;
+
+  for (const row of rows) {
+    for (const col of cols) {
+      const presentKey = `${row.id}-${col.id}`;      // server identity
+      if (serverCellMap.has(presentKey)) continue;   // server already has it
+
+      const draftKey = stableCellKey(row.id, col.id); // UI-stable draft key
+      const hasDraft = editedCellValuesRef.current.has(draftKey);
+      const isPending =
+        pendingRowIdsRef.current.has(row.id) ||
+        pendingColumnIdsRef.current.has(col.id);
+
+      if (!isPending && !hasDraft) continue;
+
+      // Reuse existing synthesized/local cell if present
+      const existing = prevMap.get(presentKey);
+      if (existing) {
+        synthesized.push(existing);
+      } else {
+        // Attach the Column object to satisfy the state type
+        const colObj = colById.get(col.id);
+        if (!colObj) continue; // should not happen, but guard
+
+        synthesized.push({
+          id: `synthetic-${presentKey}`,   // deterministic (no flicker/remount)
+          rowId: row.id,
+          columnId: col.id,
+          value: hasDraft
+            ? { text: editedCellValuesRef.current.get(draftKey)! }
+            : { text: "" },
+          column: colObj,
+        });
+      }
+    }
+  }
+
+  // Merge: server wins; add synthesized only for missing pairs
+  const merged: CellWithColumn[] = [...serverCellsWithColumn];
+  const mergedKeys = new Set(merged.map(c => `${c.rowId}-${c.columnId}`));
+  for (const c of synthesized) {
+    const k = `${c.rowId}-${c.columnId}`;
+    if (!mergedKeys.has(k)) merged.push(c);
+  }
+  return merged;
+});
+}, [tableId, tableRecords, allRecords]); //if i add records and columns, maximum depth reached error appears
 
   //update records count: 
   useEffect(() => {
@@ -234,44 +350,39 @@ useEffect(() => {
     onRecordCountChange(newCount);
   }
 }, [records.length, onRecordCountChange]);
+
+const updateCellMutation = api.cell.update.useMutation();
   
 
   const handleCellValueChange = useCallback((rowId: string, columnId: string, value: string) => {
-    const key = `${rowId}-${columnId}`;
+    const key = stableCellKey(rowId, columnId);
     editedCellValuesRef.current.set(key, value);
     //let Editable Cell handle debounced state
-    forceUpdate();
+    setUpdateTrigger(prev => prev + 1);
   }, []);
 
-  // Transform row data
-  const rowData = useMemo(() => {
-
-    console.log("changing rowData"); //this is using the old data fetched originally, e
-
-    const map: Record<string, TableRow> = {};
-    // seed each row
+  // Updated rowData to handle missing cells gracefully
+const rowData = useMemo(() => {
+  const map: Record<string, TableRow> = {};
+  
+  // Initialize rows
   for (const r of records) {
     map[r.id] = { id: r.id, __cellIds: {} };
   }
 
-  // merge cells into the row object
+  // Process actual cells
   for (const c of cells) {
     const row = map[c.rowId];
     if (!row) continue;
 
-    // keep the cell id for editing
     row.__cellIds[c.columnId] = c.id;
-
-    //check for editing value for cells
-    const editKey = `${c.rowId}-${c.columnId}`
+    const editKey = stableCellKey(c.rowId, c.columnId);
 
     if (editedCellValuesRef.current.has(editKey)) {
-      //use the edited value instead of old values from db
       row[c.columnId] = editedCellValuesRef.current.get(editKey)!;
     } else {
       const v = c.value as { text?: string; number?: number | null } | string | number | null;
-      row[c.columnId] =
-      v && typeof v === "object" && "text" in v
+      row[c.columnId] = v && typeof v === "object" && "text" in v
         ? v.text ?? ""
         : v && typeof v === "object" && "number" in v
         ? (v.number != null ? String(v.number) : "")
@@ -281,10 +392,25 @@ useEffect(() => {
     }
   }
 
+  // Synthesize missing cells for optimistic columns
+  Object.values(map).forEach(row => {
+    columns.forEach(col => {
+      if (!(col.id in row)) {
+        const editKey = stableCellKey(row.id, col.id);
+        // Check if we have an edited value for this missing cell
+        if (editedCellValuesRef.current.has(editKey)) {
+          row[col.id] = editedCellValuesRef.current.get(editKey)!;
+          row.__cellIds[col.id] = `synthetic-${row.id}-${col.id}`;
+        } else {
+          row[col.id] = "";
+          row.__cellIds[col.id] = `synthetic-${row.id}-${col.id}`;
+        }
+      }
+    });
+  });
+
   return Object.values(map);
-}, [records, cells]);
-
-
+}, [records, cells, columns]);
 
 
   const createColumnMutation = api.column.create.useMutation(
@@ -293,7 +419,7 @@ useEffect(() => {
         console.log("column created");
       },
       onError: async() => {
-      await refetch();
+      //await refetch();
     }
     }
   );
@@ -303,17 +429,16 @@ useEffect(() => {
       console.log("row created");
     },
     onError: async() => {
-     // await refetch();
+      //await refetch();
     }
   });
 
   const insertRowAboveMutation = api.row.insertAbove.useMutation({
     onSuccess: async() => {
       console.log("above row created.")
-      await refetch();
     },
     onError: async() => {
-      await refetch();
+      //await refetch();
     }
   });
 
@@ -322,7 +447,7 @@ useEffect(() => {
       console.log("row below created");
     },
     onError: async() => {
-      await refetch();
+     // await refetch();
     }
   });
 
@@ -331,7 +456,7 @@ useEffect(() => {
       console.log("row deleted.");
     },
     onError: async() => {
-      await refetch();
+      //await refetch();
     }
   });
   
@@ -340,7 +465,7 @@ useEffect(() => {
       console.log("row deleted.");
     },
     onError: async() => {
-      await refetch();
+      //await refetch();
     }
   });
 
@@ -349,14 +474,17 @@ useEffect(() => {
       console.log("row deleted.");
     },
     onError: async() => {
-      await refetch();
+      //await refetch();
     }
   });
 
-  const handleCreateColumn = async(name:string, type: 'TEXT' | 'NUMBER') => {
+  const handleCreateColumn = useCallback(async(name:string, type: 'TEXT' | 'NUMBER') => {
     try{
       const tempColId = crypto.randomUUID();
 
+      pendingColumnIdsRef.current.add(tempColId);
+
+      columnUiKeyRef.current.set(tempColId, tempColId);
 
       const tempColumn: Column = {
         tableId: tableId,
@@ -367,45 +495,49 @@ useEffect(() => {
         width: 179     
       };
 
-      setColumns((old) => [...old, tempColumn]); //optimistically add rows
+      setColumns((old) => [...old, tempColumn]); //optimistically add columns
     
-      // const tempCells = records.map((row) => ({
-      //   id: crypto.randomUUID(),
-      //   rowId: row.id,
-      //   columnId: tempColId, // Real ID
-      //   value: { text: ""},
-      // }));
+      const tempCells = records.map((row) => ({
+        id: crypto.randomUUID(),
+        rowId: row.id,
+        columnId: tempColId, 
+        value: { text: ""},
+      }));
     
-      // setCells((old) => [...old, ...tempCells]);
+      setCells((old) => [...old, ...tempCells]);
 
       //problem is edits happen between here
 
       //create mutation calls -> reset all cells
       //is it because setColumns was called?
-    
+
       // Pass the ID to the server //create actual column and when create, invalidate
+      try {
       await createColumnMutation.mutateAsync({
         tableId: tableId,
         type: type,
         name: name,
-        id: tempColId, // Use the same ID
+        id: tempColId, 
       });
+    } finally {
+      pendingColumnIdsRef.current.delete(tempColId);
+      void flushColumn(tempColId);
+    }
 
-      forceUpdate();
-
-
-      //so does that mean that I have to update the cells of that here 
-      // invalidate does that on a db level
+      setUpdateTrigger(prev => prev + 1);
 
     } catch (error) {
       // Column creation failed - optimistic update will be reverted by server state
       console.error("Failed to create column:", error);
     }
-  };
+  },  [columns, tableId, records]);
 
   const handleCreateRow = useCallback(async() => {
       const tempRowId = crypto.randomUUID();
 
+    
+      rowUiKeyRef.current.set(tempRowId, tempRowId);
+      pendingRowIdsRef.current.add(tempRowId)
 
       const tempRow: _Record = {
         id: tempRowId,
@@ -431,16 +563,16 @@ useEffect(() => {
 
     //but then , if i want the cells to actually be saved, we need a real record
     //so what if I just create a record and does not invalidate?
+
+   
     try{
-     await createRowMutation.mutateAsync({
+      await createRowMutation.mutateAsync({
         id: tempRowId,
         tableId: tableId, 
       });
     } catch (error) {
       console.error("Failed to create row:", error);
     
-      // Remove from tracking on error
-      optimisticRowIdsRef.current.delete(tempRowId);
       
       setRecords(old => old.filter(r => r.id !== tempRowId));
       setCells(old => old.filter(c => c.rowId !== tempRowId));
@@ -449,16 +581,20 @@ useEffect(() => {
         onRecordCountChange(records.length);
       }
       }
-      forceUpdate();
+
+      finally {
+        pendingRowIdsRef.current.delete(tempRowId);
+        void flushRow(tempRowId);
+      }
+      setUpdateTrigger(prev => prev + 1);
       //eslint-disable-next-line react-hooks/exhaustive-deps
     }, [records.length, columns, tableId]);
+
 
     useEffect(() => {
   if (!onDataTableReady) return;
   onDataTableReady({ handleCreateRow });
 }, [onDataTableReady, handleCreateRow]);
-
-
 
 
   //handle insert above/below, delete, rename
@@ -509,7 +645,7 @@ useEffect(() => {
       });
       
 
-      forceUpdate();
+      setUpdateTrigger(prev => prev + 1);
     } catch (error) {
       console.error('Failed to insert row above:', error);
       // Revert optimistic update on error
@@ -561,7 +697,7 @@ useEffect(() => {
         id: tempRowId
       });
 
-      forceUpdate();
+      setUpdateTrigger(prev => prev + 1);
     } catch (error) {
       console.error('Failed to insert row below:', error);
       await refetch();
@@ -595,7 +731,7 @@ useEffect(() => {
         rowId: rowId
       });
 
-      forceUpdate();
+      setUpdateTrigger(prev => prev + 1);
     } catch (error) {
       console.error('Failed to delete row:', error);
       await refetch();
@@ -616,7 +752,7 @@ useEffect(() => {
         name: newName
       });
 
-      forceUpdate();
+      setUpdateTrigger(prev => prev + 1);
     } catch (error) {
       console.error('Failed to rename column:', error);
       await refetch();
@@ -638,7 +774,7 @@ useEffect(() => {
       });
       
 
-      forceUpdate();
+      setUpdateTrigger(prev => prev + 1);
     } catch (error) {
       console.error('Failed to delete column:', error);
       await refetch();
@@ -1017,6 +1153,12 @@ useEffect(() => {
 
           const rowId = row.id;
           const columnId = column.id;
+
+          
+     const renderKey = cellRenderKey(rowId, columnId);
+     const canPersist =
+       !pendingRowIdsRef.current.has(rowId) &&
+       !pendingColumnIdsRef.current.has(columnId);
           
           const matchKey = `${rowId}-${columnId}`;
           const isSearchMatch = searchMatchInfo.cellMatches.has(matchKey);
@@ -1025,9 +1167,9 @@ useEffect(() => {
           const hasFilter = filterRules.some(rule => rule.columnId === columnId);
 
           return (
-            <EditableCell
-              key={`${rowId}-${columnId}`} // Stable key to preserve cell state
-              tableId={tableId}
+            <MemoEditableCell
+              key={renderKey} // Stable key to preserve cell state
+              _tableId={tableId}
               initialValue={value ?? ""}
               onSelect={() => handleCellSelection(rowId, columnId)}
               onDeselect={handleCellDeselection}
@@ -1040,6 +1182,7 @@ useEffect(() => {
               isSearchMatch={isSearchMatch}
               isCurrentSearchResult={isCurrentSearchResult}
               columnType={column.type}
+              canPersist={canPersist}
             />
           );
         },
@@ -1207,7 +1350,7 @@ useEffect(() => {
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index];
               const rowId = row?.original?.id;
-              const isRowLoaded = !!rowId && cells.some(c => c.rowId === rowId);
+              const isRowLoaded = !!rowId;
               
               // Show skeleton for unloaded virtual items (beyond loaded records or without data)
               if (!isRowLoaded || virtualRow.index >= records.length) {
@@ -1243,11 +1386,14 @@ useEffect(() => {
                 );
               }
 
+              const stableRowKey = rowUiKeyRef.current.get(row?.original?.id) ?? row?.original?.id;
+              
+
               return (
                 <tr
                   data-index={virtualRow.index}
                   ref={(node) => rowVirtualizer.measureElement(node)}
-                  key={row.id}
+                  key={stableRowKey}
                   className="group border-b border-border-default hover:bg-[#f8f8f8] bg-white"
                   style={{
                     display: 'flex',
@@ -1256,9 +1402,13 @@ useEffect(() => {
                     width: table.getCenterTotalSize(),
                   }}
                 >
-                  {row.getVisibleCells().map((cell) => (
+                  {row.getVisibleCells().map((cell) => {
+
+                    const stableColKey = columnUiKeyRef.current.get(cell.column.id) ?? cell.column.id;
+                    const tdKey = `${stableRowKey}-${stableColKey}`
+                    return (
                     <td
-                      key={cell.id}
+                      key={tdKey}
                       className="p-0 h-8 border-r border-border-default relative"
                       style={{
                         display: 'flex',
@@ -1268,7 +1418,8 @@ useEffect(() => {
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
-                  ))}
+                    );
+                  })}
                 </tr>
               );
             })}

@@ -5,7 +5,7 @@ import { api } from "~/trpc/react";
 
 
 interface EditableCellProps {
-  tableId: string;
+  _tableId: string;
   initialValue: string | number | { text: string } | null;
   className?: string;
   onSelect?: () => void;
@@ -19,11 +19,12 @@ interface EditableCellProps {
   isSearchMatch?: boolean;
   isCurrentSearchResult?: boolean;
   columnType?: string;
-  onValueChange?: (rowId: string, columnId: string, value: string) => void; //immediate change
+  onValueChange?: (rowId: string, columnId: string, value: string) => void; //immediate change,
+  canPersist?: boolean;
 }
 
-export function EditableCell({ 
-  tableId, 
+function EditableCell({ 
+  _tableId, 
   initialValue, 
   className = "", 
   onSelect, 
@@ -38,6 +39,7 @@ export function EditableCell({
   isCurrentSearchResult = false,
   columnType = "TEXT",
   onValueChange,
+  canPersist = true,
 }: EditableCellProps) {
 
   
@@ -61,7 +63,6 @@ export function EditableCell({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
       await utils.table.getById.cancel();
-      setLastSaved(value);
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
@@ -74,7 +75,7 @@ export function EditableCell({
       setLastSaved(value);
     },
     onSettled: () => {
-        void utils.table.getById.invalidate({ id: tableId });
+      //  void utils.table.getById.invalidate({ id: tableId });
     }
   });
   
@@ -83,31 +84,34 @@ export function EditableCell({
   useEffect(() => {
     const timer = setTimeout(() => {
 
-      if (value !== lastSaved) {
+      if (value !== lastSaved && canPersist) {
         void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}})
       }
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [value, lastSaved, columnId, rowId, updateCellMutation]);
+  }, [value, lastSaved, columnId, rowId, updateCellMutation, canPersist]);
 
   
   //triggers when database resets and initialValue changes to the newest in db
   useEffect(() => {
-    if(initialValue !== value && value === lastSaved) {
-        setValue(value);
-        setLastSaved(value);
-        onValueChange?.(rowId, columnId, value);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialValue]);
+  const next = normalizeToString(initialValue);
 
-  const handleBlur = () => {
-    if (value !== lastSaved) {
-      updateCellMutation.mutate({ rowId, columnId, value });
-    }
-    setIsFocused(false);
-  };
+  if(!isFocused)
+  {
+    setValue(next);
+    setLastSaved(next);
+  }
+   //onValueChange?.(rowId, columnId, next);
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [initialValue]);
+
+   const handleBlur = () => {
+   if (canPersist && value !== lastSaved) {
+     updateCellMutation.mutate({ rowId, columnId, value: { text: value } });
+   }
+   setIsFocused(false);
+ };
 
   // Handle input change with validation
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -200,3 +204,20 @@ export function EditableCell({
     </div>
   );
 }
+
+export const MemoEditableCell = React.memo(
+  EditableCell,
+  (prev, next) => {
+    return (
+      prev.initialValue === next.initialValue &&
+      prev.rowId === next.rowId &&
+      prev.columnId === next.columnId &&
+      prev.hasSort === next.hasSort &&
+      prev.hasFilter === next.hasFilter &&
+      prev.isSearchMatch === next.isSearchMatch &&
+      prev.isCurrentSearchResult === next.isCurrentSearchResult &&
+      prev.columnType === next.columnType &&
+      prev.canPersist === next.canPersist
+    );
+  }
+);

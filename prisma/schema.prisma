@@ -129,6 +129,8 @@ model Cell {
   value    Json?   // Store different types as JSON
   
   @@unique([rowId, columnId])
+  @@index([rowId])
+  @@index([columnId])
 }
 
 model View {
@@ -139,4 +141,6 @@ model View {
   config    Json         // Stores filters, sorts, hidden columns
   isDefault Boolean      @default(false)
   createdAt DateTime     @default(now())
+
+  @@index([tableId])
 }

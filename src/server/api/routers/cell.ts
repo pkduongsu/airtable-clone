@@ -1,6 +1,7 @@
 import z from "zod";
 
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
+import { TRPCError } from "@trpc/server";
 
 export const cellRouter = createTRPCRouter({
   findByRowColumn: protectedProcedure
@@ -89,7 +90,8 @@ export const cellRouter = createTRPCRouter({
     ? { number: input.value }
     : input.value; // if already object { text: string }
 
-const cell = await ctx.db.cell.upsert({
+  try {
+    const cell = await ctx.db.cell.upsert({
   where: {
     rowId_columnId: {
       rowId: input.rowId,
@@ -106,7 +108,14 @@ const cell = await ctx.db.cell.upsert({
   },
 });
     return cell;
+  } catch(e: any) {
+    if (e?.code === 'P2003') {
+    // Return a precondition failure; the client is already buffering, so it will flush later.
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'ROW_OR_COLUMN_NOT_READY' });
+  }
 
+  throw e;
+}
 
     }),
 });
