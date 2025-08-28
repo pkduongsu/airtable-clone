@@ -13,7 +13,6 @@ import { api } from "~/trpc/react";
 import { TableHeader } from "./TableHeader";
 import { MemoEditableCell } from "./EditableCell";
 import { RowNumberHeader } from "./RowNumberHeader";
-import Spinner from "../../icons/Spinner";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import Plus from "../../icons/Plus";
@@ -276,6 +275,14 @@ useEffect(() => {
 
     
     const next = [...carry, ...serverRecords];
+
+    
+    //if no sorts are applied, restore original order
+    if (!sortRules || sortRules.length === 0) {
+      next.sort((a, b) => a.order - b.order);
+    }
+
+
     recordsRef.current = next;
     return next;
 
