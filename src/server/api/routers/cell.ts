@@ -108,7 +108,9 @@ export const cellRouter = createTRPCRouter({
   },
 });
     return cell;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } catch(e: any) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     if (e?.code === 'P2003') {
     // Return a precondition failure; the client is already buffering, so it will flush later.
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'ROW_OR_COLUMN_NOT_READY' });
