@@ -83,7 +83,7 @@ export const cellRouter = createTRPCRouter({
       //   return cell;
       // }
 
-     const normalizedValue =
+  const normalizedValue =
   typeof input.value === "string"
     ? { text: input.value }
     : typeof input.value === "number"

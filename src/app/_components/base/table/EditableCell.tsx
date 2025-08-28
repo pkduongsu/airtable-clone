@@ -138,6 +138,7 @@ function EditableCell({
   const handleClick = () => {
     // Always call onSelect to handle cell selection and deselection of other cells
     onSelect?.();
+    inputRef.current?.focus({preventScroll: true});
   };
   
   const handleDoubleClick = () => {
@@ -180,7 +181,7 @@ function EditableCell({
     } else if (isSearchMatch) {
       return `${baseClasses} ${isCurrentSearchResult ? '!bg-orange-300' : '!bg-yellow-100'} hover:bg-gray-50`;
     } else {
-      return `${baseClasses} hover:bg-gray-50 ${getCellBackgroundColor()}`;
+      return `${baseClasses} hover:bg-gray-50 border-border-default ${getCellBackgroundColor()}`;
     }
   };
 
