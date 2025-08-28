@@ -1327,7 +1327,7 @@ const rowData = useMemo(() => {
   return (
     <div 
       ref={tableContainerRef}
-      className="w-full h-full overflow-auto"
+      className="relative w-full h-full overflow-auto"
       style={{
         contain: 'strict', // CSS containment to prevent layout escape
         paddingRight: '70px',
@@ -1346,6 +1346,14 @@ const rowData = useMemo(() => {
         }
       }}
     >
+        {/* Sort/Filter Loading Overlay */}
+        {isRecordsFetching && (
+          <div className="sticky top-0 left-0 right-0 z-20 h-1.5 w-full">
+            <div className="relative w-full h-full overflow-hidden bg-blue-200/60">
+              <div className="absolute inset-y-0 left-0 w-1/3 bg-blue-500 dt-anim-progress" />
+            </div>
+          </div>
+        )}
       <div 
         style={{ 
           width: table.getCenterTotalSize() + 100,
@@ -1380,7 +1388,7 @@ const rowData = useMemo(() => {
                 <tr
                   data-index={virtualRow.index}
                   key={stableRowKey}
-                  className="group border-b border-border-default hover:bg-[#f8f8f8] bg-white"
+                  className="group hover:bg-[#f8f8f8] bg-white"
                   style={{
                     display: 'flex',
                     position: 'absolute',
@@ -1397,7 +1405,7 @@ const rowData = useMemo(() => {
                     return (
                     <td
                       key={tdKey}
-                      className="p-0 h-8 border-r border-border-default relative"
+                      className="p-0 h-8 border-r border-b border-border-default relative"
                       style={{
                         display: 'flex',
                         width: cell.column.getSize(),
@@ -1413,34 +1421,6 @@ const rowData = useMemo(() => {
             })}
           </tbody>
         </table>
-        
-
-        {/* Sort/Filter Loading Overlay */}
-        {isRecordsFetching && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '40px', // Below the header
-              left: '0',
-              right: '0',
-              bottom: '0',
-              backgroundColor: 'rgba(255, 255, 255, 0.85)',
-              backdropFilter: 'blur(2px)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              zIndex: 10,
-              pointerEvents: 'none',
-            }}
-          >
-            <div className="flex items-center justify-center gap-3 bg-white px-6 py-4 rounded-lg shadow-md border border-gray-200">
-              <Spinner size={24} color="#4A90E2" />
-              <span className="text-sm text-gray-700 font-medium">
-                Loading data...
-              </span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Add Row Button */}

@@ -178,3 +178,14 @@
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes dt-progress {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(50%); }
+  100% { transform: translateX(100%); }
+}
+
+.dt-anim-progress {
+  animation: dt-progress 1.2s ease-in-out infinite;
+}
+
