@@ -197,6 +197,9 @@ const flushColumn = async (colId: string) => {
   // Add Column Modal state
   const [showAddColumnModal, setShowAddColumnModal] = useState(false);
 
+  const hasActiveFilterOrSort =
+  (sortRules?.length ?? 0) > 0 || (filterRules?.length ?? 0) > 0;
+
   // Table metadata query 
   const {
     data: tableData,
@@ -232,7 +235,7 @@ const flushColumn = async (colId: string) => {
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       refetchOnWindowFocus: false,
-      placeholderData: keepPreviousData,
+      placeholderData: hasActiveFilterOrSort ? undefined : keepPreviousData,
     }
   );
 
@@ -263,9 +266,14 @@ useEffect(() => {
   // Update records - preserve optimistic ones
    setRecords(prev => {
     const serverIds = new Set(serverRecords.map(r => r.id));
-    const carry = prev.filter(
-      r => r.tableId === tableId && !serverIds.has(r.id)
-    );
+
+    //check if filter/sorts are active:
+    const hasActiveFilterOrSort = (filterRules?.length ?? 0) > 0 || (sortRules?.length ?? 0) > 0;
+
+   const carry = hasActiveFilterOrSort
+    ? prev.filter(r => pendingRowIdsRef.current.has(r.id))
+    : prev.filter(r => r.tableId === tableId && !serverIds.has(r.id));
+
     
     const next = [...carry, ...serverRecords];
     recordsRef.current = next;
@@ -414,6 +422,49 @@ const rowData = useMemo(() => {
   return Object.values(map);
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [records, cells, columns]);
+
+const filteredData = useMemo(() => {
+  if (!filterRules?.length) return rowData;
+
+  const colTypeById = new Map(columns.map(c => [c.id, c.type]));
+  const toStr = (v: unknown) => (v ?? "").toString();
+
+  return rowData.filter((row) =>
+    filterRules.every((rule) => {
+      const raw = toStr(row[rule.columnId]).trim();
+      const type = colTypeById.get(rule.columnId) ?? "TEXT";
+      const val = rule.value;
+
+      switch (rule.operator) {
+        case "is_empty":
+          return raw === "";
+        case "is_not_empty":
+          return raw !== "";
+        case "contains":
+          return val != null && raw.toLowerCase().includes(String(val).toLowerCase());
+        case "not_contains":
+          return val == null || raw === "" || !raw.toLowerCase().includes(String(val).toLowerCase());
+        case "equals":
+          if (type === "NUMBER") {
+            const n = Number(raw);
+            return !Number.isNaN(n) && val != null && n === Number(val);
+          }
+          return raw.toLowerCase() === String(val ?? "").toLowerCase();
+        case "greater_than": {
+          const n = Number(raw);
+          return !Number.isNaN(n) && val != null && n > Number(val);
+        }
+        case "less_than": {
+          const n = Number(raw);
+          return !Number.isNaN(n) && val != null && n < Number(val);
+        }
+        default:
+          return true;
+      }
+    })
+  );
+}, [rowData, filterRules, columns]);
+
 
 
   const createColumnMutation = api.column.create.useMutation(
@@ -1232,7 +1283,7 @@ const rowData = useMemo(() => {
 
     return {
       columns: allColumns,
-      data: rowData, //uses this so that it merges record and cells in render time, whereas if separate, cells get rendered after.
+      data: filteredData, //uses this so that it merges record and cells in render time, whereas if separate, cells get rendered after.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo]);

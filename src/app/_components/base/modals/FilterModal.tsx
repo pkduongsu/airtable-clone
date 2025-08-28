@@ -257,6 +257,7 @@ export function FilterModal({
     return createPortal(
       <div 
         className="fixed inset-0 z-50"
+        data-dropdown-modal="true"
         onClick={(e) => {
           e.stopPropagation();
           closeFieldModal();
@@ -312,6 +313,7 @@ export function FilterModal({
     return createPortal(
       <div 
         className="fixed inset-0 z-50"
+        data-dropdown-modal="true"
         onClick={(e) => {
           e.stopPropagation();
           closeOperatorModal();
@@ -365,6 +367,7 @@ export function FilterModal({
     return createPortal(
       <div 
         className="fixed inset-0 z-50"
+        data-dropdown-modal="true"
         onClick={(e) => {
           e.stopPropagation();
           closeLogicModal();
