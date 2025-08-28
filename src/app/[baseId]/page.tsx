@@ -326,6 +326,7 @@ function BasePageContent() {
 
     let nextStartOrder = typeof first?.nextStartOrder === "number"
       ? first.nextStartOrder
+      // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
       : (first?.nextStartOrder ?? 0) + (first?.insertedCount ?? 0);
 
     let totalInserted = first?.insertedCount ?? 0;

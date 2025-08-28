@@ -1,6 +1,5 @@
 import z from "zod";
 import { faker } from '@faker-js/faker';
-import { Prisma } from "@prisma/client";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 
 // Function to generate fake data based on column name and type
@@ -28,45 +27,6 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
     return faker.lorem.words(faker.number.int({ min: 1, max: 4 }));
   }
 };
-
-const MAX_CELLS_PER_TX = 20_000; 
-
-async function computeBatchRows(ctx: any, tableId: string) {
-  const columnCount = await ctx.db.column.count({ where: { tableId } });
-  return Math.max(300, Math.floor(MAX_CELLS_PER_TX / Math.max(1, columnCount)));
-}
-async function insertBatchSQL(
-  ctx: any,
-  args: { tableId: string; startOrder: number; rows: number }
-) {
-  const { tableId, startOrder, rows } = args;
-
-  await ctx.db.$transaction(async (tx: Prisma.TransactionClient) => {
-    // optional but recommended for bulk loads
-    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '60s'`);
-    await tx.$executeRawUnsafe(`SET LOCAL synchronous_commit = off`);
-
-    // single SQL statement that does rows + cells
-    await tx.$executeRawUnsafe(
-      `
-      WITH new_rows AS (
-        INSERT INTO "Row" ("id","tableId","order")
-        SELECT gen_random_uuid(), $1, $2 + gs.n
-        FROM generate_series(0, $3 - 1) AS gs(n)
-        RETURNING id
-      )
-      INSERT INTO "Cell" ("id","rowId","columnId","value")
-      SELECT gen_random_uuid(), r.id, c.id, '{"text": ""}'::jsonb
-      FROM new_rows r
-      CROSS JOIN "Column" c
-      WHERE c."tableId" = $1
-      `,
-      tableId,
-      startOrder,
-      rows
-    );
-  });
-}
 
 export const rowRouter = createTRPCRouter({
   create: protectedProcedure

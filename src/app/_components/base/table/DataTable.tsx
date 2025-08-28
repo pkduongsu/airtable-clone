@@ -301,8 +301,10 @@ useEffect(() => {
   const colById = new Map(nextColumns.map(c => [c.id, c]));
   const serverCellsWithColumn: CellWithColumn[] = serverCells
    .map((c) => {
+     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
      const col = (c as any).column ?? colById.get(c.columnId);
      if (!col) return null;
+     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
      return { ...(c as any), column: col } as CellWithColumn;
    })
    .filter((x): x is CellWithColumn => x !== null);
