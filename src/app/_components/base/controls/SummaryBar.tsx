@@ -8,13 +8,33 @@ interface SummaryBarProps {
   onAddRow: () => void;
   onBulkAddRows: () => void;
   isBulkLoading: boolean;
+  bulkProgress?: number;
+  bulkProgressText?: string;
 }
 
-export function SummaryBar({ recordCount, onAddRow, onBulkAddRows, isBulkLoading }: SummaryBarProps) {
+export function SummaryBar({ recordCount, onAddRow, onBulkAddRows, isBulkLoading, bulkProgress = 0, bulkProgressText = "" }: SummaryBarProps) {
   return (
     <div className="bg-white border-t border-border-default px-4 py-3 flex items-center h-[34px]">
-      <div className="text-sm text-[#1d1f25] font-[400] text-[11px] font-family-system leading-[18px] pb-0.5 px-2 pt-[3px]">
-        {recordCount} {recordCount === 1 ? 'record' : 'records'}
+      <div className="flex items-center gap-6">
+        <div className="text-sm text-[#1d1f25] font-[400] text-[11px] font-family-system leading-[18px] pb-0.5 px-2 pt-[3px]">
+          {recordCount} {recordCount === 1 ? 'record' : 'records'}
+        </div>
+        
+        {isBulkLoading && bulkProgressText && (
+          <div className="flex flex-col justify-center">
+            <div className="font-family-system text-[#1d1f25] font-[400] leading-[14px] text-[11px] whitespace-nowrap mb-1">
+              {bulkProgressText}
+            </div>
+            {bulkProgress > 0 && (
+              <div className="w-32 h-0.5 bg-gray-200 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 transition-all duration-300 ease-out rounded-full"
+                  style={{ width: `${bulkProgress}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex flex-auto focus-visible:outline ml-2 bg-white bottom-[25px] absolute rounded-[9999px] h-[36px] z-1">
         <button 
@@ -31,13 +51,20 @@ export function SummaryBar({ recordCount, onAddRow, onBulkAddRows, isBulkLoading
           disabled={isBulkLoading}
         >
           {isBulkLoading ? (
-            <div className="w-4 h-4 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+            <div className="flex items-center">
+              <div className="w-4 h-4 border border-gray-400 border-t-transparent rounded-full animate-spin" />
+              <span className="pl-2 font-family-system text-[#1d1f25] font-[400] leading-[18px] text-[13px]">
+                Adding rows...
+              </span>
+            </div>
           ) : (
-            <Database size={16} />
+            <>
+              <Database size={16} />
+              <span className="pl-2 font-family-system text-[#1d1f25] font-[400] leading-[18px] text-[13px]">
+                Add 100k Rows
+              </span>
+            </>
           )}
-          <span className="pl-2 font-family-system text-[#1d1f25] font-[400] leading-[18px] text-[13px]">
-            {isBulkLoading ? 'Adding rows...' : 'Add 100k Rows'}
-          </span>
         </button>
       </div>
     </div>

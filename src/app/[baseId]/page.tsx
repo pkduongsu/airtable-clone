@@ -54,12 +54,12 @@ function BasePageContent() {
 
   // Bulk loading state
   const [isBulkLoading, setIsBulkLoading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState(0);
+  const [bulkProgressText, setBulkProgressText] = useState("");
 
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-  // Record count state
-  const [recordCount, setRecordCount] = useState(0);
 
   // Filter state will be managed by useFilterManagement hook
 
@@ -294,43 +294,89 @@ function BasePageContent() {
     if (!selectedTable) return;
 
     setIsBulkLoading(true);
+    setBulkProgress(0);
+    setBulkProgressText("Initializing...");
+    const totalRows = 100_000;
 
-    const lastInvalidateRef = { current: 0 };
-  const throttledInvalidate = () => {
+    // simple 2s throttle for invalidating the table data
+    let lastInvalidate = 0;
+    const throttledInvalidate = async () => {
     const now = Date.now();
-    if (now - lastInvalidateRef.current >= 2000) {
-      lastInvalidateRef.current = now;
-      void utils.table.getTableData.invalidate({ tableId: selectedTable });
+    if (now - lastInvalidate >= 2000) {
+      lastInvalidate = now;
+      await utils.table.getTableData.invalidate({ tableId: selectedTable });
     }
   };
 
 
     try {
     // first batch (instant feedback)
+    setBulkProgressText("Adding first batch...");
     const first = await insertFirstBatch.mutateAsync({
       tableId: selectedTable,
-      count: 1500,
+      count: 100000,
     });
 
     // refetch immediately so user sees new rows
     await utils.table.getTableData.invalidate({ tableId: selectedTable });
 
-    // kick off remaining in background
-    if (first.remaining > 0) {
-      void insertRemainingBatches.mutateAsync({
+    let remaining = typeof first?.remaining === "number"
+      ? first.remaining
+      : Math.max(0, 100_000 - (first?.insertedCount ?? 0));
+
+    let nextStartOrder = typeof first?.nextStartOrder === "number"
+      ? first.nextStartOrder
+      : (first?.nextStartOrder ?? 0) + (first?.insertedCount ?? 0);
+
+    let totalInserted = first?.insertedCount ?? 0;
+    setBulkProgress(Math.min(100, (totalInserted / totalRows) * 100));
+    setBulkProgressText(`Added ${totalInserted.toLocaleString()} rows...`);
+
+    while (remaining > 0) {
+      const res = await insertRemainingBatches.mutateAsync({
         tableId: selectedTable,
-        remaining: first.remaining,
-        nextStartOrder: first.nextStartOrder,
-      },
-      {
-        onSuccess: () => {
-          void utils.table.getTableData.invalidate({tableId: selectedTable});
-        },
-      }
-    );
+        remaining,
+        nextStartOrder,
+      });
+
+      // update loop variables from server response (supports both old/new payloads)
+      const insertedThisBatch = res?.insertedThisBatch ?? 0;
+      totalInserted += insertedThisBatch;
+      remaining = typeof res?.remaining === "number"
+        ? res.remaining
+        : Math.max(0, remaining - insertedThisBatch);
+      nextStartOrder = typeof res?.nextStartOrder === "number"
+        ? res.nextStartOrder
+        : nextStartOrder + insertedThisBatch;
+
+      // Update progress
+      const progress = Math.min(100, (totalInserted / totalRows) * 100);
+      setBulkProgress(progress);
+      setBulkProgressText(`Added ${totalInserted.toLocaleString()} of ${totalRows.toLocaleString()} rows...`);
+
+      // keep the viewport fresh without spamming re-fetches
+      await throttledInvalidate();
+
+      // support newer APIs that return a done flag
+      if (res?.done) break;
     }
+
+    // Final refresh to settle everything
+    setBulkProgressText("Finalizing...");
+    await utils.table.getTableData.invalidate({ tableId: selectedTable });
+    setBulkProgress(100);
+    setBulkProgressText("Complete!");
+  } catch (err) {
+    console.error("Bulk add failed:", err);
+    setBulkProgressText("Failed to add rows");
+    // TODO: surface a toast/snackbar if you have one
   } finally {
-    setIsBulkLoading(false);
+    // important: only stop loading when batches are actually finished (or errored)
+    setTimeout(() => {
+      setIsBulkLoading(false);
+      setBulkProgress(0);
+      setBulkProgressText("");
+    }, 1000);
   }
 };
 
@@ -624,7 +670,6 @@ const handleShowAllColumns = useCallback(() => {
                     currentSearchIndex={currentSearchIndex}
                     searchQuery={searchQuery}
                     scrollToRowId={scrollToRowId}
-                    onRecordCountChange={setRecordCount}
                     onDataTableReady={setDataTableHandlers}
                     records={records}
                     setRecords={setRecords}
@@ -641,10 +686,12 @@ const handleShowAllColumns = useCallback(() => {
                 )}
               </main>
               <SummaryBar 
-                recordCount={recordCount} 
+                recordCount={records.length} 
                 onAddRow={() => dataTableHandlers?.handleCreateRow()} 
                 onBulkAddRows={handleBulkAddRowsWrapper}
                 isBulkLoading={isBulkLoading}
+                bulkProgress={bulkProgress}
+                bulkProgressText={bulkProgressText}
               />
             </div>
           </div>

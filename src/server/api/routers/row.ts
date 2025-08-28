@@ -1,6 +1,6 @@
 import z from "zod";
 import { faker } from '@faker-js/faker';
-
+import { Prisma } from "@prisma/client";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 
 // Function to generate fake data based on column name and type
@@ -29,45 +29,43 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
   }
 };
 
-const MAX_CELLS_PER_TX = 50_000; // tune for your DB tier; 20–80k is typical
+const MAX_CELLS_PER_TX = 20_000; 
 
 async function computeBatchRows(ctx: any, tableId: string) {
   const columnCount = await ctx.db.column.count({ where: { tableId } });
-  // keep at least 500 rows so we’re not too chatty
-  return Math.max(500, Math.floor(MAX_CELLS_PER_TX / Math.max(1, columnCount)));
+  return Math.max(300, Math.floor(MAX_CELLS_PER_TX / Math.max(1, columnCount)));
 }
-
-/**
- * - Inserts N rows with sequential "order"
- * - Inserts cells for all columns of the table via CROSS JOIN
- * - Provides default empty value to keep it lightweight
- *
- * Requires Postgres. Ensure:
- *   CREATE EXTENSION IF NOT EXISTS pgcrypto;
- *   ALTER TABLE "Cell" ALTER COLUMN "value" SET DEFAULT '{"text": ""}'::jsonb;
- */
-async function insertBatchSQL(ctx: any, args: { tableId: string; startOrder: number; rows: number }) {
+async function insertBatchSQL(
+  ctx: any,
+  args: { tableId: string; startOrder: number; rows: number }
+) {
   const { tableId, startOrder, rows } = args;
-  // Keep each batch bounded and fast
-  return ctx.db.$executeRawUnsafe(`
-    BEGIN;
-    SET LOCAL statement_timeout = '60s';
-    SET LOCAL synchronous_commit = off;
 
-    WITH new_rows AS (
-      INSERT INTO "Row" ("id","tableId","order")
-      SELECT gen_random_uuid(), $1, $2 + gs.n
-      FROM generate_series(0, $3 - 1) AS gs(n)
-      RETURNING id
-    )
-    INSERT INTO "Cell" ("id","rowId","columnId","value")
-    SELECT gen_random_uuid(), r.id, c.id, '{"text": ""}'::jsonb
-    FROM new_rows r
-    CROSS JOIN "Column" c
-    WHERE c."tableId" = $1;
+  await ctx.db.$transaction(async (tx: Prisma.TransactionClient) => {
+    // optional but recommended for bulk loads
+    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = '60s'`);
+    await tx.$executeRawUnsafe(`SET LOCAL synchronous_commit = off`);
 
-    COMMIT;
-  `, tableId, startOrder, rows);
+    // single SQL statement that does rows + cells
+    await tx.$executeRawUnsafe(
+      `
+      WITH new_rows AS (
+        INSERT INTO "Row" ("id","tableId","order")
+        SELECT gen_random_uuid(), $1, $2 + gs.n
+        FROM generate_series(0, $3 - 1) AS gs(n)
+        RETURNING id
+      )
+      INSERT INTO "Cell" ("id","rowId","columnId","value")
+      SELECT gen_random_uuid(), r.id, c.id, '{"text": ""}'::jsonb
+      FROM new_rows r
+      CROSS JOIN "Column" c
+      WHERE c."tableId" = $1
+      `,
+      tableId,
+      startOrder,
+      rows
+    );
+  });
 }
 
 export const rowRouter = createTRPCRouter({
@@ -345,7 +343,7 @@ export const rowRouter = createTRPCRouter({
       return { success: true, insertedCount: count };
     }),
 
-  insertFirstBatch: protectedProcedure
+insertFirstBatch: protectedProcedure
   .input(z.object({ tableId: z.string(), count: z.number().default(100000) }))
   .mutation(async ({ ctx, input }) => {
     const { tableId, count } = input;
@@ -361,11 +359,8 @@ export const rowRouter = createTRPCRouter({
     });
     const startOrder = (maxOrderResult._max.order ?? -1) + 1;
 
-    // very small first batch for instant “see rows added”
-    const capByCols = await computeBatchRows(ctx, tableId);
-    const FIRST_BATCH_ROWS = Math.min(count, Math.min(1000, capByCols)); // <= 1000
+    const FIRST_BATCH_ROWS = Math.min(count, 1000); // ≤ 1000 for instant feedback
 
-    // Keep Faker here so the user sees realistic data immediately
     const rowsData = Array.from({ length: FIRST_BATCH_ROWS }, (_, i) => ({
       tableId,
       order: startOrder + i,
@@ -375,12 +370,16 @@ export const rowRouter = createTRPCRouter({
     const cellsData: Array<{ rowId: string; columnId: string; value: { text: string } }> = [];
     for (const row of insertedRows) {
       for (const column of columns) {
-        const v = generateFakeValue(column.name, column.type);
-        cellsData.push({ rowId: row.id, columnId: column.id, value: { text: v } });
+        cellsData.push({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: generateFakeValue(column.name, column.type) },
+        });
       }
     }
+
     if (cellsData.length > 0) {
-      await ctx.db.cell.createMany({ data: cellsData }); // small enough
+      await ctx.db.cell.createMany({ data: cellsData, skipDuplicates: true });
     }
 
     return {
@@ -394,31 +393,51 @@ export const rowRouter = createTRPCRouter({
   insertRemainingBatches: protectedProcedure
   .input(z.object({
     tableId: z.string(),
-    remaining: z.number(),       // how many still to add
-    nextStartOrder: z.number(),  // where to continue
+    remaining: z.number(),
+    nextStartOrder: z.number(),
   }))
   .mutation(async ({ ctx, input }) => {
-    const { tableId, remaining } = input;
+    const { tableId, remaining, nextStartOrder } = input;
 
     if (remaining <= 0) {
-      return { success: true, insertedThisBatch: 0, remaining: 0, nextStartOrder: input.nextStartOrder, done: true };
+      return { success: true, insertedThisBatch: 0, remaining: 0, nextStartOrder, done: true };
     }
 
-    // dynamic batch sizing by column count → caps TOTAL cells per transaction
-    const batchRows = Math.min(await computeBatchRows(ctx, tableId), remaining);
-
-    await insertBatchSQL(ctx, {
-      tableId,
-      startOrder: input.nextStartOrder,
-      rows: batchRows,
+    const columns = await ctx.db.column.findMany({
+      where: { tableId },
+      orderBy: { order: 'asc' },
     });
+
+    const batchSize = 5000; // safe size for prisma query to not exceed limits
+    const rowsToInsert = Math.min(batchSize, remaining);
+
+    const rowsData = Array.from({ length: rowsToInsert }, (_, i) => ({
+      tableId,
+      order: nextStartOrder + i,
+    }));
+    const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
+
+    const cellsData: Array<{ rowId: string; columnId: string; value: { text: string } }> = [];
+    for (const row of insertedRows) {
+      for (const column of columns) {
+        cellsData.push({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: generateFakeValue(column.name, column.type) },
+        });
+      }
+    }
+
+    if (cellsData.length > 0) {
+      await ctx.db.cell.createMany({ data: cellsData, skipDuplicates: true });
+    }
 
     return {
       success: true,
-      insertedThisBatch: batchRows,
-      remaining: remaining - batchRows,
-      nextStartOrder: input.nextStartOrder + batchRows,
-      done: remaining - batchRows <= 0,
+      insertedThisBatch: rowsToInsert,
+      remaining: remaining - rowsToInsert,
+      nextStartOrder: nextStartOrder + rowsToInsert,
+      done: remaining - rowsToInsert <= 0,
     };
   }),
 });
