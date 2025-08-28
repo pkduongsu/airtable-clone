@@ -35,7 +35,7 @@ import {
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-const PAGE_LIMIT = 100;
+const PAGE_LIMIT = 150;
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -120,27 +120,29 @@ export function DataTable({
   const rowUiKeyRef = useRef<Map<string, string>>(new Map());
   const columnUiKeyRef = useRef<Map<string, string>>(new Map());
 
-const pendingRowIdsRef = useRef<Set<string>>(new Set());
-const pendingColumnIdsRef = useRef<Set<string>>(new Set());
+  const pendingRowIdsRef = useRef<Set<string>>(new Set());
+  const pendingColumnIdsRef = useRef<Set<string>>(new Set());
 
-const getRowUiKey = (rowId: string) => rowUiKeyRef.current.get(rowId) ?? rowId;
-const getColUiKey = (colId: string) => columnUiKeyRef.current.get(colId) ?? colId;
-const stableCellKey = (rowId: string, colId: string) => `${getRowUiKey(rowId)}::${getColUiKey(colId)}`;
+  const cellsRef = useRef<Cell[]>([]);
 
-const pendingSearchScrollRef = useRef<{ rowId: string; columnId?: string } | null>(null);
+  const getRowUiKey = (rowId: string) => rowUiKeyRef.current.get(rowId) ?? rowId;
+  const getColUiKey = (colId: string) => columnUiKeyRef.current.get(colId) ?? colId;
+  const stableCellKey = (rowId: string, colId: string) => `${getRowUiKey(rowId)}::${getColUiKey(colId)}`;
 
-const cellRenderKey = (rowId: string, columnId: string) => {
-  const rk = rowUiKeyRef.current.get(rowId) ?? rowId;
-  const ck = columnUiKeyRef.current.get(columnId) ?? columnId;
-  return `${rk}-${ck}`;
-};
+  const pendingSearchScrollRef = useRef<{ rowId: string; columnId?: string } | null>(null);
+
+  const cellRenderKey = (rowId: string, columnId: string) => {
+    const rk = rowUiKeyRef.current.get(rowId) ?? rowId;
+    const ck = columnUiKeyRef.current.get(columnId) ?? columnId;
+    return `${rk}-${ck}`;
+  };
 
   //fresh snapshots:
   const recordsRef = useRef(records);
-useEffect(() => { recordsRef.current = records; }, [records]);
+  useEffect(() => { recordsRef.current = records; }, [records]);
 
-const columnsRef = useRef(columns);
-useEffect(() => { columnsRef.current = columns; }, [columns]);
+  const columnsRef = useRef(columns);
+  useEffect(() => { columnsRef.current = columns; }, [columns]);
 
 
   // Store focus state in a ref to avoid re-renders
@@ -187,6 +189,8 @@ const flushColumn = async (colId: string) => {
   }
   await Promise.all(work);
 };
+
+useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited cells
 
   // Ref to track focus timeout to avoid multiple simultaneous focuses
   const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -254,14 +258,15 @@ useEffect(() => {
   const serverCells = allRecords.flatMap(r => r.cells);
   const serverColumns = tableRecords?.pages[0]?.columns ?? [];
   
-  // Preserve both optimistic columns AND their edited values
-  setColumns(prev => {
-    const serverColumnIds = new Set(serverColumns.map(c => c.id));
-    const optimisticColumns = prev.filter(c => 
-      pendingColumnIdsRef.current.has(c.id) && !serverColumnIds.has(c.id)
-    );
-    return [...serverColumns, ...optimisticColumns];
-  });
+  const serverIds = new Set(serverColumns.map((c: Column) => c.id));
+  const optimistic = columnsRef.current.filter(
+    (c: Column) => pendingColumnIdsRef.current.has(c.id) && !serverIds.has(c.id)
+  );
+  const nextColumns: Column[] = [...serverColumns, ...optimistic];
+
+  setColumns(nextColumns);
+  columnsRef.current = nextColumns;
+
 
   // Update records - preserve optimistic ones
    setRecords(prev => {
@@ -289,11 +294,11 @@ useEffect(() => {
 
   });
 
-  setCells(prev => {
+  setCells(() => {
   type CellWithColumn = Cell & { column: Column };
 
   // Fast lookups
-  const colById = new Map(columnsRef.current.map(c => [c.id, c]));
+  const colById = new Map(nextColumns.map(c => [c.id, c]));
   const serverCellsWithColumn: CellWithColumn[] = serverCells.map((c) => {
     // If Prisma already included the relation, keep it; otherwise attach from map
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access
@@ -307,8 +312,11 @@ useEffect(() => {
   const serverCellMap = new Map<string, CellWithColumn>(
     serverCellsWithColumn.map(c => [`${c.rowId}-${c.columnId}`, c])
   );
+
+  const lastLocal = cellsRef.current as CellWithColumn[];
+
   const prevMap = new Map<string, CellWithColumn>(
-    (prev as CellWithColumn[]).map(c => [`${c.rowId}-${c.columnId}`, c])
+    lastLocal.map(c => [`${c.rowId}-${c.columnId}`, c])
   );
 
   const synthesized: CellWithColumn[] = [];
@@ -1278,8 +1286,7 @@ const filteredData = useMemo(() => {
           const columnId = column.id;
 
           
-     const renderKey = cellRenderKey(rowId, columnId);
-     const canPersist =
+      const canPersist =
        !pendingRowIdsRef.current.has(rowId) &&
        !pendingColumnIdsRef.current.has(columnId);
           
@@ -1291,7 +1298,7 @@ const filteredData = useMemo(() => {
 
           return (
             <MemoEditableCell
-              key={renderKey} // Stable key to preserve cell state
+              key={cellRenderKey(rowId, columnId)} // Stable key to preserve cell state
               _tableId={tableId}
               initialValue={value ?? ""}
               onSelect={() => handleCellSelection(rowId, columnId)}
