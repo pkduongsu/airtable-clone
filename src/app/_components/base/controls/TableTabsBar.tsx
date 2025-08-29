@@ -26,7 +26,7 @@ interface TableTabsBarProps {
   onSelectTable: (tableId: string) => void;
   onCreateTable: () => Promise<void>;
   onRenameTable: (tableId: string, newName: string) => Promise<void>;
-  onDeleteTable: (tableId: string) => Promise<void>;
+  onDeleteTable: (tableId: string) => void;
 }
 
 export function TableTabsBar({ 

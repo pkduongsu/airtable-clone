@@ -28,6 +28,10 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
   }
 };
 
+const DEFAULT_ROW_BATCH = 5_000;
+const DEFAULT_CELL_BATCH = 50_000;
+
+
 export const rowRouter = createTRPCRouter({
   create: protectedProcedure
     .input(z.object({
@@ -303,101 +307,75 @@ export const rowRouter = createTRPCRouter({
       return { success: true, insertedCount: count };
     }),
 
-insertFirstBatch: protectedProcedure
-  .input(z.object({ tableId: z.string(), count: z.number().default(100000) }))
-  .mutation(async ({ ctx, input }) => {
-    const { tableId, count } = input;
+  getCurrentMaxOrder: protectedProcedure
+    .input(z.object({ tableId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const maxOrder = await ctx.db.row.aggregate({
+        where: { tableId: input.tableId },
+        _max: { order: true },
+      });
+      // next available order is max+1 (or 0 if table empty)
+      return { baseOrder: (maxOrder._max.order ?? -1) + 1 };
+    }),
 
-    const columns = await ctx.db.column.findMany({
-      where: { tableId },
-      orderBy: { order: 'asc' },
-    });
+  // --- 2) Insert ONE chunk of empty rows (+ empty cells) ---
+ insertEmptyRowsChunk: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      baseOrder: z.number().int().nonnegative(),
+      globalOffset: z.number().int().nonnegative(),
+      size: z.number().int().positive().max(10_000),
+      cellBatchSize: z.number().int().positive().default(50_000),
+      withCells: z.boolean().optional().default(false), // NEW: default to rows-only
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { tableId, baseOrder, globalOffset, size, cellBatchSize, withCells } = input;
 
-    const maxOrderResult = await ctx.db.row.aggregate({
-      where: { tableId },
-      _max: { order: true },
-    });
-    const startOrder = (maxOrderResult._max.order ?? -1) + 1;
+      const startOrder = baseOrder + globalOffset;
+      const endOrder   = startOrder + size - 1;
 
-    const FIRST_BATCH_ROWS = Math.min(count, 1000); // ≤ 1000 for instant feedback
+      const rowsPayload = Array.from({ length: size }, (_, i) => ({
+        tableId,
+        order: startOrder + i,
+      }));
 
-    const rowsData = Array.from({ length: FIRST_BATCH_ROWS }, (_, i) => ({
-      tableId,
-      order: startOrder + i,
-    }));
-    const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
+      await ctx.db.row.createMany({ data: rowsPayload, skipDuplicates: true });
 
-    const cellsData: Array<{ rowId: string; columnId: string; value: { text: string } }> = [];
-    for (const row of insertedRows) {
-      for (const column of columns) {
-        cellsData.push({
-          rowId: row.id,
-          columnId: column.id,
-          value: { text: generateFakeValue(column.name, column.type) },
-        });
+      const insertedRows = await ctx.db.row.findMany({
+        where: { tableId, order: { gte: startOrder, lte: endOrder } },
+        select: { id: true },
+        orderBy: { order: "asc" },
+      });
+      const rowIds = insertedRows.map(r => r.id);
+      let rowsInserted = rowIds.length;
+
+      // FAST PATH: rows-only by default (no cells yet)
+      if (!withCells || rowIds.length === 0) {
+        return { rowsInserted, cellsInserted: 0, from: startOrder, to: endOrder };
       }
-    }
 
-    if (cellsData.length > 0) {
-      await ctx.db.cell.createMany({ data: cellsData, skipDuplicates: true });
-    }
-
-    return {
-      success: true,
-      insertedCount: FIRST_BATCH_ROWS,
-      remaining: count - FIRST_BATCH_ROWS,
-      nextStartOrder: startOrder + FIRST_BATCH_ROWS,
-    };
-  }),
-
-  insertRemainingBatches: protectedProcedure
-  .input(z.object({
-    tableId: z.string(),
-    remaining: z.number(),
-    nextStartOrder: z.number(),
-  }))
-  .mutation(async ({ ctx, input }) => {
-    const { tableId, remaining, nextStartOrder } = input;
-
-    if (remaining <= 0) {
-      return { success: true, insertedThisBatch: 0, remaining: 0, nextStartOrder, done: true };
-    }
-
-    const columns = await ctx.db.column.findMany({
-      where: { tableId },
-      orderBy: { order: 'asc' },
-    });
-
-    const batchSize = 5000; // safe size for prisma query to not exceed limits
-    const rowsToInsert = Math.min(batchSize, remaining);
-
-    const rowsData = Array.from({ length: rowsToInsert }, (_, i) => ({
-      tableId,
-      order: nextStartOrder + i,
-    }));
-    const insertedRows = await ctx.db.row.createManyAndReturn({ data: rowsData });
-
-    const cellsData: Array<{ rowId: string; columnId: string; value: { text: string } }> = [];
-    for (const row of insertedRows) {
-      for (const column of columns) {
-        cellsData.push({
-          rowId: row.id,
-          columnId: column.id,
-          value: { text: generateFakeValue(column.name, column.type) },
-        });
+      // (Optional) create empty cells if explicitly requested
+      let cellsInserted = 0;
+      const columns = await ctx.db.column.findMany({ where: { tableId }, select: { id: true } });
+      if (columns.length) {
+        const colIds = columns.map(c => c.id);
+        let buffer: Array<{ rowId: string; columnId: string; value: { text: string } }> = [];
+        const flush = async () => {
+          if (!buffer.length) return;
+          const res = await ctx.db.cell.createMany({ data: buffer, skipDuplicates: true });
+          cellsInserted += res.count ?? 0;
+          buffer = [];
+        };
+        for (const rId of rowIds) {
+          for (const cId of colIds) {
+            buffer.push({ rowId: rId, columnId: cId, value: { text: "" } });
+            if (buffer.length >= cellBatchSize) await flush();
+          }
+        }
+        await flush();
       }
-    }
 
-    if (cellsData.length > 0) {
-      await ctx.db.cell.createMany({ data: cellsData, skipDuplicates: true });
-    }
-
-    return {
-      success: true,
-      insertedThisBatch: rowsToInsert,
-      remaining: remaining - rowsToInsert,
-      nextStartOrder: nextStartOrder + rowsToInsert,
-      done: remaining - rowsToInsert <= 0,
-    };
-  }),
+      return { rowsInserted, cellsInserted, from: startOrder, to: endOrder };
+    }),
 });
+

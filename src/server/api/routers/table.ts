@@ -1,9 +1,35 @@
 import z from "zod";
 import { Prisma } from "@prisma/client";
+import { faker } from "@faker-js/faker";
 
 import {  createTRPCRouter,
   protectedProcedure,
 } from "~/server/api/trpc";
+
+const generateFakeValue = (columnName: string, columnType: string) => {
+const lowerName = columnName.toLowerCase();
+        
+if (lowerName.includes('name') || lowerName.includes('title')) {
+ return faker.person.fullName();
+  } else if (lowerName.includes('email')) {
+    return faker.internet.email();
+  } else if (lowerName.includes('note') || lowerName.includes('description') || lowerName.includes('comment')) {
+    return faker.lorem.word(10);
+  } else if (lowerName.includes('assignee') || lowerName.includes('owner') || lowerName.includes('user')) {
+  return faker.person.firstName();
+  } else if (lowerName.includes('status')) {
+    return faker.helpers.arrayElement(['In Progress', 'Complete', 'Pending', 'Review', 'Blocked']);
+  } else if (lowerName.includes('priority')) {
+    return faker.helpers.arrayElement(['High', 'Medium', 'Low', 'Critical']);
+  } else if (lowerName.includes('attachment') || lowerName.includes('file')) {
+    return faker.helpers.arrayElement(['', 'document.pdf', 'image.jpg', 'spreadsheet.xlsx']);
+  } else if (columnType === 'NUMBER') {
+    return faker.number.int({ min: 1, max: 99 }).toString();
+  } else {
+    // Default text data
+    return faker.lorem.words(faker.number.int({ min: 1, max: 4 }));
+  }
+};
 
 export const tableRouter = createTRPCRouter({
     create: protectedProcedure
@@ -66,12 +92,12 @@ export const tableRouter = createTRPCRouter({
         },
       });
 
-      // Generate empty rows if requested
+      // Generate sample rows if requested
       if (input.generateSampleData) {
         const rows = [];
         const cells = [];
 
-        // Create 3 empty rows
+        // Create 3 sample rows
         for (let i = 0; i < 3; i++) {
           const row = await ctx.db.row.create({
             data: {
@@ -80,18 +106,18 @@ export const tableRouter = createTRPCRouter({
             },
           });
           rows.push(row);
-
-          // Create empty cells for each column
+          
           for (const column of table.columns) {
+           const fake = generateFakeValue(column.name, column.type);
             cells.push({
               rowId: row.id,
               columnId: column.id,
-              value: { text: "" }, // Empty text value
+              // Keep your JSON shape: store as text; coerce to string for consistency
+              value: { text: String(fake ?? "") },
             });
           }
         }
-
-        // Bulk insert empty cells
+        // Bulk insert cells
         await ctx.db.cell.createMany({
           data: cells,
         });
@@ -132,51 +158,58 @@ export const tableRouter = createTRPCRouter({
       id: z.string(),
     }))
     .mutation(async ({ ctx, input }) => {
-      // Use a transaction to ensure all deletions succeed or fail together
-      return await ctx.db.$transaction(async (tx) => {
-        // Delete all related data in the correct order due to foreign key constraints
-        
-        // First, delete all cells for this table (both via rows and columns)
-        await tx.cell.deleteMany({
-          where: {
-            OR: [
-              {
-                row: {
-                  tableId: input.id
-                }
-              },
-              {
-                column: {
-                  tableId: input.id
-                }
-              }
-            ]
-          }
-        });
+    const tableId = input.id;
 
-        // Then, delete all rows
-        await tx.row.deleteMany({
-          where: { tableId: input.id }
-        });
+    // Tunables: keep each DB call quick
+    const ROW_BATCH = 5_000;
+    const COL_BATCH = 5_000;
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-        // Delete all columns
-        await tx.column.deleteMany({
-          where: { tableId: input.id }
-        });
-
-        // Delete all views
-        await tx.view.deleteMany({
-          where: { tableId: input.id }
-        });
-
-        // Finally, delete the table
-        const table = await tx.table.delete({
-          where: { id: input.id },
-        });
-        
-        return table;
+    // 1) Delete rows in batches: (cells by those rowIds) → rows
+    for (;;) {
+      const rows = await ctx.db.row.findMany({
+        where: { tableId },
+        select: { id: true },
+        take: ROW_BATCH,
       });
-    }),
+      if (rows.length === 0) break;
+
+      const rowIds = rows.map(r => r.id);
+
+      // Delete cells attached to these rows
+      await ctx.db.cell.deleteMany({ where: { rowId: { in: rowIds } } });
+      // Delete the rows
+      await ctx.db.row.deleteMany({ where: { id: { in: rowIds } } });
+
+      // Optional tiny pause so we don’t hog the pool (useful on shared DBs)
+      // await sleep(5);
+    }
+
+    // 2) Delete columns (and any leftover cells by those columns) in batches
+    for (;;) {
+      const cols = await ctx.db.column.findMany({
+        where: { tableId },
+        select: { id: true },
+        take: COL_BATCH,
+      });
+      if (cols.length === 0) break;
+
+      const colIds = cols.map(c => c.id);
+
+      // Defensive: remove any cells still referencing these columns
+      // (normally there should be none after row deletion, but this is safe)
+      await ctx.db.cell.deleteMany({ where: { columnId: { in: colIds } } });
+      await ctx.db.column.deleteMany({ where: { id: { in: colIds } } });
+      // await sleep(5);
+    }
+
+    // 3) Delete views (usually small)
+    await ctx.db.view.deleteMany({ where: { tableId } });
+
+    // 4) Finally, delete the table record
+    const table = await ctx.db.table.delete({ where: { id: tableId } });
+    return table;
+  }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))

@@ -31,6 +31,11 @@ type SearchResult = {
 };
 
 
+const TOTAL_ROWS = 100_000;
+const CHUNK_SIZE = 10_000;     
+const CONCURRENCY = 2;        
+const CELLS_BATCH = 50_000; 
+
 function BasePageContent() {
   const { data: session } = useSession();
   const params = useParams();
@@ -60,7 +65,8 @@ function BasePageContent() {
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
-
+ const [totalRecordCount, setTotalRecordCount] = useState(0);
+ const optimisticCountFnRef = useRef<((additional: number) => void) | null>(null);
   // Filter state will be managed by useFilterManagement hook
 
   // View state
@@ -68,6 +74,14 @@ function BasePageContent() {
   const [isViewSwitching, setIsViewSwitching] = useState(false);
 
   const utils = api.useUtils();
+  
+
+  const getCurrentMaxOrder = api.row.getCurrentMaxOrder.useQuery(
+  { tableId: selectedTable ?? "" },
+  { enabled: false } // we call it imperatively
+);
+
+const insertChunk = api.row.insertEmptyRowsChunk.useMutation();
   
   // View update mutation
   const updateViewMutation = api.view.update.useMutation({
@@ -219,7 +233,38 @@ function BasePageContent() {
 
   const createTableMutation = api.table.create.useMutation();
   const updateTableMutation = api.table.update.useMutation();
-  const deleteTableMutation = api.table.delete.useMutation();
+  const deleteTableMutation = api.table.delete.useMutation({
+  // Optimistically remove the table from the list and jump to the first remaining one
+  onMutate: async ({ id }) => {
+    await utils.table.list.cancel({ baseId });
+
+    const prevTables = utils.table.list.getData({ baseId }) ?? [];
+
+    // Compute the next list and the table to show next (always first remaining)
+    const nextTables = prevTables.filter(t => t.id !== id);
+    const nextSelected = nextTables[0]?.id ?? null;
+
+    // Optimistic cache update so the tab disappears immediately
+    utils.table.list.setData({ baseId }, nextTables);
+
+    // Always navigate to FIRST table (per requirement)
+    setSelectedTable(nextSelected);
+
+    // Return context for rollback on error
+    return { prevTables, prevSelected: selectedTable };
+  },
+
+  // Roll back if the server delete fails
+  onError: (_err, _vars, ctx) => {
+    if (ctx?.prevTables) utils.table.list.setData({ baseId }, ctx.prevTables);
+    if (ctx?.prevSelected !== undefined) setSelectedTable(ctx.prevSelected);
+  },
+
+  // Revalidate to ensure final server state
+  onSettled: async () => {
+    await utils.table.list.invalidate({ baseId });
+  },
+});
   
 
   const handleCreateTable = async () => {
@@ -259,36 +304,15 @@ function BasePageContent() {
     }
   };
 
-  const handleDeleteTable = async (tableId: string) => {
-    try {
-      // Prevent deleting the last table
-      if (tables && tables.length <= 1) {
-        throw new Error("Cannot delete the last table in the base");
-      }
+const handleDeleteTable = (tableId: string) => {
+  // Guard: don’t allow deleting the last table
+  if ((tables?.length ?? 0) <= 1) {
+    console.error("Cannot delete the last table in the base");
+    return;
+  }
 
-      await deleteTableMutation.mutateAsync({
-        id: tableId,
-      });
-      
-      // If the deleted table was selected, select the first remaining table
-      if (selectedTable === tableId) {
-        const remainingTables = tables?.filter(t => t.id !== tableId) ?? [];
-        if (remainingTables.length > 0) {
-          setSelectedTable(remainingTables[0]!.id);
-        }
-      }
-      
-      // Refetch tables to reflect the deletion
-      await refetchTables();
-    } catch (error) {
-      console.error('Failed to delete table:', error);
-      throw error;
-    }
-  };
-
-
-  const insertFirstBatch = api.row.insertFirstBatch.useMutation();
-  const insertRemainingBatches = api.row.insertRemainingBatches.useMutation();
+  deleteTableMutation.mutate({ id: tableId });
+};
 
   const handleBulkAddRowsWrapper = async () => {
     if (!selectedTable) return;
@@ -296,77 +320,77 @@ function BasePageContent() {
     setIsBulkLoading(true);
     setBulkProgress(0);
     setBulkProgressText("Initializing...");
-    const totalRows = 100_000;
 
-    // simple 2s throttle for invalidating the table data
-    let lastInvalidate = 0;
-    const throttledInvalidate = async () => {
-    const now = Date.now();
-    if (now - lastInvalidate >= 2000) {
-      lastInvalidate = now;
-      await utils.table.getTableData.invalidate({ tableId: selectedTable });
-    }
-  };
+      // Plan
+    const total = TOTAL_ROWS;
+    const chunk = CHUNK_SIZE;
+    const chunks = Math.ceil(total / chunk);
 
+    const { baseOrder } = await getCurrentMaxOrder.refetch().then(r => r.data!);
+
+      if (optimisticCountFnRef.current) {
+    // Adds to the server baseline (0 => 100,000; N => N + 100,000)
+    optimisticCountFnRef.current(total);
+  } else {
+    // Fallback: set to 100,000 if empty, else add
+    setTotalRecordCount((curr) => (curr === 0 ? total : curr + total));
+  }
 
     try {
-    // first batch (instant feedback)
-    setBulkProgressText("Adding first batch...");
-    const first = await insertFirstBatch.mutateAsync({
-      tableId: selectedTable,
-      count: 100000,
-    });
+    const { baseOrder } = await getCurrentMaxOrder.refetch().then(r => r.data!);
 
-    // refetch immediately so user sees new rows
-    await utils.table.getTableData.invalidate({ tableId: selectedTable });
+    let doneChunks = 0;
+    let insertedRows = 0;
+    let insertedCells = 0;
 
-    let remaining = typeof first?.remaining === "number"
-      ? first.remaining
-      : Math.max(0, 100_000 - (first?.insertedCount ?? 0));
+    setBulkProgressText(`Starting ${chunks} chunks…`);
 
-    let nextStartOrder = typeof first?.nextStartOrder === "number"
-      ? first.nextStartOrder
-      // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
-      : (first?.nextStartOrder ?? 0) + (first?.insertedCount ?? 0);
+    // Simple async pool for limited concurrency
+    const queue = Array.from({ length: chunks }, (_, i) => i);
+    const runWorker = async () => {
+      for (;;) {
+        const next = queue.shift();
+        if (next === undefined) break;
 
-    let totalInserted = first?.insertedCount ?? 0;
-    setBulkProgress(Math.min(100, (totalInserted / totalRows) * 100));
-    setBulkProgressText(`Added ${totalInserted.toLocaleString()} rows...`);
+        const size = Math.min(chunk, total - next * chunk);
+        const globalOffset = next * chunk;
 
-    while (remaining > 0) {
-      const res = await insertRemainingBatches.mutateAsync({
-        tableId: selectedTable,
-        remaining,
-        nextStartOrder,
-      });
+        try {
+          const res = await insertChunk.mutateAsync({
+            tableId: selectedTable!,
+            baseOrder,
+            globalOffset,
+            size,
+            cellBatchSize: CELLS_BATCH,
+          });
 
-      // update loop variables from server response (supports both old/new payloads)
-      const insertedThisBatch = res?.insertedThisBatch ?? 0;
-      totalInserted += insertedThisBatch;
-      remaining = typeof res?.remaining === "number"
-        ? res.remaining
-        : Math.max(0, remaining - insertedThisBatch);
-      nextStartOrder = typeof res?.nextStartOrder === "number"
-        ? res.nextStartOrder
-        : nextStartOrder + insertedThisBatch;
+          insertedRows += res.rowsInserted;
+          insertedCells += res.cellsInserted;
+        } finally {
+          doneChunks += 1;
 
-      // Update progress
-      const progress = Math.min(100, (totalInserted / totalRows) * 100);
-      setBulkProgress(progress);
-      setBulkProgressText(`Added ${totalInserted.toLocaleString()} of ${totalRows.toLocaleString()} rows...`);
+          // Update progress bar
+          const pct = Math.round((doneChunks / chunks) * 100);
+          setBulkProgress(pct);
+          setBulkProgressText(
+            `Inserted ${insertedRows.toLocaleString()} / ${total.toLocaleString()} rows (${pct}%)`
+            + (insertedCells ? ` • ${insertedCells.toLocaleString()} cells` : "")
+          );
 
-      // keep the viewport fresh without spamming re-fetches
-      await throttledInvalidate();
+          // Light refresh every N chunks to keep viewport fresh without thrashing
+          const N = 5;
+          if (doneChunks % N === 0 || doneChunks === chunks) {
+            await utils.table.getTableData.invalidate({ tableId: selectedTable! });
+          }
+        }
+      }
+    };
 
-      // support newer APIs that return a done flag
-      if (res?.done) break;
-    }
+    // Launch a few workers
+    await Promise.all(Array.from({ length: CONCURRENCY }, runWorker));
 
-    // Final refresh to settle everything
-    setBulkProgressText("Finalizing...");
-    await utils.table.getTableData.invalidate({ tableId: selectedTable });
     setBulkProgress(100);
-    setBulkProgressText("Complete!");
+    setBulkProgressText("Done!");
   } catch (err) {
     console.error("Bulk add failed:", err);
     setBulkProgressText("Failed to add rows");
@@ -377,7 +401,7 @@ function BasePageContent() {
       setIsBulkLoading(false);
       setBulkProgress(0);
       setBulkProgressText("");
-    }, 1000);
+    }, 800);
   }
 };
 
@@ -672,6 +696,8 @@ const handleShowAllColumns = useCallback(() => {
                     searchQuery={searchQuery}
                     scrollToRowId={scrollToRowId}
                     onDataTableReady={setDataTableHandlers}
+                    onRecordCountChange={setTotalRecordCount}
+                    onBulkOperationStart={(fn) => { optimisticCountFnRef.current = fn; }}
                     records={records}
                     setRecords={setRecords}
                     columns={columns}
@@ -687,7 +713,7 @@ const handleShowAllColumns = useCallback(() => {
                 )}
               </main>
               <SummaryBar 
-                recordCount={records.length} 
+                recordCount={totalRecordCount} 
                 onAddRow={() => dataTableHandlers?.handleCreateRow()} 
                 onBulkAddRows={handleBulkAddRowsWrapper}
                 isBulkLoading={isBulkLoading}

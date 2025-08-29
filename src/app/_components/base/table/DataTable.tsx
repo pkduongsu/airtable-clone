@@ -13,7 +13,7 @@ import { api } from "~/trpc/react";
 import { TableHeader } from "./TableHeader";
 import { MemoEditableCell } from "./EditableCell";
 import { RowNumberHeader } from "./RowNumberHeader";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, elementScroll, type VirtualizerOptions} from "@tanstack/react-virtual";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import Plus from "../../icons/Plus";
 import { CellContextMenu } from "../modals/CellContextMenu";
@@ -28,6 +28,7 @@ import {
   type ColumnSizingState,
 } from "@tanstack/react-table";
 
+
 import {
   keepPreviousData,
 } from "@tanstack/react-query";
@@ -35,7 +36,7 @@ import {
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
-const PAGE_LIMIT = 150;
+const PAGE_LIMIT = 200;
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -365,14 +366,7 @@ useEffect(() => {
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [tableId, tableRecords, allRecords]); //if i add records and columns, maximum depth reached error appears
 
-  //update records count: 
-  useEffect(() => {
-  const newCount = records.length;
-  setLocalRecordCount(newCount);
-  if (onRecordCountChange) {
-    onRecordCountChange(newCount);
-  }
-}, [records.length, onRecordCountChange]);
+
 
 const updateCellMutation = api.cell.update.useMutation();
   
@@ -693,9 +687,10 @@ const sortedData = useMemo(() => {
       }) //add temp row to local state to display immediately
 
        if (onRecordCountChange) {
-        onRecordCountChange(records.length + 1);
+        const base = (tableData?._count?.rows ?? recordsRef.current.length);
+        onRecordCountChange(base + 1);
       }
-
+      
       optimisticRowIdsRef.current.add(tempRowId);
 
       const newCells = columns.map(col => ({
@@ -722,7 +717,8 @@ const sortedData = useMemo(() => {
       setCells(old => old.filter(c => c.rowId !== tempRowId));
       
       if (onRecordCountChange) {
-        onRecordCountChange(records.length);
+        const base = (tableData?._count?.rows ?? recordsRef.current.length);
+        onRecordCountChange(base); // rollback to baseline
       }
       }
 
@@ -775,8 +771,9 @@ const sortedData = useMemo(() => {
         return next;
       });
 
-       if (onRecordCountChange) {
-        onRecordCountChange(records.length + 1);
+      if (onRecordCountChange) {
+        const base = (tableData?._count?.rows ?? recordsRef.current.length);
+        onRecordCountChange(base + 1);
       }
 
       // Create cells for new row
@@ -841,8 +838,9 @@ const sortedData = useMemo(() => {
         return next;
     });
 
-       if (onRecordCountChange) {
-        onRecordCountChange(records.length + 1);
+      if (onRecordCountChange) {
+        const base = (tableData?._count?.rows ?? recordsRef.current.length);
+        onRecordCountChange(base + 1);
       }
       // Create cells for new row
       const newCells = columns.map(col => ({
@@ -887,8 +885,9 @@ const sortedData = useMemo(() => {
 
       setRecords(updatedRecords);
 
-      if (onRecordCountChange) {
-        onRecordCountChange(updatedRecords.length);
+       if (onRecordCountChange) {
+        const base = (tableData?._count?.rows ?? recordsRef.current.length + 1); // +1 to mirror the just-deleted row in local buffer
+        onRecordCountChange(Math.max(0, base - 1));
       }
 
       // Remove cells for deleted row
@@ -1412,12 +1411,72 @@ const sortedData = useMemo(() => {
 
   const { rows } = table.getRowModel();
 
+  const easeInOutQuint = (t: number) =>
+  t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * Math.pow(t - 1, 5)
+
+  const scrollingRef = React.useRef<number | null>(null);
+
+  const totalDbRows = tableData?._count?.rows ?? 0;
+  const optimisticAdds = pendingRowIdsRef.current.size;
+
+  const virtualRowCount = hasActiveFilterOrSort
+  ? rows.length
+  : Math.max(totalDbRows + optimisticAdds, rows.length);
+
+  const scrollToFn: VirtualizerOptions<any, any>['scrollToFn'] = React.useCallback(
+  (offset, canSmooth, instance) => {
+    const start = tableContainerRef.current?.scrollTop ?? 0
+    const distance = Math.abs(offset - start)
+
+    // Duration scaled by distance, clamped
+    const duration = Math.max(200, Math.min(1200, distance * 0.35))
+    const startTime = (scrollingRef.current = Date.now())
+
+    const step = () => {
+      // if another scroll kicked off, stop this one
+      if (scrollingRef.current !== startTime) return
+
+      const elapsed = Date.now() - startTime
+      const t = Math.min(1, elapsed / duration)
+      const y = start + (offset - start) * easeInOutQuint(t)
+
+      elementScroll(y, canSmooth, instance)
+
+      if (t < 1) requestAnimationFrame(step)
+    }
+
+    requestAnimationFrame(step)
+  },
+  []
+)
+
+const ensureLoadLockRef = React.useRef(false)
+
+const ensureRangeLoaded = React.useCallback(
+  async (endIndex: number) => {
+    // prevent concurrent loops
+    if (ensureLoadLockRef.current) return
+    ensureLoadLockRef.current = true
+    try {
+      // Load until we have rows through endIndex or we run out
+      while ((recordsRef.current.length - 1) < endIndex && hasNextPage) {
+        await fetchNextPage()
+      }
+    } finally {
+      ensureLoadLockRef.current = false
+    }
+  },
+  [fetchNextPage, hasNextPage]
+)
+
+
   // Setup virtualizer for rows
   const rowVirtualizer = useVirtualizer({
-    count:  Math.max(rows.length , 2),
+    count:  Math.max(virtualRowCount , 2),
     estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
     getScrollElement: () => tableContainerRef.current,
-    overscan: 24 // Optimized for better performance and smoother scrolling
+    overscan: 24, // Optimized for better performance and smoother scrolling
+    scrollToFn,
   });
 
   // Scroll to specific row when scrollToRowId changes
@@ -1429,6 +1488,18 @@ const sortedData = useMemo(() => {
       }
     }
   }, [scrollToRowId, data, rowVirtualizer]);
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
+useEffect(() => {
+  if (!virtualItems.length) return;
+   const lastItem = virtualItems[virtualItems.length - 1]
+  if (!lastItem) return
+
+  const lastVisible = lastItem.index
+  const buffer = 30
+  void ensureRangeLoaded(lastVisible + buffer)
+}, [virtualItems, ensureRangeLoaded])
 
   //scroll to the navigated search index: 
   const ensureLoadedAndScrollTo = useCallback(
@@ -1487,11 +1558,13 @@ useEffect(() => {
 
 
   const handleScroll = useCallback(() => {
-    if(hasNextPage && !isFetchingNextPage)
-    {
-      void fetchNextPage();
-    }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
+    const items = rowVirtualizer.getVirtualItems()
+    const lastItem = items.at?.(-1) ?? (items.length ? items[items.length - 1] : undefined)
+    if (!lastItem) return
+
+    const buffer = 60
+    void ensureRangeLoaded(lastItem.index + buffer)
+  }, [rowVirtualizer, ensureRangeLoaded])
 
 
 
@@ -1572,10 +1645,13 @@ useEffect(() => {
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
               const row = rows[virtualRow.index];
               
-              if (!row) return null; //removed skeleton rows.
+              const isPlaceholder = !row;
 
-              const stableRowKey = rowUiKeyRef.current.get(row?.original?.id) ?? row?.original?.id;
-              
+              const stableRowKey = isPlaceholder
+                ? `__placeholder__${virtualRow.index}`
+                : (rowUiKeyRef.current.get(row.original.id) ?? row.original.id)
+                          
+              const flatCols = table.getVisibleFlatColumns();
 
               return (
                 <tr
@@ -1591,24 +1667,40 @@ useEffect(() => {
                     height: `${virtualRow.size}px`,
                   }}
                 >
-                  {row.getVisibleCells().map((cell) => {
-
-                    const stableColKey = columnUiKeyRef.current.get(cell.column.id) ?? cell.column.id;
-                    const tdKey = `${stableRowKey}-${stableColKey}`
-                    return (
-                    <td
-                      key={tdKey}
-                      className="p-0 h-8 border-r border-b border-border-default relative"
-                      style={{
-                        display: 'flex',
-                        width: cell.column.getSize(),
-                        alignItems: 'center',
-                      }}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                    );
-                  })}
+                   {isPlaceholder
+    ? flatCols.map((col) => {
+        const isRowNumber = col.id === '__rowNumber'
+        return (
+          <td
+            key={`ph-${stableRowKey}-${col.id}`}
+            className="p-0 h-8 border-r border-b border-border-default relative"
+            style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
+          >
+            {isRowNumber ? (
+              // Always show the row index for the row-number column
+              <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">
+                {virtualRow.index + 1}
+              </div>
+            ) : (
+              // Skeleton only for data cells
+              <div className="mx-2 w-3/4 h-3 rounded animate-pulse bg-gray-200" />
+            )}
+          </td>
+        )
+      })
+    : (row!).getVisibleCells().map((cell) => {
+        const stableColKey = columnUiKeyRef.current.get(cell.column.id) ?? cell.column.id
+        const tdKey = `${stableRowKey}-${stableColKey}`
+        return (
+          <td
+            key={tdKey}
+            className="p-0 h-8 border-r border-b border-border-default relative"
+            style={{ display: 'flex', width: cell.column.getSize(), alignItems: 'center' }}
+          >
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </td>
+        )
+      })}
                 </tr>
               );
             })}
