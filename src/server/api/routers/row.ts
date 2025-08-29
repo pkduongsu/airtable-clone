@@ -28,9 +28,18 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
   }
 };
 
-const DEFAULT_ROW_BATCH = 5_000;
-const DEFAULT_CELL_BATCH = 50_000;
+const GetRowsByOrderRangeInput = z.object({
+  tableId: z.string(),
+  startOrder: z.number().int().nonnegative(),
+  endOrder: z.number().int().nonnegative(),
+})
 
+const RangeWithCellsInput = z.object({
+  tableId: z.string(),
+  startOrder: z.number().int().nonnegative(),
+  endOrder: z.number().int().nonnegative(),
+  columnIds: z.array(z.string()).optional(),
+});
 
 export const rowRouter = createTRPCRouter({
   create: protectedProcedure
@@ -376,6 +385,61 @@ export const rowRouter = createTRPCRouter({
       }
 
       return { rowsInserted, cellsInserted, from: startOrder, to: endOrder };
+    }),
+
+     listByOrderRange: protectedProcedure
+    .input(GetRowsByOrderRangeInput)
+    .query(async ({ ctx, input }) => {
+      const { tableId, startOrder, endOrder } = input
+      const rows = await ctx.db.row.findMany({
+        where: { tableId, order: { gte: startOrder, lte: endOrder } },
+        select: { id: true, order: true },
+        orderBy: { order: 'asc' },
+      })
+      return rows
+    }),
+
+  // 2) Get cells for a set of rowIds, column-pruned
+  listCellsByRowIds: protectedProcedure
+    .input(z.object({
+      rowIds: z.array(z.string()).min(1),
+      columnIds: z.array(z.string()).optional(), // omit => all columns
+    }))
+    .query(async ({ ctx, input }) => {
+      const { rowIds, columnIds } = input
+      const cells = await ctx.db.cell.findMany({
+        where: {
+          rowId: { in: rowIds },
+          ...(columnIds?.length ? { columnId: { in: columnIds } } : {}),
+        },
+        select: { rowId: true, columnId: true, value: true },
+      })
+      return cells
+    }),
+    listRowsWithCellsByOrderRange: protectedProcedure
+    .input(RangeWithCellsInput)
+    .query(async ({ ctx, input }) => {
+      const { tableId, startOrder, endOrder, columnIds } = input;
+
+      const rows = await ctx.db.row.findMany({
+        where: { tableId, order: { gte: startOrder, lte: endOrder } },
+        select: { id: true, order: true },
+        orderBy: { order: 'asc' },
+      });
+
+      if (!rows.length) return { rows: [], cells: [] };
+
+      const rowIds = rows.map(r => r.id);
+
+      const cells = await ctx.db.cell.findMany({
+        where: {
+          rowId: { in: rowIds },
+          ...(columnIds?.length ? { columnId: { in: columnIds } } : {}),
+        },
+        select: { rowId: true, columnId: true, value: true },
+      });
+
+      return { rows, cells };
     }),
 });
 
