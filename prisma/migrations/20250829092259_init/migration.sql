@@ -138,16 +138,16 @@ CREATE UNIQUE INDEX "VerificationToken_identifier_token_key" ON "public"."Verifi
 CREATE INDEX "Row_tableId_order_idx" ON "public"."Row"("tableId", "order");
 
 -- CreateIndex
-CREATE INDEX "Cell_value_idx" ON "public"."Cell" USING GIN ("value");
+CREATE INDEX "Cell_rowId_idx" ON "public"."Cell"("rowId");
 
 -- CreateIndex
 CREATE INDEX "Cell_columnId_idx" ON "public"."Cell"("columnId");
 
 -- CreateIndex
-CREATE INDEX "Cell_rowId_idx" ON "public"."Cell"("rowId");
+CREATE UNIQUE INDEX "Cell_rowId_columnId_key" ON "public"."Cell"("rowId", "columnId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Cell_rowId_columnId_key" ON "public"."Cell"("rowId", "columnId");
+CREATE INDEX "View_tableId_idx" ON "public"."View"("tableId");
 
 -- AddForeignKey
 ALTER TABLE "public"."Account" ADD CONSTRAINT "Account_userId_fkey" FOREIGN KEY ("userId") REFERENCES "public"."User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
