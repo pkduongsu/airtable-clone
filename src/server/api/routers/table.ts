@@ -214,7 +214,7 @@ export const tableRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.db.table.findUnique({
+      const result = await ctx.db.table.findUnique({
         where: { id: input.id },
         include: {
           columns: true,
@@ -223,6 +223,9 @@ export const tableRouter = createTRPCRouter({
           },
         },
       });
+      
+      console.log(`🔢 Backend: table.getById - TableID: ${input.id}, RowCount: ${result?._count?.rows}`);
+      return result;
     }),
 
   list: protectedProcedure

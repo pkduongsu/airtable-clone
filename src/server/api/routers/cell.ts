@@ -49,39 +49,7 @@ export const cellRouter = createTRPCRouter({
       value: z.union([z.string(), z.number(), z.object({ text: z.string() })]),
     }))
     .mutation(async ({ ctx, input }) => {
-      // Prepare the value based on type
-      // const cellValue = typeof input.value === 'string' 
-      //   ? { text: input.value }
-      //   : typeof input.value === 'number'
-      //   ? { number: input.value }
-      //   : input.value;
-
-      // // Find existing cell first, then update or create
-      // const existingCell = await ctx.db.cell.findFirst({
-      //   where: {
-      //     rowId: input.rowId,
-      //     columnId: input.columnId,
-      //   }
-      // });
-
-      // if (existingCell) {
-      //   // Update existing cell
-      //   const cell = await ctx.db.cell.update({
-      //     where: { id: existingCell.id },
-      //     data: { value: cellValue }
-      //   });
-      //   return cell;
-      // } else {
-      //   // Create new cell
-      //   const cell = await ctx.db.cell.create({
-      //     data: {
-      //       rowId: input.rowId,
-      //       columnId: input.columnId,
-      //       value: cellValue
-      //     }
-      //   });
-      //   return cell;
-      // }
+      console.log(`🔄 Cell update requested - RowID: ${input.rowId}, ColumnID: ${input.columnId}, Value:`, input.value);
 
   const normalizedValue =
   typeof input.value === "string"
@@ -89,6 +57,8 @@ export const cellRouter = createTRPCRouter({
     : typeof input.value === "number"
     ? { number: input.value }
     : input.value; // if already object { text: string }
+
+  console.log(`📝 Normalized value:`, normalizedValue);
 
   try {
     const cell = await ctx.db.cell.upsert({
@@ -107,17 +77,47 @@ export const cellRouter = createTRPCRouter({
     value: normalizedValue, 
   },
 });
+    
+    console.log(`Cell updated successfully - ID: ${cell.id}, RowID: ${input.rowId}, ColumnID: ${input.columnId}, Value:`, normalizedValue);
     return cell;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } catch(e: any) {
+    console.log(`❌ Cell update error - Code: ${e?.code}, Message: ${e?.message}`);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     if (e?.code === 'P2003') {
-    // Return a precondition failure; the client is already buffering, so it will flush later.
-    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'ROW_OR_COLUMN_NOT_READY' });
-  }
+      // Foreign key constraint failure - row or column doesn't exist
+      console.log(`🚫 Foreign key constraint failed - ROW_OR_COLUMN_NOT_READY`);
+      throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'ROW_OR_COLUMN_NOT_READY' });
+    }
+    
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    if (e?.code === 'P2002') {
+      // Unique constraint failure - cell already exists, try to find and return it
+      console.log(`🔄 Unique constraint failed, trying to find existing cell`);
+      try {
+        const existingCell = await ctx.db.cell.findFirst({
+          where: {
+            rowId: input.rowId,
+            columnId: input.columnId,
+          },
+        });
+        if (existingCell) {
+          // Update the existing cell with the new value
+          const updatedCell = await ctx.db.cell.update({
+            where: { id: existingCell.id },
+            data: { value: normalizedValue },
+          });
+          console.log(`Cell updated after unique constraint error - ID: ${updatedCell.id}, RowID: ${input.rowId}, ColumnID: ${input.columnId}, Value:`, normalizedValue);
+          return updatedCell;
+        }
+      } catch (findError) {
+        console.error("Failed to find existing cell after unique constraint error:", findError);
+      }
+    }
 
-  throw e;
-}
+    console.log(`💥 Unhandled error in cell update:`, e);
+    throw e;
+  }
 
     }),
 });

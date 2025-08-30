@@ -357,7 +357,7 @@ const handleDeleteTable = (tableId: string) => {
 
         try {
           const res = await insertChunk.mutateAsync({
-            tableId: selectedTable!,
+            tableId: selectedTable,
             baseOrder,
             globalOffset,
             size,
@@ -380,7 +380,7 @@ const handleDeleteTable = (tableId: string) => {
           // Light refresh every N chunks to keep viewport fresh without thrashing
           const N = 5;
           if (doneChunks % N === 0 || doneChunks === chunks) {
-            await utils.table.getTableData.invalidate({ tableId: selectedTable! });
+            await utils.table.getTableData.invalidate({ tableId: selectedTable });
           }
         }
       }

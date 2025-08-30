@@ -412,7 +412,7 @@ export const rowRouter = createTRPCRouter({
           rowId: { in: rowIds },
           ...(columnIds?.length ? { columnId: { in: columnIds } } : {}),
         },
-        select: { rowId: true, columnId: true, value: true },
+        select: { id: true, rowId: true, columnId: true, value: true },
       })
       return cells
     }),
@@ -436,10 +436,59 @@ export const rowRouter = createTRPCRouter({
           rowId: { in: rowIds },
           ...(columnIds?.length ? { columnId: { in: columnIds } } : {}),
         },
-        select: { rowId: true, columnId: true, value: true },
+        select: { id: true, rowId: true, columnId: true, value: true },
       });
 
       return { rows, cells };
+    }),
+
+  // Create a row at a specific order (for sparse data)
+  createAtOrder: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      order: z.number().int().nonnegative(),
+      id: z.string().optional(), // Optional client-generated ID
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { tableId, order, id } = input;
+
+      // Check if a row with this order already exists
+      const existingRow = await ctx.db.row.findFirst({
+        where: { tableId, order },
+      });
+
+      if (existingRow) {
+        return existingRow; // Return existing row if it already exists
+      }
+
+      // Create the new row at the specified order
+      const row = await ctx.db.row.create({
+        data: {
+          tableId,
+          order,
+          id,
+        },
+      });
+
+      // Get all columns for this table
+      const columns = await ctx.db.column.findMany({
+        where: { tableId },
+      });
+
+      // Create empty cells for this new row in all existing columns
+      if (columns.length > 0) {
+        const cells = columns.map(column => ({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: "" }, // Empty value for new row
+        }));
+
+        await ctx.db.cell.createMany({
+          data: cells,
+        });
+      }
+
+      return row;
     }),
 });
 
