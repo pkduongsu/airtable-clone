@@ -720,7 +720,8 @@ const sortedData = useMemo(() => {
         : -1) + 1; // next after highest loaded
 
     // also offset by how many optimistic rows you’ve added but not confirmed yet
-    return Math.max(serverTotal, maxLoadedOrder);
+    const optimistic = pendingRowIdsRef.current.size;
+    return Math.max(serverTotal, maxLoadedOrder) + optimistic;
   };
     
 
@@ -1678,7 +1679,7 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
 
   // Calculate record counts (needed by recordsByOrder)
   const localRecordCount = records.length;
-  const databaseRecordCount = tableData?._count?.rows ?? 0;
+  const databaseRecordCount = Math.max(tableData?._count?.rows ?? 0, uiRecordCount);
   
   // For small tables using listing mode, use actual records count
   // For large tables using sparse mode, use database count as virtual total
@@ -1722,11 +1723,6 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
       : [],
   [usingOrderListing, hasActiveSearch, visibleRecords, records]
 );
-
-
-  // totalDbRows and totalRecordCount are now calculated earlier to fix dependency issues
-  
-  
 
 const scrollToFn = (
   offset: number,
