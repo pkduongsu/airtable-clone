@@ -192,18 +192,11 @@ const insertChunk = api.row.insertEmptyRowsChunk.useMutation();
   filterRulesRef.current = filterRules;
 
   // Search state
-  const [searchResults, setSearchResults] = useState<Array<{
-    type: 'field' | 'cell';
-    id: string;
-    name: string;
-    columnId: string;
-    columnOrder: number;
-    rowId: string | null;
-    rowOrder: number;
-  }>>([]);
-  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [scrollToRowId, setScrollToRowId] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+const [searchQuery, setSearchQuery] = useState("");
+const [scrollToRowId, setScrollToRowId] = useState<string | null>(null);
+
 
 
   const { data: base } = api.base.getById.useQuery(
@@ -408,24 +401,29 @@ const handleDeleteTable = (tableId: string) => {
   // Filter handlers are now provided by useFilterManagement hook
 
   // Search handlers
-  const handleSearchResultSelected = useCallback((result: SearchResult, index: number) => {
+const handleSearchResultSelected = useCallback(
+  (result: SearchResult, index: number) => {
     setCurrentSearchIndex(index);
-  }, []);
+  },
+  []
+);
 
-  const handleSearchDataUpdate = useCallback((results: SearchResult[], query: string, currentIndex: number) => {
+const handleSearchDataUpdate = useCallback(
+  (results: SearchResult[], query: string, currentIndex: number) => {
     setSearchResults(results);
     setSearchQuery(query);
     setCurrentSearchIndex(currentIndex);
-  }, []);
-
-  const handleScrollToSearchResult = useCallback((result: SearchResult, _index: number) => {
+  },
+  []
+);
+const handleScrollToSearchResult = useCallback(
+  (result: SearchResult, _index: number) => {
     if (result.type !== 'cell' || !result.rowId) return;
-    
-    // DataTable now handles the scroll logic internally
     setScrollToRowId(result.rowId);
-    // Clear the scroll target after a brief delay
     setTimeout(() => setScrollToRowId(null), 100);
-  }, []);
+  },
+  []
+);
 
   // updateViewMutation moved up before sort handlers
 

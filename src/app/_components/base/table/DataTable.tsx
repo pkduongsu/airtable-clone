@@ -137,6 +137,8 @@ export function DataTable({
 
   const lastScrollTargetRef = useRef<string | null>(null);
 
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
   const cellRenderKey = (rowId: string, columnId: string) => {
     const rk = rowUiKeyRef.current.get(rowId) ?? rowId;
     const ck = columnUiKeyRef.current.get(columnId) ?? columnId;
@@ -212,6 +214,8 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
   const hasActiveFilterOrSort =
   (sortRules?.length ?? 0) > 0 || (filterRules?.length ?? 0) > 0;
 
+  const hasActiveSearch = !!searchQuery && searchQuery.trim().length > 0;
+
   // Table metadata query 
   const {
     data: tableData,
@@ -244,11 +248,12 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
       limit: PAGE_LIMIT,
       sortRules,
       filterRules: filterRules,
+      globalSearch: searchQuery ?? "",
     },
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       refetchOnWindowFocus: false,
-      placeholderData: hasActiveFilterOrSort ? undefined : keepPreviousData,
+      placeholderData: (hasActiveFilterOrSort || hasActiveSearch) ? undefined : keepPreviousData,
     }
   );
 
@@ -282,11 +287,16 @@ useEffect(() => {
     const serverIds = new Set(serverRecords.map(r => r.id));
 
     //check if filter/sorts are active:
-    const hasActiveFilterOrSort = (filterRules?.length ?? 0) > 0 || (sortRules?.length ?? 0) > 0;
+    const hasActiveFilterOrSortOrSearch =
+  (filterRules?.length ?? 0) > 0 ||
+  (sortRules?.length ?? 0) > 0 ||
+  (searchQuery?.trim().length ?? 0) > 0;
 
-   const carry = hasActiveFilterOrSort
-    ? prev.filter(r => pendingRowIdsRef.current.has(r.id))
-    : prev.filter(r => r.tableId === tableId && !serverIds.has(r.id));
+   const carry = hasActiveFilterOrSortOrSearch
+  // when filtering/sorting/searching: ONLY keep optimistic rows we just created
+  ? prev.filter(r => pendingRowIdsRef.current.has(r.id))
+  // otherwise: keep previous non-duplicate local rows
+  : prev.filter(r => r.tableId === tableId && !serverIds.has(r.id));
 
     
     const next = [...carry, ...serverRecords];
@@ -1082,7 +1092,24 @@ const sortedData = useMemo(() => {
             //SEARCH LOGIC HANDLING//
   ////////////////////////////////////////////////
 
-  
+const matchedRowIds = useMemo(() => {
+  if (!hasActiveSearch || !searchResults?.length) return null;
+  const s = new Set<string>();
+  for (const r of searchResults) {
+    if (r.type === 'cell' && r.rowId) s.add(r.rowId);
+  }
+  return s;
+}, [hasActiveSearch, searchResults]);
+
+// Only show rows that matched when searching
+const visibleRecords = useMemo(() => {
+  if (!matchedRowIds) return records;
+  return records.filter(r => matchedRowIds.has(r.id));
+}, [records, matchedRowIds]);
+
+  useEffect(() => {
+  setSearchQuery(searchValue ?? "");
+}, [searchValue]);
 
   // Calculate search match information
   const searchMatchInfo = useMemo(() => {
@@ -1120,7 +1147,7 @@ const sortedData = useMemo(() => {
   const navigationBounds = useMemo(() => {
     const visibleColumnCount = columns.filter(column => !hiddenColumns.has(column.id)).length;
     return {
-      maxRowIndex: records.length - 1,
+      maxRowIndex: visibleRecords.length - 1,
       maxColumnIndex: Math.max(0, visibleColumnCount - 1)
     };
   }, [columns, records.length, hiddenColumns]);
@@ -1129,7 +1156,7 @@ const sortedData = useMemo(() => {
   // Handle cell selection (click)
   const handleCellSelection = useCallback((rowId: string, columnId: string) => {
     // Convert rowId/columnId back to indices for navigation consistency
-    const rowIndex = records.findIndex(record => record.id === rowId);
+    const rowIndex = visibleRecords.findIndex(record => record.id === rowId);
     const visibleColumns = columns
       .filter(col => !hiddenColumns.has(col.id))
       .sort((a, b) => a.order - b.order);
@@ -1655,20 +1682,26 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
     ? Math.max(...recordsRef.current.map(r => r.order ?? -1))
     : -1) + 1;
 
-  const usingOrderListing =
-  (sortRules?.length ?? 0) > 0 || (filterRules?.length ?? 0) > 0;
+  const usingOrderListing =  (sortRules?.length ?? 0) > 0 ||
+  (filterRules?.length ?? 0) > 0 ||
+  hasActiveSearch; 
+  
 
   // For listing mode, flatten the pages (already in correct order from server SQL)
   const listedRows = useMemo(
-    () => usingOrderListing ? (tableRecords?.pages.flatMap(p => p.rows) ?? []) : [],
-    [usingOrderListing, tableRecords]
-  );
+  () =>
+    usingOrderListing
+      ? (hasActiveSearch ? visibleRecords
+                         : (tableRecords?.pages.flatMap(p => p.rows) ?? []))
+      : [],
+  [usingOrderListing, hasActiveSearch, visibleRecords, tableRecords]
+);
 
 
   // Use total database rows for full table scrolling with sparse loading
   const totalDbRows = tableData?._count?.rows ?? 0;
   const virtualRowCount = usingOrderListing
-  ? listedRows.length + (hasNextPage ? 1 : 0) // grow as we fetch more
+  ? listedRows.length + (hasNextPage ? 1 : 0)
   : Math.max(tableData?._count?.rows ?? 0, maxKnownOrder);
   
 
@@ -1953,6 +1986,7 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                         transform: `translate3d(0, ${virtualRow.start}px, 0)`,
                         height: `${virtualRow.size}px`,
                         display: 'flex',
+                        width: table.getCenterTotalSize(),
                       }}
                       className="bg-white"
                     >
