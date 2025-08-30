@@ -58,20 +58,23 @@ export function SortModal({
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
-  // Convert columns to dropdown options
+  // Convert columns to dropdown options, sorted by column order
   const columnOptions = useMemo(() => {
-    return columns.map(column => ({
-      id: column.id,
-      label: column.name,
-      subtitle: column.type.toUpperCase(),
-    }));
+    return columns
+      .sort((a, b) => a.order - b.order)
+      .map(column => ({
+        id: column.id,
+        label: column.name,
+        subtitle: column.type.toUpperCase(),
+      }));
   }, [columns]);
 
-  // Filter columns based on search query
+  // Filter columns based on search query, keeping them sorted by order
   const filteredColumns = useMemo(() => {
-    if (!searchQuery.trim()) return columns;
+    const sortedColumns = [...columns].sort((a, b) => a.order - b.order);
+    if (!searchQuery.trim()) return sortedColumns;
     
-    return columns.filter(column =>
+    return sortedColumns.filter(column =>
       column.name.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [columns, searchQuery]);
@@ -257,9 +260,10 @@ export function SortModal({
                 <div className="flex flex-auto relative">
                   <button
                     onClick={() => {
-                      // Find the first available column not already used
+                      // Find the first available column not already used, ordered by column order
                       const usedColumnIds = sortRules.map(rule => rule.columnId);
-                      const availableColumn = columns.find(col => !usedColumnIds.includes(col.id));
+                      const sortedColumns = [...columns].sort((a, b) => a.order - b.order);
+                      const availableColumn = sortedColumns.find(col => !usedColumnIds.includes(col.id));
                       if (availableColumn) {
                         onAddSortRule(availableColumn.id, availableColumn.name, availableColumn.type);
                       }

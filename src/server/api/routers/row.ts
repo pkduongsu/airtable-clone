@@ -28,9 +28,18 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
   }
 };
 
-const DEFAULT_ROW_BATCH = 5_000;
-const DEFAULT_CELL_BATCH = 50_000;
+const GetRowsByOrderRangeInput = z.object({
+  tableId: z.string(),
+  startOrder: z.number().int().nonnegative(),
+  endOrder: z.number().int().nonnegative(),
+})
 
+const RangeWithCellsInput = z.object({
+  tableId: z.string(),
+  startOrder: z.number().int().nonnegative(),
+  endOrder: z.number().int().nonnegative(),
+  columnIds: z.array(z.string()).optional(),
+});
 
 export const rowRouter = createTRPCRouter({
   create: protectedProcedure
@@ -347,7 +356,7 @@ export const rowRouter = createTRPCRouter({
         orderBy: { order: "asc" },
       });
       const rowIds = insertedRows.map(r => r.id);
-      let rowsInserted = rowIds.length;
+      const rowsInserted = rowIds.length;
 
       // FAST PATH: rows-only by default (no cells yet)
       if (!withCells || rowIds.length === 0) {
@@ -376,6 +385,117 @@ export const rowRouter = createTRPCRouter({
       }
 
       return { rowsInserted, cellsInserted, from: startOrder, to: endOrder };
+    }),
+
+     listByOrderRange: protectedProcedure
+    .input(GetRowsByOrderRangeInput)
+    .query(async ({ ctx, input }) => {
+      const { tableId, startOrder, endOrder } = input
+      const rows = await ctx.db.row.findMany({
+        where: { tableId, order: { gte: startOrder, lte: endOrder } },
+        select: { id: true, order: true },
+        orderBy: { order: 'asc' },
+      })
+      return rows
+    }),
+
+  // 2) Get cells for a set of rowIds, column-pruned
+  listCellsByRowIds: protectedProcedure
+    .input(z.object({
+      rowIds: z.array(z.string()).min(1),
+      columnIds: z.array(z.string()).optional(), // omit => all columns
+    }))
+    .query(async ({ ctx, input }) => {
+      const { rowIds, columnIds } = input
+      const cells = await ctx.db.cell.findMany({
+        where: {
+          rowId: { in: rowIds },
+          ...(columnIds?.length ? { columnId: { in: columnIds } } : {}),
+        },
+        select: { id: true, rowId: true, columnId: true, value: true },
+      })
+      return cells
+    }),
+    listRowsWithCellsByOrderRange: protectedProcedure
+    .input(RangeWithCellsInput)
+    .query(async ({ ctx, input }) => {
+      const { tableId, startOrder, endOrder, columnIds } = input;
+
+      // Single optimized query using include to JOIN rows with cells
+      const rowsWithCells = await ctx.db.row.findMany({
+        where: { 
+          tableId, 
+          order: { gte: startOrder, lte: endOrder } 
+        },
+        select: { 
+          id: true, 
+          order: true,
+          cells: {
+            select: { id: true, rowId: true, columnId: true, value: true },
+            where: columnIds?.length 
+              ? { columnId: { in: columnIds } }
+              : undefined,
+          }
+        },
+        orderBy: { order: 'asc' },
+      });
+
+      if (!rowsWithCells.length) return { rows: [], cells: [] };
+
+      // Extract rows and flatten cells from the joined result
+      const rows = rowsWithCells.map(({ cells: _cells, ...row }) => row);
+      const cells = rowsWithCells.flatMap(({ cells }) => cells);
+
+      return { rows, cells };
+    }),
+
+  // Create a row at a specific order (for sparse data)
+  createAtOrder: protectedProcedure
+    .input(z.object({
+      tableId: z.string(),
+      order: z.number().int().nonnegative(),
+      id: z.string().optional(), // Optional client-generated ID
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const { tableId, order, id } = input;
+
+      // Check if a row with this order already exists
+      const existingRow = await ctx.db.row.findFirst({
+        where: { tableId, order },
+      });
+
+      if (existingRow) {
+        return existingRow; // Return existing row if it already exists
+      }
+
+      // Create the new row at the specified order
+      const row = await ctx.db.row.create({
+        data: {
+          tableId,
+          order,
+          id,
+        },
+      });
+
+      // Get all columns for this table
+      const columns = await ctx.db.column.findMany({
+        where: { tableId },
+      });
+
+      // Create empty cells for this new row in all existing columns
+      if (columns.length > 0) {
+        const cells = columns.map(column => ({
+          rowId: row.id,
+          columnId: column.id,
+          value: { text: "" }, // Empty value for new row
+        }));
+
+        await ctx.db.cell.createMany({
+          data: cells,
+        });
+      }
+
+      return row;
     }),
 });
 

@@ -55,23 +55,27 @@ function EditableCell({
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   
-  // Compute states for visual highlighting
-  
-  const utils = api.useUtils();
-  
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
-      await utils.table.getById.cancel();
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
-      if (context?.prevValue) {
-        setValue(context.prevValue);
-        onValueChange?.(rowId, columnId, context.prevValue);
+     
+      const code = err?.data?.code ?? err?.message;
+      if (code === 'PRECONDITION_FAILED') {
+        // queue a retry shortly (or after your next records/columns refetch)
+        setTimeout(() => {
+          updateCellMutation.mutate({ rowId, columnId, value: { text: value } });
+        }, 250);
+        return;
       }
+  if (context?.prevValue) {
+    setValue(context.prevValue);
+    onValueChange?.(rowId, columnId, context.prevValue);
+  }
     },
-    onSuccess: () => {
+    onSuccess: (_data) => {
       setLastSaved(value);
     },
     onSettled: () => {
@@ -85,7 +89,8 @@ function EditableCell({
     const timer = setTimeout(() => {
 
       if (value !== lastSaved && canPersist) {
-        void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}})
+        
+        void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}});
       }
     }, 500);
 

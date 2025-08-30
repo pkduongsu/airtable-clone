@@ -30,6 +30,11 @@ if (lowerName.includes('name') || lowerName.includes('title')) {
     return faker.lorem.words(faker.number.int({ min: 1, max: 4 }));
   }
 };
+const rowInclude = {
+  cells: { include: { column: true } },
+} as const;
+
+type RowWithCells = Prisma.RowGetPayload<{ include: typeof rowInclude }>;
 
 export const tableRouter = createTRPCRouter({
     create: protectedProcedure
@@ -163,7 +168,7 @@ export const tableRouter = createTRPCRouter({
     // Tunables: keep each DB call quick
     const ROW_BATCH = 5_000;
     const COL_BATCH = 5_000;
-    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    //const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
     // 1) Delete rows in batches: (cells by those rowIds) → rows
     for (;;) {
@@ -214,7 +219,7 @@ export const tableRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.db.table.findUnique({
+      const result = await ctx.db.table.findUnique({
         where: { id: input.id },
         include: {
           columns: true,
@@ -223,6 +228,9 @@ export const tableRouter = createTRPCRouter({
           },
         },
       });
+      
+      console.log(`🔢 Backend: table.getById - TableID: ${input.id}, RowCount: ${result?._count?.rows}`);
+      return result;
     }),
 
   list: protectedProcedure
@@ -258,10 +266,11 @@ export const tableRouter = createTRPCRouter({
         columnType: z.enum(['TEXT', 'NUMBER']),
         operator: z.enum(['is_empty', 'is_not_empty', 'contains', 'not_contains', 'equals', 'greater_than', 'less_than']),
         value: z.union([z.string(), z.number()]).optional()
-      })).optional()
+      })).optional(),
+      globalSearch: z.string().optional(),
     }))
     .query(async ({ ctx, input }) => {
-      const { tableId, limit, cursor, sortRules = [], filterRules = [] } = input;
+      const { tableId, limit, cursor, sortRules = [], filterRules = [], globalSearch } = input;
       
       // Get table metadata (columns and count)
       const table = await ctx.db.table.findUnique({
@@ -281,31 +290,22 @@ export const tableRouter = createTRPCRouter({
       }
 
       // Get paginated rows with sorting
-      let rows: Prisma.RowGetPayload<{
-        include: {
-          cells: {
-            include: {
-              column: true;
-            };
-          };
-        };
-      }>[];
+      let rows: RowWithCells[] = [];
       
       if (sortRules.length === 0 && filterRules.length === 0) {
         // Default sorting by row order
         rows = await ctx.db.row.findMany({
-          where: { tableId },
-          include: {
-            cells: {
-              include: {
-                column: true,
-              },
-            },
+          where: {
+            tableId,
+            ...(globalSearch?.trim()
+              ? { cells: { some: { value: { path: ['text'], string_contains: globalSearch } } } }
+              : {}),
           },
-          orderBy: { order: "asc" },
+          include: rowInclude,
+          orderBy: { order: 'asc' },
           skip: cursor,
           take: limit,
-        });
+        }) as RowWithCells[];
       } else {
         // Use database-level sorting and filtering with proper type handling
         try {
@@ -396,6 +396,19 @@ export const tableRouter = createTRPCRouter({
           if (filterConditions.length > 0) {
             sqlQuery += ` AND (${filterConditions.join(' AND ')})`;
           }
+
+          // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
+          if (globalSearch && globalSearch.trim()) {
+            sqlQuery += `
+              AND EXISTS (
+                SELECT 1
+                FROM "Cell" gc
+                WHERE gc."rowId" = r.id
+                  AND LOWER(COALESCE(gc.value->>'text', '')) LIKE LOWER($${paramIndex})
+              )`;
+            queryParams.push(`%${globalSearch}%`);
+            paramIndex++;
+          }
           
           if (sortRules.length > 0) {
             sqlQuery += ` ORDER BY `;
@@ -415,27 +428,23 @@ export const tableRouter = createTRPCRouter({
           console.log('Executing SQL query:', sqlQuery);
           console.log('With parameters:', { queryParams });
 
-          const sortedRowIds = await ctx.db.$queryRawUnsafe<Array<{id: string}>>(
+          const sortedRowIds = await ctx.db.$queryRawUnsafe<Array<{ id: string }>>(
             sqlQuery,
             ...queryParams
           );
 
-          // Get the full row data for the sorted row IDs
           if (sortedRowIds.length > 0) {
-            const rowIds = sortedRowIds.map(row => row.id);
+            const rowIds = sortedRowIds.map(r => r.id);
+
             const rowsWithCells = await ctx.db.row.findMany({
               where: { id: { in: rowIds } },
-              include: {
-                cells: {
-                  include: {
-                    column: true,
-                  },
-                },
-              },
-            });
+              include: rowInclude,
+            }) as RowWithCells[];
 
-            // Maintain the order from the SQL query
-            rows = rowIds.map(id => rowsWithCells.find(row => row.id === id)!).filter(Boolean);
+            // Preserve SQL order
+            rows = rowIds
+              .map(id => rowsWithCells.find(r => r.id === id)!)
+              .filter(Boolean);
           } else {
             rows = [];
           }
@@ -515,6 +524,26 @@ export const tableRouter = createTRPCRouter({
               AND: filterConditions
             };
           }
+
+           // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
+          if (globalSearch && globalSearch.trim()) {
+            const existingAND =
+              Array.isArray(whereConditions.AND)
+                ? whereConditions.AND
+                : (whereConditions.AND ? [whereConditions.AND] : []);
+
+            whereConditions = {
+              ...whereConditions,
+              AND: [
+                ...existingAND,
+                {
+                  cells: {
+                    some: { value: { path: ['text'], string_contains: globalSearch } },
+                  },
+                },
+              ],
+            };
+ }
           
           // Limit fallback query to prevent timeout on large tables
           // Only fetch what we need for this page plus some buffer for sorting
@@ -522,17 +551,10 @@ export const tableRouter = createTRPCRouter({
           
           const allRows = await ctx.db.row.findMany({
             where: whereConditions,
-            include: {
-              cells: {
-                include: {
-                  column: true,
-                },
-              },
-            },
-            orderBy: { order: "asc" },
+            include: rowInclude,
+            orderBy: { order: 'asc' },
             take: maxFallbackRows,
-          });
-        
+          }) as RowWithCells[];
           // Sort rows based on sort rules
           const sortedRows = allRows.sort((a, b) => {
             for (const rule of sortRules) {
@@ -738,6 +760,7 @@ export const tableRouter = createTRPCRouter({
         if (filterConditions.length > 0) {
           sqlQuery += ` AND (${filterConditions.join(' AND ')})`;
         }
+        
         
         sqlQuery += `
           ORDER BY ${sortRules.length > 0 ? sortExpressions.map((expr, i) => `${expr} ${sortRules[i]!.direction.toUpperCase()} NULLS LAST`).join(', ') + ', r."order" ASC' : 'r."order" ASC'}, col."order" ASC`;

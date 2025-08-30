@@ -13,17 +13,17 @@ import { api } from "~/trpc/react";
 import { TableHeader } from "./TableHeader";
 import { MemoEditableCell } from "./EditableCell";
 import { RowNumberHeader } from "./RowNumberHeader";
-import { useVirtualizer, elementScroll, type VirtualizerOptions} from "@tanstack/react-virtual";
+import { useVirtualizer, type Virtualizer} from "@tanstack/react-virtual";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import Plus from "../../icons/Plus";
 import { CellContextMenu } from "../modals/CellContextMenu";
+import { MemoizedTableRow } from "./MemoizedTableRow";
 
 import type { Column, Cell, Row as _Record } from "@prisma/client";
 import {
   useReactTable,
   type ColumnDef,
   getCoreRowModel,
-  flexRender,
   createColumnHelper,
   type ColumnSizingState,
 } from "@tanstack/react-table";
@@ -38,6 +38,16 @@ import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 
 const PAGE_LIMIT = 200;
 
+const ROW_H = 32;
+const BELT_BEHIND = 8;   // viewports kept loaded above viewport (increased for smoother scrolling)
+const BELT_AHEAD  = 10;  // viewports kept loaded below viewport (increased for predictive loading)
+const MAX_WINDOW  = 250; // reduced from 500 for faster queries
+const SMALL_TABLE_THRESHOLD = 1000; // Tables smaller than this load all data, no sparse loading
+const OVERSCAN_MULTIPLIER = 8; // increased for better prefetching
+const LOADING_DEBOUNCE_MS = 25; // reduced from 100ms for faster response
+const PRIORITY_LOADING_DEBOUNCE_MS = 5; // immediate loading for visible skeleton rows
+
+
 type SearchResult = {
   type: 'field' | 'cell';
   id: string;
@@ -49,15 +59,15 @@ type SearchResult = {
 };
 
 type TableRow = {
-  id: string;
-  __cellIds: Record<string, string>; // Map column ID to cell ID
-  [key: string]: string | undefined | Record<string, string>;
-};
+    id: string;
+    __cellIds: Record<string, string>; // Map column ID to cell ID
+    [key: string]: string | undefined | Record<string, string>;
+  };
 
-const columnHelper = createColumnHelper<TableRow>();
+  const columnHelper = createColumnHelper<TableRow>();
 
-interface DataTableProps {
-  tableId: string;
+  interface DataTableProps {
+    tableId: string;
   hiddenColumns?: Set<string>;
   sortRules?: SortRule[];
   filterRules?: Array<{
@@ -102,21 +112,21 @@ export function DataTable({
 }: DataTableProps) {
   
   const [cells, setCells] = useState<Cell[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const EMPTY_CELL_MAP = useMemo(() => new Map<string, { id: string; value: any }>(), []);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [selectedCell, setSelectedCell] = useState<{rowId: string, columnId: string} | null>(null);
   const [navigatedCell, setNavigatedCell] = useState<{rowIndex: number, columnIndex: number} | null>(null);
   const editedCellValuesRef = useRef<Map<string, string>>(new Map());
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [updateTrigger, setUpdateTrigger] = useState(0);
+  // Removed updateTrigger state - using targeted memoization instead
   const [contextMenu, setContextMenu] = useState<{
     isOpen: boolean;
     position: { x: number; y: number };
     rowId: string;
   } | null>(null);
-  //eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [localRecordCount, setLocalRecordCount] = useState(0);
+  // Removed unused localRecordCount state
   const optimisticRowIdsRef = useRef<Set<string>>(new Set());
   const rowUiKeyRef = useRef<Map<string, string>>(new Map());
   const columnUiKeyRef = useRef<Map<string, string>>(new Map());
@@ -128,15 +138,22 @@ export function DataTable({
 
   const getRowUiKey = (rowId: string) => rowUiKeyRef.current.get(rowId) ?? rowId;
   const getColUiKey = (colId: string) => columnUiKeyRef.current.get(colId) ?? colId;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const stableCellKey = (rowId: string, colId: string) => `${getRowUiKey(rowId)}::${getColUiKey(colId)}`;
 
   const pendingSearchScrollRef = useRef<{ rowId: string; columnId?: string } | null>(null);
+
+  const lastScrollTargetRef = useRef<string | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   const cellRenderKey = (rowId: string, columnId: string) => {
     const rk = rowUiKeyRef.current.get(rowId) ?? rowId;
     const ck = columnUiKeyRef.current.get(columnId) ?? columnId;
     return `${rk}-${ck}`;
   };
+
+  const trpc = api.useUtils();
 
   //fresh snapshots:
   const recordsRef = useRef(records);
@@ -205,6 +222,8 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
   const hasActiveFilterOrSort =
   (sortRules?.length ?? 0) > 0 || (filterRules?.length ?? 0) > 0;
 
+  const hasActiveSearch = !!searchQuery && searchQuery.trim().length > 0;
+
   // Table metadata query 
   const {
     data: tableData,
@@ -219,25 +238,41 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
     }
   );
 
-  // Records query with infinite scrolling
+    const [uiRecordCount, setUiRecordCount] = useState<number>(tableData?._count?.rows ?? 0);
+
+  const cellsByRow = useMemo(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const byRow = new Map<string, Map<string, { id: string; value: any }>>();
+    for (const c of cells) {
+      let m = byRow.get(c.rowId);
+      if (!m) { m = new Map(); byRow.set(c.rowId, m); }
+      m.set(c.columnId, { id: c.id, value: c.value });
+    }
+    return byRow;
+  }, [cells]);
+  
+    useEffect(() => {
+  setUiRecordCount(tableData?._count?.rows ?? 0);
+}, [tableData?._count?.rows]);
+      // Records query with infinite data 
   const {
     data: tableRecords,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
     isFetching: isRecordsFetching,
     refetch: refetchRecords,
+    hasNextPage,
+    fetchNextPage,
   } = api.table.getTableData.useInfiniteQuery(
     {
       tableId: tableId,
       limit: PAGE_LIMIT,
-      sortRules: [],
+      sortRules,
       filterRules: filterRules,
+      globalSearch: searchQuery ?? "",
     },
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       refetchOnWindowFocus: false,
-      placeholderData: hasActiveFilterOrSort ? undefined : keepPreviousData,
+      placeholderData: (hasActiveFilterOrSort || hasActiveSearch) ? undefined : keepPreviousData,
     }
   );
 
@@ -271,16 +306,20 @@ useEffect(() => {
     const serverIds = new Set(serverRecords.map(r => r.id));
 
     //check if filter/sorts are active:
-    const hasActiveFilterOrSort = (filterRules?.length ?? 0) > 0 || (sortRules?.length ?? 0) > 0;
+    const hasActiveFilterOrSortOrSearch =
+  (filterRules?.length ?? 0) > 0 ||
+  (sortRules?.length ?? 0) > 0 ||
+  (searchQuery?.trim().length ?? 0) > 0;
 
-   const carry = hasActiveFilterOrSort
-    ? prev.filter(r => pendingRowIdsRef.current.has(r.id))
-    : prev.filter(r => r.tableId === tableId && !serverIds.has(r.id));
+   const carry = hasActiveFilterOrSortOrSearch
+  // when filtering/sorting/searching: ONLY keep optimistic rows we just created
+  ? prev.filter(r => pendingRowIdsRef.current.has(r.id))
+  // otherwise: keep previous non-duplicate local rows
+  : prev.filter(r => r.tableId === tableId && !serverIds.has(r.id));
 
     
     const next = [...carry, ...serverRecords];
 
-    
     //if no sorts are applied, restore original order
     if (!sortRules || sortRules.length === 0) {
       next.sort((a, b) => a.order - b.order);
@@ -370,13 +409,88 @@ useEffect(() => {
 
 const updateCellMutation = api.cell.update.useMutation();
   
+// Track pending cell creation to prevent duplicates
+const pendingCellCreation = useRef(new Set<string>());
+
+// Ensure cell exists for sparse data before editing
+const ensureCellExists = useCallback((rowId: string, columnId: string) => {
+  const cellKey = `${rowId}-${columnId}`;
+  const existingCell = cells.find(c => c.rowId === rowId && c.columnId === columnId);
+  
+  if (!existingCell && !pendingCellCreation.current.has(cellKey)) {
+    // Mark as pending to prevent duplicates
+    pendingCellCreation.current.add(cellKey);
+    
+    // Create a synthetic cell for immediate editing
+    // The actual database cell will be created by the upsert in cell.update
+    const syntheticCell = {
+      id: `synthetic-${cellKey}`,
+      rowId,
+      columnId,
+      value: { text: "" }
+    };
+    
+    setCells(prev => [...prev, syntheticCell]);
+    
+    // Remove from pending after a short delay
+    setTimeout(() => {
+      pendingCellCreation.current.delete(cellKey);
+    }, 1000);
+  }
+}, [cells, setCells]);
+
 const handleCellValueChange = useCallback((rowId: string, columnId: string, value: string) => {
-    const key = stableCellKey(rowId, columnId);
-    editedCellValuesRef.current.set(key, value);
-    //let Editable Cell handle debounced state
-    setUpdateTrigger(prev => prev + 1);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Ensure cell exists before editing (important for sparse data)
+  ensureCellExists(rowId, columnId);
+  
+  const key = stableCellKey(rowId, columnId);
+  editedCellValuesRef.current.set(key, value);
+  
+  // Check if any loading ranges affect this row
+  const record = recordsRef.current.find(r => r.id === rowId);
+  if (record && typeof record.order === 'number') {
+    let isInLoadingRange = false;
+    for (const rangeKey of loadingRangesRef.current) {
+      const parts = rangeKey.split('-');
+      if (parts.length === 2) {
+        const start = parseInt(parts[0]!, 10);
+        const end = parseInt(parts[1]!, 10);
+        if (record.order >= start && record.order <= end) {
+          isInLoadingRange = true;
+          break;
+        }
+      }
+    }
+    
+    if (isInLoadingRange) {
+      // Queue the update instead of processing immediately
+      const existingQueueIndex = cellUpdateQueueRef.current.findIndex(
+        update => update.rowId === rowId && update.columnId === columnId
+      );
+      
+      const queuedUpdate = {
+        rowId,
+        columnId,
+        value,
+        timestamp: Date.now()
+      };
+      
+      if (existingQueueIndex >= 0) {
+        // Update existing queue entry
+        cellUpdateQueueRef.current[existingQueueIndex] = queuedUpdate;
+      } else {
+        // Add new queue entry
+        cellUpdateQueueRef.current.push(queuedUpdate);
+      }
+      
+      console.log(`⏳ Queued cell update for loading range: row ${rowId}, column ${columnId}`);
+      return;
+    }
+  }
+  
+  // Removed setUpdateTrigger to improve performance - memoized rows will handle updates
+  // setUpdateTrigger(prev => prev + 1);
+}, [ensureCellExists, stableCellKey]);
 
   // Updated rowData to handle missing cells gracefully
 const rowData = useMemo(() => {
@@ -427,6 +541,7 @@ const rowData = useMemo(() => {
   });
 
   return Object.values(map);
+// Removed updateTrigger dependency for better performance
 // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [records, cells, columns]);
 
@@ -646,7 +761,7 @@ const sortedData = useMemo(() => {
       void flushColumn(tempColId);
     }
 
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
 
     } catch (error) {
       // Column creation failed - optimistic update will be reverted by server state
@@ -665,7 +780,8 @@ const sortedData = useMemo(() => {
         : -1) + 1; // next after highest loaded
 
     // also offset by how many optimistic rows you’ve added but not confirmed yet
-    return Math.max(serverTotal, maxLoadedOrder) + pendingRowIdsRef.current.size;
+    const optimistic = pendingRowIdsRef.current.size;
+    return Math.max(serverTotal, maxLoadedOrder) + optimistic;
   };
     
 
@@ -687,8 +803,9 @@ const sortedData = useMemo(() => {
       }) //add temp row to local state to display immediately
 
        if (onRecordCountChange) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
-        onRecordCountChange(base + 1);
+        setUiRecordCount(c => c + 1);
       }
       
       optimisticRowIdsRef.current.add(tempRowId);
@@ -705,10 +822,15 @@ const sortedData = useMemo(() => {
     //but then , if i want the cells to actually be saved, we need a real record
     //so what if I just create a record and does not invalidate?
     try{
-      await createRowMutation.mutateAsync({
+      const created = await createRowMutation.mutateAsync({
         id: tempRowId,
         tableId: tableId, 
       });
+      setRecords(curr =>
+        curr
+          .map(r => (r.id === tempRowId ? { ...r, order: created.order } : r))
+          .sort((a,b) => a.order - b.order)
+      );
     } catch (error) {
       console.error("Failed to create row:", error);
     
@@ -717,6 +839,7 @@ const sortedData = useMemo(() => {
       setCells(old => old.filter(c => c.rowId !== tempRowId));
       
       if (onRecordCountChange) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
         onRecordCountChange(base); // rollback to baseline
       }
@@ -726,7 +849,7 @@ const sortedData = useMemo(() => {
         pendingRowIdsRef.current.delete(tempRowId);
         void flushRow(tempRowId);
       }
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
       //eslint-disable-next-line react-hooks/exhaustive-deps
     }, [records.length, columns, tableId]);
 
@@ -772,8 +895,9 @@ const sortedData = useMemo(() => {
       });
 
       if (onRecordCountChange) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
-        onRecordCountChange(base + 1);
+        setUiRecordCount(c => c + 1);;
       }
 
       // Create cells for new row
@@ -799,7 +923,7 @@ const sortedData = useMemo(() => {
     };
       
 
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
     } catch (error) {
       console.error('Failed to insert row above:', error);
       // Revert optimistic update on error
@@ -839,8 +963,9 @@ const sortedData = useMemo(() => {
     });
 
       if (onRecordCountChange) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
-        onRecordCountChange(base + 1);
+        setUiRecordCount(c => c + 1);
       }
       // Create cells for new row
       const newCells = columns.map(col => ({
@@ -864,7 +989,7 @@ const sortedData = useMemo(() => {
         void flushRow(tempRowId);
     };
 
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
     } catch (error) {
       console.error('Failed to insert row below:', error);
       await refetch();
@@ -886,8 +1011,9 @@ const sortedData = useMemo(() => {
       setRecords(updatedRecords);
 
        if (onRecordCountChange) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const base = (tableData?._count?.rows ?? recordsRef.current.length + 1); // +1 to mirror the just-deleted row in local buffer
-        onRecordCountChange(Math.max(0, base - 1));
+        setUiRecordCount(c => Math.max(0, c - 1));
       }
 
       // Remove cells for deleted row
@@ -899,7 +1025,7 @@ const sortedData = useMemo(() => {
         rowId: rowId
       });
 
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
     } catch (error) {
       console.error('Failed to delete row:', error);
       await refetch();
@@ -920,7 +1046,7 @@ const sortedData = useMemo(() => {
         name: newName
       });
 
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
     } catch (error) {
       console.error('Failed to rename column:', error);
       await refetch();
@@ -942,7 +1068,7 @@ const sortedData = useMemo(() => {
       });
       
 
-      setUpdateTrigger(prev => prev + 1);
+      // Removed setUpdateTrigger for performance - memoized components handle updates
     } catch (error) {
       console.error('Failed to delete column:', error);
       await refetch();
@@ -965,14 +1091,61 @@ const sortedData = useMemo(() => {
     setShowAddColumnModal(false);
   }, []);
 
-
-
-  // Update record count callback - use total count from tableData instead of paginated records
   useEffect(() => {
-    if (onRecordCountChange && tableData?._count?.rows !== undefined) {
-      onRecordCountChange(tableData._count.rows);
+    setUiRecordCount(tableData?._count?.rows ?? 0);
+  }, [tableData?._count?.rows]);
+
+  useEffect(() => {
+  onRecordCountChange?.(uiRecordCount);
+}, [uiRecordCount, onRecordCountChange]);
+
+
+  useEffect(() => {
+  const flushAllEdits = async () => {
+    const work: Promise<unknown>[] = [];
+    for (const [key, value] of editedCellValuesRef.current.entries()) {
+      const [rk, ck] = key.split("::");
+      // resolve back to real ids via your ui-key maps
+      const rowId = [...recordsRef.current].find(r => (rowUiKeyRef.current.get(r.id) ?? r.id) === rk)?.id;
+      const colId = [...columnsRef.current].find(c => (columnUiKeyRef.current.get(c.id) ?? c.id) === ck)?.id;
+      if (!rowId || !colId) continue;
+      if (pendingRowIdsRef.current.has(rowId)) continue;
+      if (pendingColumnIdsRef.current.has(colId)) continue;
+
+      work.push(updateCellMutation.mutateAsync({
+        rowId, columnId: colId, value: { text: value }
+      }));
     }
-  }, [tableData?._count?.rows, onRecordCountChange]);
+    await Promise.allSettled(work);
+  };
+
+  const onHide = () => { void flushAllEdits(); };
+  const onPageHide = () => { void flushAllEdits(); };
+  const onBeforeUnload = () => { void flushAllEdits(); };
+
+  document.addEventListener('visibilitychange', onHide);
+  window.addEventListener('pagehide', onPageHide);
+  window.addEventListener('beforeunload', onBeforeUnload);
+
+  // Periodic cleanup of stale queued updates
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    const staleThreshold = 30000; // 30 seconds
+    cellUpdateQueueRef.current = cellUpdateQueueRef.current.filter(
+      update => (now - update.timestamp) < staleThreshold
+    );
+  }, 10000); // Clean up every 10 seconds
+
+  return () => {
+    document.removeEventListener('visibilitychange', onHide);
+    window.removeEventListener('pagehide', onPageHide);
+    window.removeEventListener('beforeunload', onBeforeUnload);
+    clearInterval(cleanupInterval);
+  };
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+  
 
   // Helper function for optimistic record count updates during bulk operations
   const updateRecordCountOptimistically = useCallback((additionalRows: number) => {
@@ -992,12 +1165,36 @@ const sortedData = useMemo(() => {
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
+  const windowForViewport = () => {
+  const h = tableContainerRef.current?.clientHeight ?? 600;
+  const vh = Math.ceil(h / ROW_H);
+  return Math.min(MAX_WINDOW, vh * OVERSCAN_MULTIPLIER); // e.g., 5*25 = 125 rows
+};
+
+
 
   /////////////////////////////////////////////////
             //SEARCH LOGIC HANDLING//
   ////////////////////////////////////////////////
 
-  
+const matchedRowIds = useMemo(() => {
+  if (!hasActiveSearch || !searchResults?.length) return null;
+  const s = new Set<string>();
+  for (const r of searchResults) {
+    if (r.type === 'cell' && r.rowId) s.add(r.rowId);
+  }
+  return s;
+}, [hasActiveSearch, searchResults]);
+
+// Only show rows that matched when searching
+const visibleRecords = useMemo(() => {
+  if (!matchedRowIds) return records;
+  return records.filter(r => matchedRowIds.has(r.id));
+}, [records, matchedRowIds]);
+
+  useEffect(() => {
+  setSearchQuery(searchValue ?? "");
+}, [searchValue]);
 
   // Calculate search match information
   const searchMatchInfo = useMemo(() => {
@@ -1035,15 +1232,17 @@ const sortedData = useMemo(() => {
   const navigationBounds = useMemo(() => {
     const visibleColumnCount = columns.filter(column => !hiddenColumns.has(column.id)).length;
     return {
-      maxRowIndex: records.length - 1,
+      maxRowIndex: visibleRecords.length - 1,
       maxColumnIndex: Math.max(0, visibleColumnCount - 1)
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [columns, records.length, hiddenColumns]);
+  
 
   // Handle cell selection (click)
   const handleCellSelection = useCallback((rowId: string, columnId: string) => {
     // Convert rowId/columnId back to indices for navigation consistency
-    const rowIndex = records.findIndex(record => record.id === rowId);
+    const rowIndex = visibleRecords.findIndex(record => record.id === rowId);
     const visibleColumns = columns
       .filter(col => !hiddenColumns.has(col.id))
       .sort((a, b) => a.order - b.order);
@@ -1062,6 +1261,7 @@ const sortedData = useMemo(() => {
       selectedRowId: rowId,
       selectedColumnId: columnId,
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records, columns, hiddenColumns]);
 
   // Handle cell deselection
@@ -1256,7 +1456,7 @@ const sortedData = useMemo(() => {
 
 
   // Transform the data structure into a format that TanStack Table can use
-  const { columns: allColumns, data } = useMemo(() => {
+  const { columns: allColumns } = useMemo(() => {
     // Create row number column
     const rowNumberColumn: ColumnDef<TableRow, string | undefined> = columnHelper.accessor('__rowNumber', {
       id: '__rowNumber',
@@ -1280,6 +1480,9 @@ const sortedData = useMemo(() => {
         const rowId = info.row.original.id;
         const isHovered = hoveredRowIndex === rowIndex;
         const isSelected = selectedRows.has(rowId);
+
+        const rec = recordsRef.current.find(r => r.id === rowId);
+        const absoluteIndex = typeof rec?.order === 'number' ? rec.order + 1 : rowIndex + 1;
         
         return (
           <div 
@@ -1303,7 +1506,7 @@ const sortedData = useMemo(() => {
                 }}
               />
             ) : (
-              <span className="text-center">{rowIndex + 1}</span>
+              <span className="text-center">{absoluteIndex}</span>
             )}
           </div>
         );
@@ -1369,7 +1572,6 @@ const sortedData = useMemo(() => {
 
     return {
       columns: allColumns,
-      data: filteredData, //uses this so that it merges record and cells in render time, whereas if separate, cells get rendered after.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records, cells, columns, selectedRows, hoveredRowIndex, hiddenColumns, searchMatchInfo, sortRules, filterRules]);
@@ -1390,14 +1592,248 @@ const sortedData = useMemo(() => {
     autoResetExpanded: false,
   });
 
+  const visibleColumnIds = columns
+  .filter(c => !hiddenColumns.has(c.id))
+  .map(c => c.id);
 
+const upsertRecords = useCallback((incoming: Array<{ id: string; order: number }>) => {
+  if (!incoming?.length) return;
+  
+  // Progressive rendering: update records in batches for smoother UI
+  const batchSize = 50;
+  const batches: Array<Array<{ id: string; order: number }>> = [];
+  for (let i = 0; i < incoming.length; i += batchSize) {
+    batches.push(incoming.slice(i, i + batchSize));
+  }
+  
+  const processBatch = (batchIndex: number) => {
+    if (batchIndex >= batches.length) return;
+    
+    const batch = batches[batchIndex]!;
+    setRecords(prev => {
+      const byId = new Map(prev.map(r => [r.id, r]));
+      for (const r of batch) {
+        byId.set(r.id, { ...(byId.get(r.id) ?? { tableId }), ...r });
+      }
+      const next = Array.from(byId.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      recordsRef.current = next;
+      return next;
+    });
+    
+    // Process next batch in next frame for smooth rendering
+    if (batchIndex < batches.length - 1) {
+      requestAnimationFrame(() => processBatch(batchIndex + 1));
+    }
+  };
+  
+  // Start processing from first batch
+  processBatch(0);
+}, [setRecords, tableId]);
+
+
+const upsertCells = useCallback(
+  (incoming: Array<{ rowId: string; columnId: string; value: unknown; id?: string }>) => {
+    if (!incoming?.length) return;
+
+    // Progressive cell updates for smoother rendering
+    const batchSize = 100;
+    const batches: Array<Array<{ rowId: string; columnId: string; value: unknown; id?: string }>> = [];
+    for (let i = 0; i < incoming.length; i += batchSize) {
+      batches.push(incoming.slice(i, i + batchSize));
+    }
+    
+    const processCellBatch = (batchIndex: number) => {
+      if (batchIndex >= batches.length) return;
+      
+      const batch = batches[batchIndex]!;
+      setCells(prev => {
+        // key builder for existing cells
+        const key = (c: { rowId: string; columnId: string }) => `${c.rowId}-${c.columnId}`;
+        const byKey = new Map(prev.map(c => [key(c), c]));
+
+        for (const c of batch) {
+          const k = key(c);
+          const existing = byKey.get(k);
+          
+          // Use provided ID from server, existing ID, or create synthetic ID
+          const cellId = c.id ?? existing?.id ?? `synthetic-${c.rowId}-${c.columnId}`;
+
+          byKey.set(k, {
+            id: cellId,
+            rowId: c.rowId,
+            columnId: c.columnId,
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
+            value: c.value as any
+          });
+        }
+
+        return Array.from(byKey.values());
+      });
+      
+      // Process next batch in next frame for smooth rendering
+      if (batchIndex < batches.length - 1) {
+        requestAnimationFrame(() => processCellBatch(batchIndex + 1));
+      }
+    };
+    
+    // Start processing from first batch
+    processCellBatch(0);
+  },
+  [setCells]
+);
+
+const suppressRestoreRef = useRef(false);
+
+const loadEpochRef = useRef(0);
+
+// Track which row ranges are currently being loaded to prevent race conditions
+const loadingRangesRef = useRef<Set<string>>(new Set());
+
+// Queue for cell updates that occur during data loading
+const cellUpdateQueueRef = useRef<Array<{
+  rowId: string;
+  columnId: string;
+  value: string;
+  timestamp: number;
+}>>([]);
+
+// Scroll tracking for predictive loading
+const scrollTrackingRef = useRef({
+  lastScrollTop: 0,
+  lastScrollTime: Date.now(),
+  velocity: 0,
+  direction: 0, // 1 for down, -1 for up, 0 for no movement
+});
+
+
+const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: number, opts?: { restore?: boolean }) => {
+
+  const callEpoch = loadEpochRef.current;
+  const restore = opts?.restore ?? !suppressRestoreRef.current;
+  const total = tableData?._count?.rows ?? 0;
+  if (!total) return;
+
+  const s = Math.max(0, Math.min(startOrder, endOrder));
+  const e = Math.min(total - 1, Math.max(startOrder, endOrder));
+
+  // cap huge requests
+  if (e - s + 1 > MAX_WINDOW) {
+    return; // Skip overly large requests
+  }
+  
+  // Check if we already have this range loaded
+  const have = new Set(recordsRef.current.map(r => r.order ?? -1));
+  let needsLoading = false;
+  for (let i = s; i <= e; i++) { 
+    if (!have.has(i)) { 
+      needsLoading = true; 
+      break; 
+    } 
+  }
+  if (!needsLoading) return;
+
+  // Create a unique key for this loading range
+  const rangeKey = `${s}-${e}`;
+  
+  // Check if this range is already being loaded
+  if (loadingRangesRef.current.has(rangeKey)) {
+    return; // Skip if already loading this range
+  }
+  
+  // Mark this range as being loaded
+  loadingRangesRef.current.add(rangeKey);
+
+  // Preserve scroll position and anchor point for stability
+  const scrollContainer = tableContainerRef.current;
+  const scrollTop = scrollContainer?.scrollTop ?? 0;
+  const visibleItems = rowVirtualizer.getVirtualItems();
+  const anchorItem = visibleItems[0]; // Use first visible item as anchor
+
+  try {
+    // Load the requested range
+    const res = await trpc.row.listRowsWithCellsByOrderRange.fetch({
+      tableId,
+      startOrder: s,
+      endOrder: e,
+      columnIds: visibleColumnIds,
+    });
+
+    if (res?.rows?.length) {
+      upsertRecords(res.rows);
+    }
+    if (res?.cells?.length) {
+      upsertCells(res.cells);
+    }
+
+    // Process any queued cell updates for the loaded range
+    const now = Date.now();
+    const queuedUpdates = cellUpdateQueueRef.current.filter(update => {
+      // Find the record for this update in the loaded range
+      const record = res?.rows?.find(r => r.id === update.rowId);
+      return record && record.order >= s && record.order <= e && (now - update.timestamp) < 5000; // Only process recent updates
+    });
+
+    // Remove processed updates from queue
+    cellUpdateQueueRef.current = cellUpdateQueueRef.current.filter(update => 
+      !queuedUpdates.some(queued => queued.rowId === update.rowId && queued.columnId === update.columnId)
+    );
+
+    // Process queued updates
+    for (const update of queuedUpdates) {
+      try {
+        await updateCellMutation.mutateAsync({
+          rowId: update.rowId,
+          columnId: update.columnId,
+          value: { text: update.value }
+        });
+        console.log(`✅ Processed queued cell update for row ${update.rowId}, column ${update.columnId}`);
+      } catch (error) {
+        console.error(`❌ Failed to process queued cell update:`, error);
+      }
+    }
+
+    if (!restore) return;
+
+    // Restore scroll position with improved stability
+    requestAnimationFrame(() => {
+       if (!restore) return;
+      if (callEpoch !== loadEpochRef.current) return; // <-- skip stale restore
+
+      if (scrollContainer) {
+        const currentScrollTop = scrollContainer.scrollTop;
+        const scrollDelta = Math.abs(currentScrollTop - scrollTop);
+        
+        // Only restore scroll if it changed significantly (avoid minor adjustments)
+        if (scrollDelta > 10) {
+          scrollContainer.scrollTop = scrollTop;
+          
+          // If we have an anchor item, try to maintain its relative position
+          if (anchorItem) {
+            const newVisibleItems = rowVirtualizer.getVirtualItems();
+            const newAnchorItem = newVisibleItems.find(item => item.index === anchorItem.index);
+            if (newAnchorItem && Math.abs(newAnchorItem.start - anchorItem.start) > 5) {
+              const adjustment = anchorItem.start - newAnchorItem.start;
+              scrollContainer.scrollTop = scrollTop + adjustment;
+            }
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Failed to load data range:', error);
+  } finally {
+    // Clean up loading state
+    loadingRangesRef.current.delete(rangeKey);
+  }
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [trpc, tableId, tableData?._count?.rows, visibleColumnIds, upsertRecords, upsertCells, recordsRef, updateCellMutation]);
   
   // Data refetch when parameters change
   useEffect(() => {
     if (tableId) {
       void refetchRecords();
     }
-  }, [filterRules, searchValue, refetchRecords, tableId]);
+  }, [filterRules, sortRules, searchValue, refetchRecords, tableId]);
 
   // Handle clicking outside cells to deselect
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
@@ -1409,144 +1845,166 @@ const sortedData = useMemo(() => {
 
   // Handlers for table interaction
 
-  const { rows } = table.getRowModel();
+  // const { rows } = table.getRowModel(); // unused
 
-  const easeInOutQuint = (t: number) =>
-  t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * Math.pow(t - 1, 5)
-
-  const scrollingRef = React.useRef<number | null>(null);
-
+  // Determine if we should use listing mode (loads all data via infinite query) 
+  // vs sparse DB-ORDER mode (loads data on demand)
   const totalDbRows = tableData?._count?.rows ?? 0;
-  const optimisticAdds = pendingRowIdsRef.current.size;
+  const isSmallTable = totalDbRows <= SMALL_TABLE_THRESHOLD;
+  
+  const usingOrderListing = isSmallTable || // Small tables always use full data loading
+    (sortRules?.length ?? 0) > 0 ||
+    (filterRules?.length ?? 0) > 0 ||
+    hasActiveSearch;
 
-  const virtualRowCount = hasActiveFilterOrSort
-  ? rows.length
-  : Math.max(totalDbRows + optimisticAdds, rows.length);
+  // Calculate record counts (needed by recordsByOrder)
+  const localRecordCount = records.length;
+  const databaseRecordCount = Math.max(tableData?._count?.rows ?? 0, uiRecordCount);
+  
+  // For small tables using listing mode, use actual records count
+  // For large tables using sparse mode, use database count as virtual total
+  const totalRecordCount = usingOrderListing 
+    ? localRecordCount  // Use actual loaded records for small tables
+    : Math.max(localRecordCount, databaseRecordCount); // Use database count for sparse loading
 
-  const scrollToFn: VirtualizerOptions<any, any>['scrollToFn'] = React.useCallback(
-  (offset, canSmooth, instance) => {
-    const start = tableContainerRef.current?.scrollTop ?? 0
-    const distance = Math.abs(offset - start)
-
-    // Duration scaled by distance, clamped
-    const duration = Math.max(200, Math.min(1200, distance * 0.35))
-    const startTime = (scrollingRef.current = Date.now())
-
-    const step = () => {
-      // if another scroll kicked off, stop this one
-      if (scrollingRef.current !== startTime) return
-
-      const elapsed = Date.now() - startTime
-      const t = Math.min(1, elapsed / duration)
-      const y = start + (offset - start) * easeInOutQuint(t)
-
-      elementScroll(y, canSmooth, instance)
-
-      if (t < 1) requestAnimationFrame(step)
+  // Create sparse record lookup: virtual index (db order) -> loaded record
+  const recordsByOrder = useMemo(() => {
+  const m = new Map<number, _Record>();
+  let missingOrderCount = 0;
+  
+  // First pass: map records with valid orders
+  for (const r of records) {
+    if (typeof r.order === 'number') {
+      m.set(r.order, r);
+    } else {
+      missingOrderCount++;
     }
-
-    requestAnimationFrame(step)
-  },
-  []
-)
-
-const ensureLoadLockRef = React.useRef(false)
-
-const ensureRangeLoaded = React.useCallback(
-  async (endIndex: number) => {
-    // prevent concurrent loops
-    if (ensureLoadLockRef.current) return
-    ensureLoadLockRef.current = true
-    try {
-      // Load until we have rows through endIndex or we run out
-      while ((recordsRef.current.length - 1) < endIndex && hasNextPage) {
-        await fetchNextPage()
-      }
-    } finally {
-      ensureLoadLockRef.current = false
+  }
+  
+  // Second pass: map records without orders to the end
+  let nextAvailableIndex = totalRecordCount - missingOrderCount;
+  for (const r of records) {
+    if (typeof r.order !== 'number') {
+      m.set(nextAvailableIndex, r);
+      nextAvailableIndex++;
     }
-  },
-  [fetchNextPage, hasNextPage]
-)
+  }
+  
+  return m;
+}, [records, totalRecordCount]); 
+  
+
+  // For listing mode, use local records which include optimistic additions
+  const listedRows = useMemo(
+  () =>
+    usingOrderListing
+      ? (hasActiveSearch ? visibleRecords  // Search results from local records
+                         : records)        // Local records include optimistic additions
+      : [],
+  [usingOrderListing, hasActiveSearch, visibleRecords, records]
+);
+
+const scrollToFn = (
+  offset: number,
+  options: { behavior?: ScrollBehavior; adjustments?: number },
+  instance: Virtualizer<HTMLDivElement, Element>
+) => {
+  const el = instance.scrollElement as HTMLElement | Window | null;
+  if (!el) return;
+
+  const adjustments = options?.adjustments ?? 0;
+  // eslint-disable-next-line prefer-const
+  let behavior: ScrollBehavior = options?.behavior ?? 'auto';
+
+  
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if ('scrollTo' in (el as any)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+    (el as any).scrollTo({ top: offset + adjustments, behavior });
+  } else {
+    (el as HTMLElement).scrollTop = offset + adjustments;
+  }
+};
+
+useEffect(() => {
+  const target = scrollToRowId ?? null;
+  if (!target || lastScrollTargetRef.current === target) return;
+
+  // resolve the absolute order of the target row (fast path)
+  const rec = recordsRef.current.find(r => r.id === target);
+  if (!rec || typeof rec.order !== 'number') return;
+
+  const items = rowVirtualizer.getVirtualItems();
+  if (items.length) {
+    const first = items[0]!.index;
+    const last  = items[items.length - 1]!.index;
+    // If already visible, don't move the viewport
+    if (rec.order >= first && rec.order <= last) {
+      lastScrollTargetRef.current = target;
+      return;
+    }
+  }
+
+  lastScrollTargetRef.current = target;
+  void scrollToIndexLoaded(rec.order, 'center');
+  // NOTE: no other deps on purpose – we do not re-run due to data changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [scrollToRowId]);
+
+// rowCount calculation - now uses totalRecordCount consistently
+// const rowCount = usingOrderListing
+//   ? (listedRows.length + (hasNextPage ? 1 : 0)) // reserve one "loader" row
+//   : Math.max(totalRecordCount, 2);
 
 
   // Setup virtualizer for rows
+  const virtualizerCount = usingOrderListing
+    ? Math.max(listedRows.length + (hasNextPage ? 1 : 0), 2)
+    : Math.max(totalRecordCount, 2);
+    
   const rowVirtualizer = useVirtualizer({
-    count:  Math.max(virtualRowCount , 2),
+    count: virtualizerCount,
     estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
     getScrollElement: () => tableContainerRef.current,
-    overscan: 24, // Optimized for better performance and smoother scrolling
+    overscan: 30, // Increased overscan for smoother scrolling and fewer skeleton rows
     scrollToFn,
+    // Enable scroll margin for better performance
+    scrollMargin: 0,
   });
 
-  // Scroll to specific row when scrollToRowId changes
+  // Removed unused virtualItems variable
+
   useEffect(() => {
-    if (scrollToRowId) {
-      const rowIndex = data.findIndex(row => row.id === scrollToRowId);
-      if (rowIndex >= 0) {
-        rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
-      }
-    }
-  }, [scrollToRowId, data, rowVirtualizer]);
+  const total = tableData?._count?.rows ?? 0;
+  if (!total || records.length > 0) return; // Don't reload if data already exists
 
-  const virtualItems = rowVirtualizer.getVirtualItems();
+  // Only use sparse loading for large tables
+  // Small tables rely on infinite query to load all data
+  if (total > SMALL_TABLE_THRESHOLD) {
+    // Load initial chunk from the beginning for sparse virtual scrolling
+    const INITIAL_LOAD_SIZE = 500;
+    void ensureWindowLoaded(0, Math.min(total - 1, INITIAL_LOAD_SIZE - 1), {restore: false});
+  }
+  // Small tables will be loaded automatically via the infinite query system
+}, [tableData?._count?.rows, ensureWindowLoaded, records.length]);
 
-useEffect(() => {
-  if (!virtualItems.length) return;
-   const lastItem = virtualItems[virtualItems.length - 1]
-  if (!lastItem) return
 
-  const lastVisible = lastItem.index
-  const buffer = 30
-  void ensureRangeLoaded(lastVisible + buffer)
-}, [virtualItems, ensureRangeLoaded])
+ const ensureLoadedAndScrollTo = useCallback(async (rowId: string, rowOrder?: number, columnId?: string) => {
+  const rec = recordsRef.current.find(r => r.id === rowId);
+  const absolute = typeof rowOrder === 'number' ? rowOrder : rec?.order;
 
-  //scroll to the navigated search index: 
-  const ensureLoadedAndScrollTo = useCallback(
-  async (rowId: string, rowOrder?: number, columnId?: string) => {
-    // 1) If row is already in memory, scroll now
-    let idx = recordsRef.current.findIndex(r => r.id === rowId);
-    if (idx >= 0) {
-      rowVirtualizer.scrollToIndex(idx, { align: 'center' });
-      // Give the virtualizer a beat to render, then focus the exact cell
-      requestAnimationFrame(() => {
-        const el = tableContainerRef.current?.querySelector<HTMLInputElement>(
-          `[data-cell-id="${rowId}-${columnId ?? ''}"]`
-        );
-        // First bring cell into view horizontally (if needed), then focus without re-scrolling
-        el?.scrollIntoView({ block: 'center', inline: 'center' });
-        el?.focus({ preventScroll: true });
-      });
-      return;
-    }
-
-    // 2) Not loaded yet: use rowOrder to fetch enough pages
-    if (typeof rowOrder === 'number') {
-      const needCount = rowOrder + 1; // 0-based rowOrder
-      let loaded = recordsRef.current.length;
-
-      // Fetch pages until we have at least `needCount` rows or run out of pages
-      while (loaded < needCount && hasNextPage) {
-        await fetchNextPage();
-        loaded = recordsRef.current.length;
-      }
-
-      // Try again after loading
-      idx = recordsRef.current.findIndex(r => r.id === rowId);
-      if (idx >= 0) {
-        rowVirtualizer.scrollToIndex(idx, { align: 'center' });
-        requestAnimationFrame(() => {
-          const el = tableContainerRef.current?.querySelector<HTMLInputElement>(
-            `[data-cell-id="${rowId}-${columnId ?? ''}"]`
-          );
-          el?.scrollIntoView({ block: 'center', inline: 'center' });
-          el?.focus({ preventScroll: true });
-        });
-      }
-    }
-  },
-  [fetchNextPage, hasNextPage, rowVirtualizer]
-);
+  if (typeof absolute === 'number') {
+    // if not loaded, prefetch a band around it without restoring
+    await ensureWindowLoaded(absolute - 200, absolute + 200, { restore: false });
+    rowVirtualizer.scrollToIndex(absolute, { align: 'center' });
+    requestAnimationFrame(() => {
+      const el = tableContainerRef.current?.querySelector<HTMLInputElement>(`[data-cell-id="${rowId}-${columnId ?? ''}"]`);
+      el?.scrollIntoView({ block: 'center', inline: 'center' });
+      el?.focus({ preventScroll: true });
+    });
+  }
+}, [ensureWindowLoaded, rowVirtualizer]);
 
 useEffect(() => {
   const result = searchResults[currentSearchIndex];
@@ -1557,14 +2015,173 @@ useEffect(() => {
 }, [currentSearchIndex, searchResults, ensureLoadedAndScrollTo]);
 
 
-  const handleScroll = useCallback(() => {
-    const items = rowVirtualizer.getVirtualItems()
-    const lastItem = items.at?.(-1) ?? (items.length ? items[items.length - 1] : undefined)
-    if (!lastItem) return
 
-    const buffer = 60
-    void ensureRangeLoaded(lastItem.index + buffer)
-  }, [rowVirtualizer, ensureRangeLoaded])
+  // Dynamic loading based on skeleton rows in viewport
+  const handleScroll = useCallback(() => {
+    if (suppressRestoreRef.current) return;
+    
+    // Update scroll tracking for predictive loading
+    const scrollContainer = tableContainerRef.current;
+    if (scrollContainer) {
+      const currentScrollTop = scrollContainer.scrollTop;
+      const currentTime = Date.now();
+      const scrollDelta = currentScrollTop - scrollTrackingRef.current.lastScrollTop;
+      const timeDelta = currentTime - scrollTrackingRef.current.lastScrollTime;
+      
+      if (timeDelta > 0) {
+        const velocity = scrollDelta / timeDelta; // pixels per millisecond
+        scrollTrackingRef.current.velocity = velocity;
+        scrollTrackingRef.current.direction = scrollDelta > 0 ? 1 : scrollDelta < 0 ? -1 : 0;
+        scrollTrackingRef.current.lastScrollTop = currentScrollTop;
+        scrollTrackingRef.current.lastScrollTime = currentTime;
+      }
+    }
+    
+    // LISTING MODE: load more pages near the end
+  if (usingOrderListing) {
+    const items = rowVirtualizer.getVirtualItems();
+    if (!items.length) return;
+    const last = items[items.length - 1]!.index;
+
+    // if near the end of what we have, ask for next page
+    if (hasNextPage && !isRecordsFetching && last >= listedRows.length - 100) {
+      void fetchNextPage();
+    }
+    return;
+  }
+
+  // DB-ORDER MODE: find unloaded ranges and window-load by order
+  const items = rowVirtualizer.getVirtualItems();
+  if (!items.length || !totalRecordCount) return;
+
+  const unloadedRanges: Array<{start: number, end: number}> = [];
+  let rangeStart: number | null = null;
+
+  for (const item of items) {
+    const dbOrder = item.index;
+    const isLoaded = recordsByOrder.has(dbOrder);
+    if (!isLoaded && rangeStart === null) rangeStart = dbOrder;
+    if ((isLoaded || item === items[items.length - 1]) && rangeStart !== null) {
+      const end = isLoaded ? dbOrder - 1 : dbOrder;
+      unloadedRanges.push({ start: rangeStart, end });
+      rangeStart = null;
+    }
+  }
+
+  const W = windowForViewport();
+  const half = Math.floor(W / 2);
+
+  // Calculate predictive loading expansion based on scroll velocity
+  const { velocity, direction } = scrollTrackingRef.current;
+  const isScrollingFast = Math.abs(velocity) > 0.5; // pixels per ms threshold for fast scrolling
+  const predictiveMultiplier = isScrollingFast ? 2 : 1; // load more aggressively when scrolling fast
+  
+  // Prioritize loading: viewport ranges first, then extended ranges
+  const viewportRanges: Array<{start: number, end: number, priority: 'viewport' | 'extended'}> = [];
+  const extendedRanges: Array<{start: number, end: number, priority: 'viewport' | 'extended'}> = [];
+  
+  unloadedRanges.forEach(({ start, end }) => {
+    // Check if this range intersects with the current viewport
+    const firstVisible = items[0]!.index;
+    const lastVisible = items[items.length - 1]!.index;
+    const isViewportRange = !(end < firstVisible || start > lastVisible);
+    
+    if (isViewportRange) {
+      // Priority loading for visible skeleton rows
+      viewportRanges.push({ start, end, priority: 'viewport' });
+    }
+    
+    // Extended range for predictive loading
+    let expandedStart = Math.max(0, start - half * predictiveMultiplier);
+    let expandedEnd = Math.min(totalRecordCount - 1, end + half * predictiveMultiplier);
+    
+    // Bias expansion in scroll direction for predictive loading
+    if (isScrollingFast && direction !== 0) {
+      const extraExpansion = Math.floor(W * 0.5); // extra half window in scroll direction
+      if (direction > 0) { // scrolling down
+        expandedEnd = Math.min(totalRecordCount - 1, expandedEnd + extraExpansion);
+      } else { // scrolling up
+        expandedStart = Math.max(0, expandedStart - extraExpansion);
+      }
+    }
+    
+    // Only add to extended if it's different from the original range
+    if (expandedStart < start || expandedEnd > end) {
+      extendedRanges.push({ start: expandedStart, end: expandedEnd, priority: 'extended' });
+    }
+  });
+  
+  // Load viewport ranges immediately
+  viewportRanges.forEach(({ start, end }) => {
+    void ensureWindowLoaded(start, end, { restore: false });
+  });
+  
+  // Load extended ranges with slight delay to prioritize viewport
+  if (extendedRanges.length > 0) {
+    setTimeout(() => {
+      extendedRanges.forEach(({ start, end }) => {
+        void ensureWindowLoaded(start, end, { restore: false });
+      });
+    }, isScrollingFast ? 10 : 50); // shorter delay when scrolling fast
+  }
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [
+  usingOrderListing,
+  rowVirtualizer,
+  totalDbRows,
+  recordsByOrder,
+  ensureWindowLoaded,
+  listedRows.length,
+  hasNextPage,
+  isRecordsFetching,
+  fetchNextPage,
+]);
+  
+  // Removed timeout cleanup as we simplified scroll handling
+
+
+// Monitor viewport for skeleton rows and trigger loading
+useEffect(() => {
+  const items = rowVirtualizer.getVirtualItems();
+  if (!items.length) return;
+  
+  // Check if there are visible skeleton rows (priority loading)
+  let hasVisibleSkeletons = false;
+  if (!usingOrderListing) {
+    for (const item of items) {
+      const record = recordsByOrder.get(item.index);
+      if (!record) {
+        hasVisibleSkeletons = true;
+        break;
+      }
+    }
+  }
+  
+  // Use shorter debounce for visible skeletons, longer for predictive loading
+  const debounceMs = hasVisibleSkeletons ? PRIORITY_LOADING_DEBOUNCE_MS : LOADING_DEBOUNCE_MS;
+  
+  const timeoutId = setTimeout(() => {
+    handleScroll();
+  }, debounceMs);
+  
+  return () => clearTimeout(timeoutId);
+// eslint-disable-next-line react-hooks/exhaustive-deps
+}, [rowVirtualizer.getVirtualItems(), handleScroll, usingOrderListing, recordsByOrder]);
+
+const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'center'|'end'='center') => {
+  suppressRestoreRef.current = true;
+  try {
+    rowVirtualizer.scrollToIndex(index, { align });
+    await new Promise(requestAnimationFrame); // <-- add this line
+    const el = tableContainerRef.current;
+    const vh = Math.ceil((el?.clientHeight ?? 600) / ROW_H);
+    await ensureWindowLoaded(index - vh * BELT_BEHIND, index + vh * BELT_AHEAD, { restore: false });
+  } finally {
+    suppressRestoreRef.current = false;
+  }
+}, [rowVirtualizer, ensureWindowLoaded]);
+
+
 
 
 
@@ -1643,65 +2260,140 @@ useEffect(() => {
             }}
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const row = rows[virtualRow.index];
-              
-              const isPlaceholder = !row;
-
-              const stableRowKey = isPlaceholder
-                ? `__placeholder__${virtualRow.index}`
-                : (rowUiKeyRef.current.get(row.original.id) ?? row.original.id)
-                          
+              // Virtual index directly maps to database row order
+              const idx = virtualRow.index;
               const flatCols = table.getVisibleFlatColumns();
 
+              // LISTING MODE: take row by ranked index (already filtered/sorted by server)
+              if (usingOrderListing) {
+                const record = listedRows[idx];
+
+                // Show a slim loader row for the reserved "load more" slot
+                if (!record) {
+                  return (
+                    <tr
+                      key={`loader-${idx}`}
+                      data-index={idx}
+                      style={{
+                        position: 'absolute',
+                        transform: `translate3d(0, ${virtualRow.start}px, 0)`,
+                        height: `${virtualRow.size}px`,
+                        display: 'flex',
+                        width: table.getCenterTotalSize(),
+                      }}
+                      className="bg-white"
+                    >
+                      <td className="px-2 py-1 text-sm text-gray-500">
+                        Loading…
+                      </td>
+                    </tr>
+                  );
+                }
+
+                
+                // Render a real row (use listing index for the row-number column)
+                return (
+                  <MemoizedTableRow
+                    key={`row-${idx}-${record.id}`}
+                    virtualRow={virtualRow}
+                    dbOrder={typeof record.order === 'number' ? record.order : idx}                           // display index in listing
+                    record={record}
+                    rowCells={cellsByRow.get(record.id) ?? EMPTY_CELL_MAP}
+                    cells={cells}
+                    columns={columns}
+                    flatCols={flatCols}
+                    table={table}
+                    tableId={tableId}
+                    cellRenderKey={cellRenderKey}
+                    handleCellSelection={handleCellSelection}
+                    handleCellDeselection={handleCellDeselection}
+                    handleContextMenuClick={handleContextMenuClick}
+                    handleCellValueChange={handleCellValueChange}
+                    sortRules={sortRules}
+                    filterRules={filterRules}
+                    searchMatchInfo={searchMatchInfo}
+                    pendingRowIdsRef={pendingRowIdsRef}
+                    pendingColumnIdsRef={pendingColumnIdsRef}
+                    rowUiKeyRef={rowUiKeyRef}
+                    columnUiKeyRef={columnUiKeyRef}
+                  />
+                );
+              }
+
+              // DB-ORDER MODE: resolve by sparse order→record map
+              const dbOrder = idx;
+              const record = recordsByOrder.get(dbOrder);
+            
+              if (!record) {
+                // For small tables, don't render skeleton rows - they should have all data loaded
+                if (isSmallTable) {
+                  console.warn(`Small table missing record at index ${dbOrder}, skipping skeleton row`);
+                  return null; // Don't render anything for missing records in small tables
+                }
+                
+                // Render skeleton for unloaded data (large tables only)
+                const stableRowKey = `skeleton-${dbOrder}`;
+                return (
+                  <tr
+                    key={stableRowKey}
+                    data-index={virtualRow.index}
+                    style={{
+                      position: 'absolute',
+                      transform: `translate3d(0, ${virtualRow.start}px, 0)`,
+                      height: `${virtualRow.size}px`,
+                      display: 'flex',
+                      willChange: 'transform',
+                    }}
+                    className="group bg-white hover:bg-[#f8f8f8]"
+                  >
+                    {flatCols.map((col) => {
+                      const isRowNumber = col.id === '__rowNumber';
+                      return (
+                        <td
+                          key={`skeleton-${stableRowKey}-${col.id}`}
+                          className="p-0 h-8 border-r border-b border-border-default relative"
+                          style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
+                        >
+                          {isRowNumber ? (
+                            <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">
+                              {dbOrder + 1}
+                            </div>
+                          ) : (
+                            <div className="mx-2 w-3/4 h-3 rounded animate-pulse bg-gray-200" />
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              }
+
+              // Render actual data using memoized component
               return (
-                <tr
-                  data-index={virtualRow.index}
-                  key={stableRowKey}
-                  className="group hover:bg-[#f8f8f8] bg-white"
-                  style={{
-                    display: 'flex',
-                    position: 'absolute',
-                    transform: `translate3d(0, ${virtualRow.start}px, 0)`,
-                    willChange: 'transform',
-                    width: table.getCenterTotalSize(),
-                    height: `${virtualRow.size}px`,
-                  }}
-                >
-                   {isPlaceholder
-    ? flatCols.map((col) => {
-        const isRowNumber = col.id === '__rowNumber'
-        return (
-          <td
-            key={`ph-${stableRowKey}-${col.id}`}
-            className="p-0 h-8 border-r border-b border-border-default relative"
-            style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
-          >
-            {isRowNumber ? (
-              // Always show the row index for the row-number column
-              <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">
-                {virtualRow.index + 1}
-              </div>
-            ) : (
-              // Skeleton only for data cells
-              <div className="mx-2 w-3/4 h-3 rounded animate-pulse bg-gray-200" />
-            )}
-          </td>
-        )
-      })
-    : (row!).getVisibleCells().map((cell) => {
-        const stableColKey = columnUiKeyRef.current.get(cell.column.id) ?? cell.column.id
-        const tdKey = `${stableRowKey}-${stableColKey}`
-        return (
-          <td
-            key={tdKey}
-            className="p-0 h-8 border-r border-b border-border-default relative"
-            style={{ display: 'flex', width: cell.column.getSize(), alignItems: 'center' }}
-          >
-            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-          </td>
-        )
-      })}
-                </tr>
+                <MemoizedTableRow
+                  key={`row-${dbOrder}-${record.id}`}
+                  virtualRow={virtualRow}
+                  dbOrder={dbOrder}
+                  record={record}
+                  rowCells={cellsByRow.get(record.id) ?? EMPTY_CELL_MAP}
+                  cells={cells}
+                  columns={columns}
+                  flatCols={flatCols}
+                  table={table}
+                  tableId={tableId}
+                  cellRenderKey={cellRenderKey}
+                  handleCellSelection={handleCellSelection}
+                  handleCellDeselection={handleCellDeselection}
+                  handleContextMenuClick={handleContextMenuClick}
+                  handleCellValueChange={handleCellValueChange}
+                  sortRules={sortRules}
+                  filterRules={filterRules}
+                  searchMatchInfo={searchMatchInfo}
+                  pendingRowIdsRef={pendingRowIdsRef}
+                  pendingColumnIdsRef={pendingColumnIdsRef}
+                  rowUiKeyRef={rowUiKeyRef}
+                  columnUiKeyRef={columnUiKeyRef}
+                />
               );
             })}
           </tbody>
