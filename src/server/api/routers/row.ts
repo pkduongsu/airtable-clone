@@ -356,7 +356,7 @@ export const rowRouter = createTRPCRouter({
         orderBy: { order: "asc" },
       });
       const rowIds = insertedRows.map(r => r.id);
-      let rowsInserted = rowIds.length;
+      const rowsInserted = rowIds.length;
 
       // FAST PATH: rows-only by default (no cells yet)
       if (!withCells || rowIds.length === 0) {
