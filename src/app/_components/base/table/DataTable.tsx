@@ -1663,24 +1663,44 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
 
   // Handlers for table interaction
 
-  const { rows } = table.getRowModel();
+  // const { rows } = table.getRowModel(); // unused
+
+  // Calculate record counts first (needed by recordsByOrder)
+  const localRecordCount = records.length;
+  const databaseRecordCount = tableData?._count?.rows ?? 0;
+  const totalRecordCount = Math.max(localRecordCount, databaseRecordCount);
 
   // Create sparse record lookup: virtual index (db order) -> loaded record
   const recordsByOrder = useMemo(() => {
   const m = new Map<number, _Record>();
-  let missing = 0;
+  let missingOrderCount = 0;
+  
+  // First pass: map records with valid orders
   for (const r of records) {
-    if (typeof r.order !== 'number') { missing++; continue; }
-    m.set(r.order, r);
+    if (typeof r.order === 'number') {
+      m.set(r.order, r);
+    } else {
+      missingOrderCount++;
+    }
   }
-  if (missing) console.warn(`[recordsByOrder] ${missing} records missing 'order'`);
+  
+  // Second pass: map records without orders to the end
+  let nextAvailableIndex = totalRecordCount - missingOrderCount;
+  for (const r of records) {
+    if (typeof r.order !== 'number') {
+      m.set(nextAvailableIndex, r);
+      nextAvailableIndex++;
+    }
+  }
+  
   return m;
-}, [records]);
+}, [records, totalRecordCount]);
 
-  const maxKnownOrder =
-  (recordsRef.current.length
-    ? Math.max(...recordsRef.current.map(r => r.order ?? -1))
-    : -1) + 1;
+  // maxKnownOrder is no longer used with the new totalRecordCount approach
+  // const maxKnownOrder =
+  //   (recordsRef.current.length
+  //     ? Math.max(...recordsRef.current.map(r => r.order ?? -1))
+  //     : -1) + 1;
 
   const usingOrderListing =  (sortRules?.length ?? 0) > 0 ||
   (filterRules?.length ?? 0) > 0 ||
@@ -1700,9 +1720,8 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
 
   // Use total database rows for full table scrolling with sparse loading
   const totalDbRows = tableData?._count?.rows ?? 0;
-  const virtualRowCount = usingOrderListing
-  ? listedRows.length + (hasNextPage ? 1 : 0)
-  : Math.max(tableData?._count?.rows ?? 0, maxKnownOrder);
+  // totalRecordCount is now calculated earlier to fix dependency issues
+  
   
 
 const scrollToFn = (
@@ -1750,14 +1769,19 @@ useEffect(() => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [scrollToRowId]);
 
-const rowCount = usingOrderListing
-  ? (listedRows.length + (hasNextPage ? 1 : 0)) // reserve one "loader" row
-  : Math.max(virtualRowCount, 2);
+// rowCount calculation - now uses totalRecordCount consistently
+// const rowCount = usingOrderListing
+//   ? (listedRows.length + (hasNextPage ? 1 : 0)) // reserve one "loader" row
+//   : Math.max(totalRecordCount, 2);
 
 
   // Setup virtualizer for rows
+  const virtualizerCount = usingOrderListing
+    ? Math.max(listedRows.length + (hasNextPage ? 1 : 0), 2)
+    : Math.max(totalRecordCount, 2);
+    
   const rowVirtualizer = useVirtualizer({
-    count: Math.max(virtualRowCount, 2),
+    count: virtualizerCount,
     estimateSize: () => 32, // Estimate row height (32px to match our h-8 class)
     getScrollElement: () => tableContainerRef.current,
     overscan: 30, // Increased overscan for smoother scrolling and fewer skeleton rows
@@ -1822,7 +1846,7 @@ useEffect(() => {
 
   // DB-ORDER MODE: find unloaded ranges and window-load by order
   const items = rowVirtualizer.getVirtualItems();
-  if (!items.length || !totalDbRows) return;
+  if (!items.length || !totalRecordCount) return;
 
   const unloadedRanges: Array<{start: number, end: number}> = [];
   let rangeStart: number | null = null;
@@ -1841,7 +1865,7 @@ useEffect(() => {
   unloadedRanges.forEach(({ start, end }) => {
     const BUFFER = 200;
     const expandedStart = Math.max(0, start - BUFFER);
-    const expandedEnd = Math.min(totalDbRows - 1, end + BUFFER);
+    const expandedEnd = Math.min(totalRecordCount - 1, end + BUFFER);
     if (expandedEnd - expandedStart < 2000) {
       void ensureWindowLoaded(expandedStart, expandedEnd, { restore: false });
     }
@@ -1970,12 +1994,11 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
               const idx = virtualRow.index;
               const flatCols = table.getVisibleFlatColumns();
 
-               // LISTING MODE: take row by ranked index (already filtered/sorted by server)
-                if (usingOrderListing) {
-                  const record = listedRows[idx];
+              // LISTING MODE: take row by ranked index (already filtered/sorted by server)
+              if (usingOrderListing) {
+                const record = listedRows[idx];
 
-
-                 // Show a slim loader row for the reserved "load more" slot
+                // Show a slim loader row for the reserved "load more" slot
                 if (!record) {
                   return (
                     <tr
@@ -1997,39 +2020,38 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                   );
                 }
 
-              // Render a real row (use listing index for the row-number column)
-              return (
-                <MemoizedTableRow
-                  key={`row-${idx}-${record.id}`}
-                  virtualRow={virtualRow}
-                  dbOrder={idx}                           // display index in listing
-                  record={record}
-                  cells={cells}
-                  columns={columns}
-                  flatCols={flatCols}
-                  table={table}
-                  tableId={tableId}
-                  cellRenderKey={cellRenderKey}
-                  handleCellSelection={handleCellSelection}
-                  handleCellDeselection={handleCellDeselection}
-                  handleContextMenuClick={handleContextMenuClick}
-                  handleCellValueChange={handleCellValueChange}
-                  sortRules={sortRules}
-                  filterRules={filterRules}
-                  searchMatchInfo={searchMatchInfo}
-                  pendingRowIdsRef={pendingRowIdsRef}
-                  pendingColumnIdsRef={pendingColumnIdsRef}
-                  rowUiKeyRef={rowUiKeyRef}
-                  columnUiKeyRef={columnUiKeyRef}
-                />
-              );
-            }
+                // Render a real row (use listing index for the row-number column)
+                return (
+                  <MemoizedTableRow
+                    key={`row-${idx}-${record.id}`}
+                    virtualRow={virtualRow}
+                    dbOrder={idx}                           // display index in listing
+                    record={record}
+                    cells={cells}
+                    columns={columns}
+                    flatCols={flatCols}
+                    table={table}
+                    tableId={tableId}
+                    cellRenderKey={cellRenderKey}
+                    handleCellSelection={handleCellSelection}
+                    handleCellDeselection={handleCellDeselection}
+                    handleContextMenuClick={handleContextMenuClick}
+                    handleCellValueChange={handleCellValueChange}
+                    sortRules={sortRules}
+                    filterRules={filterRules}
+                    searchMatchInfo={searchMatchInfo}
+                    pendingRowIdsRef={pendingRowIdsRef}
+                    pendingColumnIdsRef={pendingColumnIdsRef}
+                    rowUiKeyRef={rowUiKeyRef}
+                    columnUiKeyRef={columnUiKeyRef}
+                  />
+                );
+              }
 
               // DB-ORDER MODE: resolve by sparse order→record map
               const dbOrder = idx;
               const record = recordsByOrder.get(dbOrder);
             
-
               if (!record) {
                 // Render skeleton for unloaded data
                 const stableRowKey = `skeleton-${dbOrder}`;
