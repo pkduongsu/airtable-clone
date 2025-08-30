@@ -47,7 +47,7 @@ export function AddSortModal({
             <p className="text-xs text-gray-400 mt-1">All fields are already being used for sorting</p>
           </div>
         ) : (
-          columns.map((column) => (
+          [...columns].sort((a, b) => a.order - b.order).map((column) => (
             <button
               key={column.id}
               onClick={() => handleColumnSelect(column)}

@@ -1469,6 +1469,9 @@ const visibleRecords = useMemo(() => {
         const rowId = info.row.original.id;
         const isHovered = hoveredRowIndex === rowIndex;
         const isSelected = selectedRows.has(rowId);
+
+        const rec = recordsRef.current.find(r => r.id === rowId);
+        const absoluteIndex = typeof rec?.order === 'number' ? rec.order + 1 : rowIndex + 1;
         
         return (
           <div 
@@ -1492,7 +1495,7 @@ const visibleRecords = useMemo(() => {
                 }}
               />
             ) : (
-              <span className="text-center">{rowIndex + 1}</span>
+              <span className="text-center">{absoluteIndex}</span>
             )}
           </div>
         );
@@ -2275,7 +2278,7 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                   <MemoizedTableRow
                     key={`row-${idx}-${record.id}`}
                     virtualRow={virtualRow}
-                    dbOrder={idx}                           // display index in listing
+                    dbOrder={typeof record.order === 'number' ? record.order : idx}                           // display index in listing
                     record={record}
                     rowCells={cellsByRow.get(record.id) ?? EMPTY_CELL_MAP}
                     cells={cells}

@@ -229,11 +229,13 @@ export function FilterModal({
 
 
   const getAvailableFieldsForRule = useCallback((currentRuleId: string) => {
-    return columns.filter(col => {
-      // Include current field or fields not used by other rules
-      const rule = filterRules.find(r => r.columnId === col.id);
-      return !rule || rule.id === currentRuleId;
-    });
+    return columns
+      .filter(col => {
+        // Include current field or fields not used by other rules
+        const rule = filterRules.find(r => r.columnId === col.id);
+        return !rule || rule.id === currentRuleId;
+      })
+      .sort((a, b) => a.order - b.order); // Sort by column order (first to last)
   }, [columns, filterRules]);
 
   const needsValueInput = useCallback((operator: FilterOperator) => {
@@ -546,9 +548,10 @@ export function FilterModal({
           <div className="flex items-center mr-4">
               <button 
                 onClick={() => {
-                  // Find the first unused column
+                  // Find the first unused column, ordered by column order
                   const usedColumnIds = new Set(filterRules.map(rule => rule.columnId));
-                  const availableColumn = columns.find(col => !usedColumnIds.has(col.id));
+                  const sortedColumns = [...columns].sort((a, b) => a.order - b.order);
+                  const availableColumn = sortedColumns.find(col => !usedColumnIds.has(col.id));
                   if (availableColumn) {
                     handleFieldSelect(availableColumn);
                   }
