@@ -66,15 +66,12 @@ function EditableCell({
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
-      console.log(`🔄 Frontend: Mutation starting - RowID: ${rowId}, ColumnID: ${columnId}`);
-      await utils.table.getById.cancel();
       return { prevValue: lastSaved };
     },
     onError: (err, _, context) => {
-      console.log(`❌ Frontend: Mutation error - RowID: ${rowId}, ColumnID: ${columnId}`, err);
+     
       const code = err?.data?.code ?? err?.message;
       if (code === 'PRECONDITION_FAILED') {
-        console.log(`🔄 Frontend: Retrying due to PRECONDITION_FAILED`);
         // queue a retry shortly (or after your next records/columns refetch)
         setTimeout(() => {
           updateCellMutation.mutate({ rowId, columnId, value: { text: value } });

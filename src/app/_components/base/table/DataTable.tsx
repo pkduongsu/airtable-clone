@@ -13,7 +13,7 @@ import { api } from "~/trpc/react";
 import { TableHeader } from "./TableHeader";
 import { MemoEditableCell } from "./EditableCell";
 import { RowNumberHeader } from "./RowNumberHeader";
-import { useVirtualizer, elementScroll, type VirtualizerOptions, type Virtualizer} from "@tanstack/react-virtual";
+import { useVirtualizer, type Virtualizer} from "@tanstack/react-virtual";
 import { AddColumnModal } from "../modals/AddColumnModal";
 import Plus from "../../icons/Plus";
 import { CellContextMenu } from "../modals/CellContextMenu";
@@ -24,7 +24,6 @@ import {
   useReactTable,
   type ColumnDef,
   getCoreRowModel,
-  // flexRender, // Removed as it's not used with memoized rows
   createColumnHelper,
   type ColumnSizingState,
 } from "@tanstack/react-table";
@@ -227,7 +226,12 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
     }
   );
 
-  // Records query with infinite scrolling
+    const [uiRecordCount, setUiRecordCount] = useState<number>(tableData?._count?.rows ?? 0);
+  
+    useEffect(() => {
+  setUiRecordCount(tableData?._count?.rows ?? 0);
+}, [tableData?._count?.rows]);
+      // Records query with infinite data 
   const {
     data: tableRecords,
     isFetching: isRecordsFetching,
@@ -704,7 +708,7 @@ const sortedData = useMemo(() => {
         : -1) + 1; // next after highest loaded
 
     // also offset by how many optimistic rows you’ve added but not confirmed yet
-    return Math.max(serverTotal, maxLoadedOrder) + pendingRowIdsRef.current.size;
+    return Math.max(serverTotal, maxLoadedOrder);
   };
     
 
@@ -727,7 +731,7 @@ const sortedData = useMemo(() => {
 
        if (onRecordCountChange) {
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
-        onRecordCountChange(base + 1);
+        setUiRecordCount(c => c + 1);
       }
       
       optimisticRowIdsRef.current.add(tempRowId);
@@ -744,10 +748,15 @@ const sortedData = useMemo(() => {
     //but then , if i want the cells to actually be saved, we need a real record
     //so what if I just create a record and does not invalidate?
     try{
-      await createRowMutation.mutateAsync({
+      const created = await createRowMutation.mutateAsync({
         id: tempRowId,
         tableId: tableId, 
       });
+      setRecords(curr =>
+        curr
+          .map(r => (r.id === tempRowId ? { ...r, order: created.order } : r))
+          .sort((a,b) => a.order - b.order)
+      );
     } catch (error) {
       console.error("Failed to create row:", error);
     
@@ -812,7 +821,7 @@ const sortedData = useMemo(() => {
 
       if (onRecordCountChange) {
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
-        onRecordCountChange(base + 1);
+        setUiRecordCount(c => c + 1);;
       }
 
       // Create cells for new row
@@ -879,7 +888,7 @@ const sortedData = useMemo(() => {
 
       if (onRecordCountChange) {
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
-        onRecordCountChange(base + 1);
+        setUiRecordCount(c => c + 1);
       }
       // Create cells for new row
       const newCells = columns.map(col => ({
@@ -926,7 +935,7 @@ const sortedData = useMemo(() => {
 
        if (onRecordCountChange) {
         const base = (tableData?._count?.rows ?? recordsRef.current.length + 1); // +1 to mirror the just-deleted row in local buffer
-        onRecordCountChange(Math.max(0, base - 1));
+        setUiRecordCount(c => Math.max(0, c - 1));
       }
 
       // Remove cells for deleted row
@@ -1004,14 +1013,14 @@ const sortedData = useMemo(() => {
     setShowAddColumnModal(false);
   }, []);
 
-
-
-  // Update record count callback - use total count from tableData instead of paginated records
   useEffect(() => {
-    if (onRecordCountChange && tableData?._count?.rows !== undefined) {
-      onRecordCountChange(tableData._count.rows);
-    }
-  }, [tableData?._count?.rows, onRecordCountChange]);
+    setUiRecordCount(tableData?._count?.rows ?? 0);
+  }, [tableData?._count?.rows]);
+
+  useEffect(() => {
+  onRecordCountChange?.(uiRecordCount);
+}, [uiRecordCount, onRecordCountChange]);
+
 
   useEffect(() => {
   const flushAllEdits = async () => {
@@ -1630,33 +1639,28 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
 
   // Create sparse record lookup: virtual index (db order) -> loaded record
   const recordsByOrder = useMemo(() => {
-    const map = new Map<number, typeof records[0]>();
-    let debugCount = 0;
-    for (const record of records) {
-      if (typeof record.order === 'number') {
-        map.set(record.order, record);
-        // Debug logging for records in our target range
-        if (record.order >= 99990 && record.order <= 100000) {
-          console.log(`🔍 RecordsByOrder Debug - Order: ${record.order}, ID: ${record.id}`);
-          debugCount++;
-        }
-      }
-    }
-    console.log(`🔍 RecordsByOrder Map created with ${map.size} records, ${debugCount} in debug range (99990-100000)`);
-    return map;
-  }, [records]);
+  const m = new Map<number, _Record>();
+  let missing = 0;
+  for (const r of records) {
+    if (typeof r.order !== 'number') { missing++; continue; }
+    m.set(r.order, r);
+  }
+  if (missing) console.warn(`[recordsByOrder] ${missing} records missing 'order'`);
+  return m;
+}, [records]);
 
-  const easeInOutQuint = (t: number) =>
-  t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * Math.pow(t - 1, 5)
+  const maxKnownOrder =
+  (recordsRef.current.length
+    ? Math.max(...recordsRef.current.map(r => r.order ?? -1))
+    : -1) + 1;
 
-  const scrollingRef = React.useRef<number | null>(null);
+    
+
 
   // Use total database rows for full table scrolling with sparse loading
   const totalDbRows = tableData?._count?.rows ?? 0;
-  const virtualRowCount = Math.max(totalDbRows, records.length);
+  const virtualRowCount = Math.max(tableData?._count?.rows ?? 0, maxKnownOrder);
   
-  // Debug row counts
-  console.log(`🔢 Row Count Debug - TotalDbRows: ${totalDbRows}, RecordsLength: ${records.length}, VirtualRowCount: ${virtualRowCount}`);
 
 const scrollToFn = (
   offset: number,
@@ -1669,11 +1673,7 @@ const scrollToFn = (
   const adjustments = options?.adjustments ?? 0;
   let behavior: ScrollBehavior = options?.behavior ?? 'auto';
 
-  // Optional: disable smooth for large jumps to avoid “snap back”
-  const current = el === window ? window.scrollY : (el as HTMLElement).scrollTop;
-  if (behavior === 'smooth' && Math.abs(offset - current) > 1500) {
-    behavior = 'auto';
-  }
+  
 
   if ('scrollTo' in (el as any)) {
     (el as any).scrollTo({ top: offset + adjustments, behavior });
