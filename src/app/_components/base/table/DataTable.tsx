@@ -441,6 +441,48 @@ const handleCellValueChange = useCallback((rowId: string, columnId: string, valu
   const key = stableCellKey(rowId, columnId);
   editedCellValuesRef.current.set(key, value);
   
+  // Check if any loading ranges affect this row
+  const record = recordsRef.current.find(r => r.id === rowId);
+  if (record && typeof record.order === 'number') {
+    let isInLoadingRange = false;
+    for (const rangeKey of loadingRangesRef.current) {
+      const parts = rangeKey.split('-');
+      if (parts.length === 2) {
+        const start = parseInt(parts[0]!, 10);
+        const end = parseInt(parts[1]!, 10);
+        if (record.order >= start && record.order <= end) {
+          isInLoadingRange = true;
+          break;
+        }
+      }
+    }
+    
+    if (isInLoadingRange) {
+      // Queue the update instead of processing immediately
+      const existingQueueIndex = cellUpdateQueueRef.current.findIndex(
+        update => update.rowId === rowId && update.columnId === columnId
+      );
+      
+      const queuedUpdate = {
+        rowId,
+        columnId,
+        value,
+        timestamp: Date.now()
+      };
+      
+      if (existingQueueIndex >= 0) {
+        // Update existing queue entry
+        cellUpdateQueueRef.current[existingQueueIndex] = queuedUpdate;
+      } else {
+        // Add new queue entry
+        cellUpdateQueueRef.current.push(queuedUpdate);
+      }
+      
+      console.log(`⏳ Queued cell update for loading range: row ${rowId}, column ${columnId}`);
+      return;
+    }
+  }
+  
   // Removed setUpdateTrigger to improve performance - memoized rows will handle updates
   // setUpdateTrigger(prev => prev + 1);
 }, [ensureCellExists, stableCellKey]);
@@ -1075,10 +1117,20 @@ const sortedData = useMemo(() => {
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('beforeunload', onBeforeUnload);
 
+  // Periodic cleanup of stale queued updates
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    const staleThreshold = 30000; // 30 seconds
+    cellUpdateQueueRef.current = cellUpdateQueueRef.current.filter(
+      update => (now - update.timestamp) < staleThreshold
+    );
+  }, 10000); // Clean up every 10 seconds
+
   return () => {
     document.removeEventListener('visibilitychange', onHide);
     window.removeEventListener('pagehide', onPageHide);
     window.removeEventListener('beforeunload', onBeforeUnload);
+    clearInterval(cleanupInterval);
   };
 }, []);
 
@@ -1581,11 +1633,22 @@ const suppressRestoreRef = useRef(false);
 
 const loadEpochRef = useRef(0);
 
+// Track which row ranges are currently being loaded to prevent race conditions
+const loadingRangesRef = useRef<Set<string>>(new Set());
+
+// Queue for cell updates that occur during data loading
+const cellUpdateQueueRef = useRef<Array<{
+  rowId: string;
+  columnId: string;
+  value: string;
+  timestamp: number;
+}>>([]);
+
 
 const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: number, opts?: { restore?: boolean }) => {
 
   const callEpoch = loadEpochRef.current;
- const restore = opts?.restore ?? !suppressRestoreRef.current;
+  const restore = opts?.restore ?? !suppressRestoreRef.current;
   const total = tableData?._count?.rows ?? 0;
   if (!total) return;
 
@@ -1608,6 +1671,17 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
   }
   if (!needsLoading) return;
 
+  // Create a unique key for this loading range
+  const rangeKey = `${s}-${e}`;
+  
+  // Check if this range is already being loaded
+  if (loadingRangesRef.current.has(rangeKey)) {
+    return; // Skip if already loading this range
+  }
+  
+  // Mark this range as being loaded
+  loadingRangesRef.current.add(rangeKey);
+
   // Preserve scroll position and anchor point for stability
   const scrollContainer = tableContainerRef.current;
   const scrollTop = scrollContainer?.scrollTop ?? 0;
@@ -1628,6 +1702,33 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
     }
     if (res?.cells?.length) {
       upsertCells(res.cells);
+    }
+
+    // Process any queued cell updates for the loaded range
+    const now = Date.now();
+    const queuedUpdates = cellUpdateQueueRef.current.filter(update => {
+      // Find the record for this update in the loaded range
+      const record = res?.rows?.find(r => r.id === update.rowId);
+      return record && record.order >= s && record.order <= e && (now - update.timestamp) < 5000; // Only process recent updates
+    });
+
+    // Remove processed updates from queue
+    cellUpdateQueueRef.current = cellUpdateQueueRef.current.filter(update => 
+      !queuedUpdates.some(queued => queued.rowId === update.rowId && queued.columnId === update.columnId)
+    );
+
+    // Process queued updates
+    for (const update of queuedUpdates) {
+      try {
+        await updateCellMutation.mutateAsync({
+          rowId: update.rowId,
+          columnId: update.columnId,
+          value: { text: update.value }
+        });
+        console.log(`✅ Processed queued cell update for row ${update.rowId}, column ${update.columnId}`);
+      } catch (error) {
+        console.error(`❌ Failed to process queued cell update:`, error);
+      }
     }
 
     if (!restore) return;
@@ -1659,8 +1760,11 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
     });
   } catch (error) {
     console.error('Failed to load data range:', error);
+  } finally {
+    // Clean up loading state
+    loadingRangesRef.current.delete(rangeKey);
   }
-}, [trpc, tableId, tableData?._count?.rows, visibleColumnIds, upsertRecords, upsertCells, recordsRef]);
+}, [trpc, tableId, tableData?._count?.rows, visibleColumnIds, upsertRecords, upsertCells, recordsRef, updateCellMutation]);
   
   // Data refetch when parameters change
   useEffect(() => {

@@ -6,7 +6,6 @@ import type {
   Cell as Cell,
   Column as Column,
 } from "@prisma/client";
-import type { VirtualItem } from "@tanstack/react-virtual";
 
 
 type TableRow = {
@@ -173,11 +172,6 @@ const rowData: TableRow = useMemo(() => {
     </tr>
   );
 }, (prevProps, nextProps) => {
-  // Debug memo comparison for our target rows
-  if (prevProps.record?.order >= 99990 && prevProps.record?.order <= 100000) {
-    console.log(`🔄 Memo Check - PrevID: ${prevProps.record?.id}, NextID: ${nextProps.record?.id}, PrevDBOrder: ${prevProps.dbOrder}, NextDBOrder: ${nextProps.dbOrder}`);
-  }
-  
   // Only re-render if essential props changed
   if (
     prevProps.record?.id !== nextProps.record?.id ||
@@ -185,9 +179,6 @@ const rowData: TableRow = useMemo(() => {
     prevProps.columns !== nextProps.columns ||
     prevProps.searchMatchInfo !== nextProps.searchMatchInfo
   ) {
-    if (prevProps.record?.order >= 99990 && prevProps.record?.order <= 100000) {
-      console.log(`🔄 Memo: Props changed, re-rendering`);
-    }
     return false; // Props changed, re-render
   }
   

@@ -42,10 +42,6 @@ function EditableCell({
   canPersist = true,
 }: EditableCellProps) {
 
-  // Debug logging for EditableCell props
-  if (rowId.includes('cmex5q5d4yb8')) {
-    console.log(`🔍 EditableCell Debug - RowID received: ${rowId}, ColumnID: ${columnId}`);
-  }
   
   const normalizeToString = (val: string | number | { text: string } | null): string => {
   if (typeof val === "string") return val;
@@ -84,11 +80,9 @@ function EditableCell({
   }
     },
     onSuccess: (data) => {
-      console.log(`✅ Frontend: Mutation success - RowID: ${rowId}, ColumnID: ${columnId}, CellID: ${data?.id}`);
       setLastSaved(value);
     },
     onSettled: () => {
-      console.log(`🏁 Frontend: Mutation settled - RowID: ${rowId}, ColumnID: ${columnId}`);
       //  void utils.table.getById.invalidate({ id: tableId });
     }
   });
@@ -99,21 +93,8 @@ function EditableCell({
     const timer = setTimeout(() => {
 
       if (value !== lastSaved && canPersist) {
-        console.log(`🚀 Frontend: Calling cell.update mutation - RowID: ${rowId}, ColumnID: ${columnId}, Value: ${value}`, {
-          columnId, 
-          rowId, 
-          value: {text: value},
-          canPersist,
-          lastSaved
-        });
         
-        void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}})
-          .then((result) => {
-            console.log(`✅ Frontend: mutateAsync resolved`, result);
-          })
-          .catch((error) => {
-            console.log(`❌ Frontend: mutateAsync rejected`, error);
-          });
+        void updateCellMutation.mutateAsync({ columnId, rowId, value: {text: value}});
       }
     }, 500);
 
@@ -136,13 +117,6 @@ function EditableCell({
 
    const handleBlur = () => {
    if (canPersist && value !== lastSaved) {
-     console.log(`🚀 Frontend: Calling cell.update mutation on blur - RowID: ${rowId}, ColumnID: ${columnId}, Value: ${value}`, {
-       columnId, 
-       rowId, 
-       value: {text: value},
-       canPersist,
-       lastSaved
-     });
      updateCellMutation.mutate({ rowId, columnId, value: { text: value } });
    }
    setIsFocused(false);
@@ -165,22 +139,12 @@ function EditableCell({
 
 
   const handleFocus = () => {
-    // Debug logging for cell focus
-    if (rowId.includes('cmex5q5d4yb8')) {
-      console.log(`🎯 Cell Focus Debug - RowID: ${rowId}, ColumnID: ${columnId}`);
-    }
-    
     if (!isFocused) {
       setIsFocused(true);
     }
   };
   
   const handleClick = () => {
-    // Debug logging for cell clicks
-    if (rowId.includes('cmex5q5d4yb8')) {
-      console.log(`🖱️ Cell Click Debug - RowID: ${rowId}, ColumnID: ${columnId}`);
-    }
-    
     // Always call onSelect to handle cell selection and deselection of other cells
     onSelect?.();
     inputRef.current?.focus({preventScroll: true});
