@@ -42,6 +42,7 @@ const ROW_H = 32;
 const BELT_BEHIND = 4;   // viewports kept loaded above viewport
 const BELT_AHEAD  = 8;   // viewports kept loaded below viewport
 const MAX_WINDOW  = 3000; // hard cap rows loaded in one shot
+const SMALL_TABLE_THRESHOLD = 1000; // Tables smaller than this load all data, no sparse loading
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -1665,10 +1666,25 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
 
   // const { rows } = table.getRowModel(); // unused
 
-  // Calculate record counts first (needed by recordsByOrder)
+  // Determine if we should use listing mode (loads all data via infinite query) 
+  // vs sparse DB-ORDER mode (loads data on demand)
+  const totalDbRows = tableData?._count?.rows ?? 0;
+  const isSmallTable = totalDbRows <= SMALL_TABLE_THRESHOLD;
+  
+  const usingOrderListing = isSmallTable || // Small tables always use full data loading
+    (sortRules?.length ?? 0) > 0 ||
+    (filterRules?.length ?? 0) > 0 ||
+    hasActiveSearch;
+
+  // Calculate record counts (needed by recordsByOrder)
   const localRecordCount = records.length;
   const databaseRecordCount = tableData?._count?.rows ?? 0;
-  const totalRecordCount = Math.max(localRecordCount, databaseRecordCount);
+  
+  // For small tables using listing mode, use actual records count
+  // For large tables using sparse mode, use database count as virtual total
+  const totalRecordCount = usingOrderListing 
+    ? localRecordCount  // Use actual loaded records for small tables
+    : Math.max(localRecordCount, databaseRecordCount); // Use database count for sparse loading
 
   // Create sparse record lookup: virtual index (db order) -> loaded record
   const recordsByOrder = useMemo(() => {
@@ -1694,33 +1710,21 @@ const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: numb
   }
   
   return m;
-}, [records, totalRecordCount]);
-
-  // maxKnownOrder is no longer used with the new totalRecordCount approach
-  // const maxKnownOrder =
-  //   (recordsRef.current.length
-  //     ? Math.max(...recordsRef.current.map(r => r.order ?? -1))
-  //     : -1) + 1;
-
-  const usingOrderListing =  (sortRules?.length ?? 0) > 0 ||
-  (filterRules?.length ?? 0) > 0 ||
-  hasActiveSearch; 
+}, [records, totalRecordCount]); 
   
 
-  // For listing mode, flatten the pages (already in correct order from server SQL)
+  // For listing mode, use local records which include optimistic additions
   const listedRows = useMemo(
   () =>
     usingOrderListing
-      ? (hasActiveSearch ? visibleRecords
-                         : (tableRecords?.pages.flatMap(p => p.rows) ?? []))
+      ? (hasActiveSearch ? visibleRecords  // Search results from local records
+                         : records)        // Local records include optimistic additions
       : [],
-  [usingOrderListing, hasActiveSearch, visibleRecords, tableRecords]
+  [usingOrderListing, hasActiveSearch, visibleRecords, records]
 );
 
 
-  // Use total database rows for full table scrolling with sparse loading
-  const totalDbRows = tableData?._count?.rows ?? 0;
-  // totalRecordCount is now calculated earlier to fix dependency issues
+  // totalDbRows and totalRecordCount are now calculated earlier to fix dependency issues
   
   
 
@@ -1796,9 +1800,14 @@ useEffect(() => {
   const total = tableData?._count?.rows ?? 0;
   if (!total || records.length > 0) return; // Don't reload if data already exists
 
-  // Load initial chunk from the beginning for sparse virtual scrolling
-  const INITIAL_LOAD_SIZE = 500;
-  void ensureWindowLoaded(0, Math.min(total - 1, INITIAL_LOAD_SIZE - 1), {restore: false});;
+  // Only use sparse loading for large tables
+  // Small tables rely on infinite query to load all data
+  if (total > SMALL_TABLE_THRESHOLD) {
+    // Load initial chunk from the beginning for sparse virtual scrolling
+    const INITIAL_LOAD_SIZE = 500;
+    void ensureWindowLoaded(0, Math.min(total - 1, INITIAL_LOAD_SIZE - 1), {restore: false});
+  }
+  // Small tables will be loaded automatically via the infinite query system
 }, [tableData?._count?.rows, ensureWindowLoaded, records.length]);
 
 
@@ -2053,7 +2062,13 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
               const record = recordsByOrder.get(dbOrder);
             
               if (!record) {
-                // Render skeleton for unloaded data
+                // For small tables, don't render skeleton rows - they should have all data loaded
+                if (isSmallTable) {
+                  console.warn(`Small table missing record at index ${dbOrder}, skipping skeleton row`);
+                  return null; // Don't render anything for missing records in small tables
+                }
+                
+                // Render skeleton for unloaded data (large tables only)
                 const stableRowKey = `skeleton-${dbOrder}`;
                 return (
                   <tr
