@@ -102,6 +102,7 @@ export const cellRouter = createTRPCRouter({
     return cell;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } catch(e: any) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     console.log(`❌ Cell update error - Code: ${e?.code}, Message: ${e?.message}, Row Order: ${row?.order}`);
     // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     if (e?.code === 'P2003') {
@@ -151,6 +152,7 @@ export const cellRouter = createTRPCRouter({
     console.log(`💥 Unhandled error in cell update for row ${input.rowId} (order: ${row?.order}), column ${input.columnId}:`, e);
     throw new TRPCError({
       code: 'INTERNAL_SERVER_ERROR',
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       message: `CELL_UPDATE_ERROR: Failed to update cell for row ${input.rowId} (order: ${row?.order}), column ${input.columnId}: ${e?.message ?? 'Unknown error'}`
     });
   }

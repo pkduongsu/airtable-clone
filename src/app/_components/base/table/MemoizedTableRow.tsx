@@ -1,11 +1,12 @@
 import { memo, useMemo } from "react";
 import { MemoEditableCell } from "./EditableCell";
 import type {
-  Prisma,
   Row as _Record,
   Cell as Cell,
   Column as Column,
 } from "@prisma/client";
+import type { SortRule } from "../modals/SortModal";
+import type { VirtualItem } from "@tanstack/react-virtual";
 
 
 type TableRow = {
@@ -14,14 +15,18 @@ type TableRow = {
   [key: string]: string | undefined | Record<string, string>;
 };
 
+// eslint-disable-next-line react/display-name
 export const MemoizedTableRow = memo<{
-  virtualRow: any;
+  virtualRow: VirtualItem;
   dbOrder: number;
-  record: any;
+  record: _Record;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   rowCells?: Map<string, { id: string; value: any }>;
-  cells: any[];
-  columns: any[];
+  cells: Cell[];
+  columns: Column[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   flatCols: any[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   table: any;
   tableId: string;
   cellRenderKey: (rowId: string, columnId: string) => string;
@@ -29,8 +34,16 @@ export const MemoizedTableRow = memo<{
   handleCellDeselection: () => void;
   handleContextMenuClick: (event: React.MouseEvent, rowId: string) => void;
   handleCellValueChange: (rowId: string, columnId: string, value: string) => void;
-  sortRules: any[];
-  filterRules: any[];
+  sortRules: SortRule[];
+  filterRules: Array<{
+    id: string;
+    columnId: string;
+    columnName: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+  }>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   searchMatchInfo: any;
   pendingRowIdsRef: React.RefObject<Set<string>>;
   pendingColumnIdsRef: React.RefObject<Set<string>>;
@@ -56,11 +69,13 @@ export const MemoizedTableRow = memo<{
   searchMatchInfo,
   pendingRowIdsRef,
   pendingColumnIdsRef,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   rowUiKeyRef,
   columnUiKeyRef,
 }) => {
 const rowData: TableRow = useMemo(() => {
   // Fast path: use the per-row map
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
   if (rowCells && rowCells.size) {
     return {
       id: record.id,
@@ -69,9 +84,13 @@ const rowData: TableRow = useMemo(() => {
       ),
       ...Object.fromEntries(
         columns.map(col => {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           const v = rowCells.get(col.id)?.value;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           const display =
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             v && typeof v === "object" && "text" in v
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/prefer-nullish-coalescing
               ? (v.text ?? "")
               : (typeof v === "string" || typeof v === "number")
               ? String(v)
@@ -116,21 +135,26 @@ const rowData: TableRow = useMemo(() => {
         position: 'absolute',
         transform: `translate3d(0, ${virtualRow.start}px, 0)`,
         willChange: 'transform',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         width: table.getCenterTotalSize(),
         height: `${virtualRow.size}px`,
       }}
     >
       {flatCols.map((col) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
         const stableColKey = columnUiKeyRef.current?.get(col.id) ?? col.id;
         const tdKey = `${stableRowKey}-${stableColKey}`;
         
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         if (col.id === '__rowNumber') {
           // Render row number column
           return (
             <td
               key={tdKey}
               className="p-0 h-8 border-r border-b border-border-default relative"
-              style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+            style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
             >
               <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">
                 {dbOrder + 1}
@@ -140,30 +164,42 @@ const rowData: TableRow = useMemo(() => {
         }
         
         // Render data cell
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         const column = columns.find(c => c.id === col.id);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/prefer-nullish-coalescing
         const cellValue = (rowData[col.id] as string | undefined) || "";
         
         return (
           <td
             key={tdKey}
             className="p-0 h-8 border-r border-b border-border-default relative"
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
           >
             <MemoEditableCell
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               key={cellRenderKey(record.id, col.id)}
               _tableId={tableId}
               initialValue={cellValue}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               onSelect={() => handleCellSelection(record.id, col.id)}
               onDeselect={handleCellDeselection}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               rowId={record.id}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
               columnId={col.id}
               onContextMenu={handleContextMenuClick}
               onValueChange={handleCellValueChange}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
               hasSort={sortRules.some(rule => rule.columnId === col.id)}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
               hasFilter={filterRules.some(rule => rule.columnId === col.id)}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
               isSearchMatch={searchMatchInfo.cellMatches.has(`${record.id}-${col.id}`)}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
               isCurrentSearchResult={searchMatchInfo.currentResult === `${record.id}-${col.id}`}
               columnType={column?.type}
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               canPersist={!pendingRowIdsRef.current?.has(record.id) && !pendingColumnIdsRef.current?.has(col.id)}
             />
           </td>

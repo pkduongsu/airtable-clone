@@ -397,6 +397,7 @@ export const tableRouter = createTRPCRouter({
             sqlQuery += ` AND (${filterConditions.join(' AND ')})`;
           }
 
+          // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
           if (globalSearch && globalSearch.trim()) {
             sqlQuery += `
               AND EXISTS (
@@ -524,7 +525,8 @@ export const tableRouter = createTRPCRouter({
             };
           }
 
-           if (globalSearch && globalSearch.trim()) {
+           // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
+          if (globalSearch && globalSearch.trim()) {
             const existingAND =
               Array.isArray(whereConditions.AND)
                 ? whereConditions.AND

@@ -55,10 +55,6 @@ function EditableCell({
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   
-  // Compute states for visual highlighting
-  
-  const utils = api.useUtils();
-  
   const updateCellMutation = api.cell.update.useMutation({
     mutationKey: ['cell', 'update', { rowId, columnId }],
     onMutate: async () => {
@@ -79,7 +75,7 @@ function EditableCell({
     onValueChange?.(rowId, columnId, context.prevValue);
   }
     },
-    onSuccess: (data) => {
+    onSuccess: (_data) => {
       setLastSaved(value);
     },
     onSettled: () => {
