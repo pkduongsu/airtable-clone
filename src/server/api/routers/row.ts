@@ -421,23 +421,30 @@ export const rowRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const { tableId, startOrder, endOrder, columnIds } = input;
 
-      const rows = await ctx.db.row.findMany({
-        where: { tableId, order: { gte: startOrder, lte: endOrder } },
-        select: { id: true, order: true },
+      // Single optimized query using include to JOIN rows with cells
+      const rowsWithCells = await ctx.db.row.findMany({
+        where: { 
+          tableId, 
+          order: { gte: startOrder, lte: endOrder } 
+        },
+        select: { 
+          id: true, 
+          order: true,
+          cells: {
+            select: { id: true, rowId: true, columnId: true, value: true },
+            where: columnIds?.length 
+              ? { columnId: { in: columnIds } }
+              : undefined,
+          }
+        },
         orderBy: { order: 'asc' },
       });
 
-      if (!rows.length) return { rows: [], cells: [] };
+      if (!rowsWithCells.length) return { rows: [], cells: [] };
 
-      const rowIds = rows.map(r => r.id);
-
-      const cells = await ctx.db.cell.findMany({
-        where: {
-          rowId: { in: rowIds },
-          ...(columnIds?.length ? { columnId: { in: columnIds } } : {}),
-        },
-        select: { id: true, rowId: true, columnId: true, value: true },
-      });
+      // Extract rows and flatten cells from the joined result
+      const rows = rowsWithCells.map(({ cells: _cells, ...row }) => row);
+      const cells = rowsWithCells.flatMap(({ cells }) => cells);
 
       return { rows, cells };
     }),

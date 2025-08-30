@@ -39,11 +39,13 @@ import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 const PAGE_LIMIT = 200;
 
 const ROW_H = 32;
-const BELT_BEHIND = 5;   // viewports kept loaded above viewport
-const BELT_AHEAD  = 6;   // viewports kept loaded below viewport
-const MAX_WINDOW  = 500; // hard cap rows loaded in one shot
+const BELT_BEHIND = 8;   // viewports kept loaded above viewport (increased for smoother scrolling)
+const BELT_AHEAD  = 10;  // viewports kept loaded below viewport (increased for predictive loading)
+const MAX_WINDOW  = 250; // reduced from 500 for faster queries
 const SMALL_TABLE_THRESHOLD = 1000; // Tables smaller than this load all data, no sparse loading
-const OVERSCAN_MULTIPLIER = 5;
+const OVERSCAN_MULTIPLIER = 8; // increased for better prefetching
+const LOADING_DEBOUNCE_MS = 25; // reduced from 100ms for faster response
+const PRIORITY_LOADING_DEBOUNCE_MS = 5; // immediate loading for visible skeleton rows
 
 
 type SearchResult = {
@@ -1582,17 +1584,36 @@ const visibleRecords = useMemo(() => {
 
 const upsertRecords = useCallback((incoming: Array<{ id: string; order: number }>) => {
   if (!incoming?.length) return;
-  setRecords(prev => {
-    const byId = new Map(prev.map(r => [r.id, r]));
-    for (const r of incoming) {
-      byId.set(r.id, { ...(byId.get(r.id) ?? { tableId }), ...r });
-    }
-    const next = Array.from(byId.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    recordsRef.current = next;
-    return next;
-  });
   
-  // Removed setUpdateTrigger for better performance - memoized components will handle updates
+  // Progressive rendering: update records in batches for smoother UI
+  const batchSize = 50;
+  const batches: Array<Array<{ id: string; order: number }>> = [];
+  for (let i = 0; i < incoming.length; i += batchSize) {
+    batches.push(incoming.slice(i, i + batchSize));
+  }
+  
+  const processBatch = (batchIndex: number) => {
+    if (batchIndex >= batches.length) return;
+    
+    const batch = batches[batchIndex]!;
+    setRecords(prev => {
+      const byId = new Map(prev.map(r => [r.id, r]));
+      for (const r of batch) {
+        byId.set(r.id, { ...(byId.get(r.id) ?? { tableId }), ...r });
+      }
+      const next = Array.from(byId.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      recordsRef.current = next;
+      return next;
+    });
+    
+    // Process next batch in next frame for smooth rendering
+    if (batchIndex < batches.length - 1) {
+      requestAnimationFrame(() => processBatch(batchIndex + 1));
+    }
+  };
+  
+  // Start processing from first batch
+  processBatch(0);
 }, [setRecords, tableId]);
 
 
@@ -1600,31 +1621,48 @@ const upsertCells = useCallback(
   (incoming: Array<{ rowId: string; columnId: string; value: unknown; id?: string }>) => {
     if (!incoming?.length) return;
 
-    setCells(prev => {
-      // key builder for existing cells
-      const key = (c: { rowId: string; columnId: string }) => `${c.rowId}-${c.columnId}`;
-      const byKey = new Map(prev.map(c => [key(c), c]));
-
-      for (const c of incoming) {
-        const k = key(c);
-        const existing = byKey.get(k);
-        
-        // Use provided ID from server, existing ID, or create synthetic ID
-        const cellId = c.id ?? existing?.id ?? `synthetic-${c.rowId}-${c.columnId}`;
-
-        byKey.set(k, {
-          id: cellId,
-          rowId: c.rowId,
-          columnId: c.columnId,
-          value: c.value as any
-        });
-      }
-
-      return Array.from(byKey.values());
-    });
+    // Progressive cell updates for smoother rendering
+    const batchSize = 100;
+    const batches: Array<Array<{ rowId: string; columnId: string; value: unknown; id?: string }>> = [];
+    for (let i = 0; i < incoming.length; i += batchSize) {
+      batches.push(incoming.slice(i, i + batchSize));
+    }
     
-    // Only trigger targeted updates, not full re-render
-     //setUpdateTrigger(prev => prev + 1); // Removed for performance
+    const processCellBatch = (batchIndex: number) => {
+      if (batchIndex >= batches.length) return;
+      
+      const batch = batches[batchIndex]!;
+      setCells(prev => {
+        // key builder for existing cells
+        const key = (c: { rowId: string; columnId: string }) => `${c.rowId}-${c.columnId}`;
+        const byKey = new Map(prev.map(c => [key(c), c]));
+
+        for (const c of batch) {
+          const k = key(c);
+          const existing = byKey.get(k);
+          
+          // Use provided ID from server, existing ID, or create synthetic ID
+          const cellId = c.id ?? existing?.id ?? `synthetic-${c.rowId}-${c.columnId}`;
+
+          byKey.set(k, {
+            id: cellId,
+            rowId: c.rowId,
+            columnId: c.columnId,
+            value: c.value as any
+          });
+        }
+
+        return Array.from(byKey.values());
+      });
+      
+      // Process next batch in next frame for smooth rendering
+      if (batchIndex < batches.length - 1) {
+        requestAnimationFrame(() => processCellBatch(batchIndex + 1));
+      }
+    };
+    
+    // Start processing from first batch
+    processCellBatch(0);
   },
   [setCells]
 );
@@ -1643,6 +1681,14 @@ const cellUpdateQueueRef = useRef<Array<{
   value: string;
   timestamp: number;
 }>>([]);
+
+// Scroll tracking for predictive loading
+const scrollTrackingRef = useRef({
+  lastScrollTop: 0,
+  lastScrollTime: Date.now(),
+  velocity: 0,
+  direction: 0, // 1 for down, -1 for up, 0 for no movement
+});
 
 
 const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: number, opts?: { restore?: boolean }) => {
@@ -1954,6 +2000,24 @@ useEffect(() => {
   // Dynamic loading based on skeleton rows in viewport
   const handleScroll = useCallback(() => {
     if (suppressRestoreRef.current) return;
+    
+    // Update scroll tracking for predictive loading
+    const scrollContainer = tableContainerRef.current;
+    if (scrollContainer) {
+      const currentScrollTop = scrollContainer.scrollTop;
+      const currentTime = Date.now();
+      const scrollDelta = currentScrollTop - scrollTrackingRef.current.lastScrollTop;
+      const timeDelta = currentTime - scrollTrackingRef.current.lastScrollTime;
+      
+      if (timeDelta > 0) {
+        const velocity = scrollDelta / timeDelta; // pixels per millisecond
+        scrollTrackingRef.current.velocity = velocity;
+        scrollTrackingRef.current.direction = scrollDelta > 0 ? 1 : scrollDelta < 0 ? -1 : 0;
+        scrollTrackingRef.current.lastScrollTop = currentScrollTop;
+        scrollTrackingRef.current.lastScrollTime = currentTime;
+      }
+    }
+    
     // LISTING MODE: load more pages near the end
   if (usingOrderListing) {
     const items = rowVirtualizer.getVirtualItems();
@@ -1988,13 +2052,59 @@ useEffect(() => {
   const W = windowForViewport();
   const half = Math.floor(W / 2);
 
+  // Calculate predictive loading expansion based on scroll velocity
+  const { velocity, direction } = scrollTrackingRef.current;
+  const isScrollingFast = Math.abs(velocity) > 0.5; // pixels per ms threshold for fast scrolling
+  const predictiveMultiplier = isScrollingFast ? 2 : 1; // load more aggressively when scrolling fast
+  
+  // Prioritize loading: viewport ranges first, then extended ranges
+  const viewportRanges: Array<{start: number, end: number, priority: 'viewport' | 'extended'}> = [];
+  const extendedRanges: Array<{start: number, end: number, priority: 'viewport' | 'extended'}> = [];
+  
   unloadedRanges.forEach(({ start, end }) => {
-  const expandedStart = Math.max(0, start - half);
-  const expandedEnd = Math.min(totalRecordCount - 1, end + half);
-  if (expandedEnd >= expandedStart) {
-    void ensureWindowLoaded(expandedStart, expandedEnd, { restore: false });
+    // Check if this range intersects with the current viewport
+    const firstVisible = items[0]!.index;
+    const lastVisible = items[items.length - 1]!.index;
+    const isViewportRange = !(end < firstVisible || start > lastVisible);
+    
+    if (isViewportRange) {
+      // Priority loading for visible skeleton rows
+      viewportRanges.push({ start, end, priority: 'viewport' });
+    }
+    
+    // Extended range for predictive loading
+    let expandedStart = Math.max(0, start - half * predictiveMultiplier);
+    let expandedEnd = Math.min(totalRecordCount - 1, end + half * predictiveMultiplier);
+    
+    // Bias expansion in scroll direction for predictive loading
+    if (isScrollingFast && direction !== 0) {
+      const extraExpansion = Math.floor(W * 0.5); // extra half window in scroll direction
+      if (direction > 0) { // scrolling down
+        expandedEnd = Math.min(totalRecordCount - 1, expandedEnd + extraExpansion);
+      } else { // scrolling up
+        expandedStart = Math.max(0, expandedStart - extraExpansion);
+      }
+    }
+    
+    // Only add to extended if it's different from the original range
+    if (expandedStart < start || expandedEnd > end) {
+      extendedRanges.push({ start: expandedStart, end: expandedEnd, priority: 'extended' });
+    }
+  });
+  
+  // Load viewport ranges immediately
+  viewportRanges.forEach(({ start, end }) => {
+    void ensureWindowLoaded(start, end, { restore: false });
+  });
+  
+  // Load extended ranges with slight delay to prioritize viewport
+  if (extendedRanges.length > 0) {
+    setTimeout(() => {
+      extendedRanges.forEach(({ start, end }) => {
+        void ensureWindowLoaded(start, end, { restore: false });
+      });
+    }, isScrollingFast ? 10 : 50); // shorter delay when scrolling fast
   }
-});
 }, [
   usingOrderListing,
   rowVirtualizer,
@@ -2015,13 +2125,27 @@ useEffect(() => {
   const items = rowVirtualizer.getVirtualItems();
   if (!items.length) return;
   
-  // Debounce loading to avoid excessive requests during fast scrolling
+  // Check if there are visible skeleton rows (priority loading)
+  let hasVisibleSkeletons = false;
+  if (!usingOrderListing) {
+    for (const item of items) {
+      const record = recordsByOrder.get(item.index);
+      if (!record) {
+        hasVisibleSkeletons = true;
+        break;
+      }
+    }
+  }
+  
+  // Use shorter debounce for visible skeletons, longer for predictive loading
+  const debounceMs = hasVisibleSkeletons ? PRIORITY_LOADING_DEBOUNCE_MS : LOADING_DEBOUNCE_MS;
+  
   const timeoutId = setTimeout(() => {
     handleScroll();
-  }, 100);
+  }, debounceMs);
   
   return () => clearTimeout(timeoutId);
-}, [rowVirtualizer.getVirtualItems(), handleScroll]);
+}, [rowVirtualizer.getVirtualItems(), handleScroll, usingOrderListing, recordsByOrder]);
 
 const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'center'|'end'='center') => {
   suppressRestoreRef.current = true;
