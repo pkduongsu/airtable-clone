@@ -39,10 +39,12 @@ import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
 const PAGE_LIMIT = 200;
 
 const ROW_H = 32;
-const BELT_BEHIND = 4;   // viewports kept loaded above viewport
-const BELT_AHEAD  = 8;   // viewports kept loaded below viewport
-const MAX_WINDOW  = 3000; // hard cap rows loaded in one shot
+const BELT_BEHIND = 5;   // viewports kept loaded above viewport
+const BELT_AHEAD  = 6;   // viewports kept loaded below viewport
+const MAX_WINDOW  = 500; // hard cap rows loaded in one shot
 const SMALL_TABLE_THRESHOLD = 1000; // Tables smaller than this load all data, no sparse loading
+const OVERSCAN_MULTIPLIER = 5;
+
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -108,6 +110,7 @@ export function DataTable({
 }: DataTableProps) {
   
   const [cells, setCells] = useState<Cell[]>([]);
+  const EMPTY_CELL_MAP = useMemo(() => new Map<string, { id: string; value: any }>(), []);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
@@ -232,6 +235,16 @@ useEffect(() => { cellsRef.current = cells; }, [cells]); //update current edited
   );
 
     const [uiRecordCount, setUiRecordCount] = useState<number>(tableData?._count?.rows ?? 0);
+
+  const cellsByRow = useMemo(() => {
+    const byRow = new Map<string, Map<string, { id: string; value: any }>>();
+    for (const c of cells) {
+      let m = byRow.get(c.rowId);
+      if (!m) { m = new Map(); byRow.set(c.rowId, m); }
+      m.set(c.columnId, { id: c.id, value: c.value });
+    }
+    return byRow;
+  }, [cells]);
   
     useEffect(() => {
   setUiRecordCount(tableData?._count?.rows ?? 0);
@@ -1089,6 +1102,13 @@ const sortedData = useMemo(() => {
   // Reference to the scrolling container
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
+  const windowForViewport = () => {
+  const h = tableContainerRef.current?.clientHeight ?? 600;
+  const vh = Math.ceil(h / ROW_H);
+  return Math.min(MAX_WINDOW, vh * OVERSCAN_MULTIPLIER); // e.g., 5*25 = 125 rows
+};
+
+
 
   /////////////////////////////////////////////////
             //SEARCH LOGIC HANDLING//
@@ -1504,12 +1524,9 @@ const visibleRecords = useMemo(() => {
     autoResetExpanded: false,
   });
 
-  const visibleColumnIds = useMemo(() => {
-  return table
-    .getAllLeafColumns?.()
-    ?.filter((c) => (c.getIsVisible?.() ?? true))
-    .map((c) => c.id) ?? [];
-}, [table]);
+  const visibleColumnIds = columns
+  .filter(c => !hiddenColumns.has(c.id))
+  .map(c => c.id);
 
 const upsertRecords = useCallback((incoming: Array<{ id: string; order: number }>) => {
   if (!incoming?.length) return;
@@ -1563,9 +1580,6 @@ const upsertCells = useCallback(
 const suppressRestoreRef = useRef(false);
 
 const loadEpochRef = useRef(0);
-
-// inside scroll intent (e.g., before you call ensureWindowLoaded)
-const myEpoch = ++loadEpochRef.current;
 
 
 const ensureWindowLoaded = useCallback(async (startOrder: number, endOrder: number, opts?: { restore?: boolean }) => {
@@ -1867,14 +1881,16 @@ useEffect(() => {
     }
   }
 
+  const W = windowForViewport();
+  const half = Math.floor(W / 2);
+
   unloadedRanges.forEach(({ start, end }) => {
-    const BUFFER = 200;
-    const expandedStart = Math.max(0, start - BUFFER);
-    const expandedEnd = Math.min(totalRecordCount - 1, end + BUFFER);
-    if (expandedEnd - expandedStart < 2000) {
-      void ensureWindowLoaded(expandedStart, expandedEnd, { restore: false });
-    }
-  });
+  const expandedStart = Math.max(0, start - half);
+  const expandedEnd = Math.min(totalRecordCount - 1, end + half);
+  if (expandedEnd >= expandedStart) {
+    void ensureWindowLoaded(expandedStart, expandedEnd, { restore: false });
+  }
+});
 }, [
   usingOrderListing,
   rowVirtualizer,
@@ -2025,6 +2041,7 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                   );
                 }
 
+                
                 // Render a real row (use listing index for the row-number column)
                 return (
                   <MemoizedTableRow
@@ -2032,6 +2049,7 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                     virtualRow={virtualRow}
                     dbOrder={idx}                           // display index in listing
                     record={record}
+                    rowCells={cellsByRow.get(record.id) ?? EMPTY_CELL_MAP}
                     cells={cells}
                     columns={columns}
                     flatCols={flatCols}
@@ -2108,6 +2126,7 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                   virtualRow={virtualRow}
                   dbOrder={dbOrder}
                   record={record}
+                  rowCells={cellsByRow.get(record.id) ?? EMPTY_CELL_MAP}
                   cells={cells}
                   columns={columns}
                   flatCols={flatCols}

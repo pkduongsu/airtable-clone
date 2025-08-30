@@ -1,5 +1,13 @@
 import { memo, useMemo } from "react";
 import { MemoEditableCell } from "./EditableCell";
+import type {
+  Prisma,
+  Row as _Record,
+  Cell as Cell,
+  Column as Column,
+} from "@prisma/client";
+import type { VirtualItem } from "@tanstack/react-virtual";
+
 
 type TableRow = {
   id: string;
@@ -11,6 +19,7 @@ export const MemoizedTableRow = memo<{
   virtualRow: any;
   dbOrder: number;
   record: any;
+  rowCells?: Map<string, { id: string; value: any }>;
   cells: any[];
   columns: any[];
   flatCols: any[];
@@ -32,6 +41,7 @@ export const MemoizedTableRow = memo<{
   virtualRow,
   dbOrder,
   record,
+  rowCells,
   cells,
   columns,
   flatCols,
@@ -49,55 +59,51 @@ export const MemoizedTableRow = memo<{
   pendingColumnIdsRef,
   rowUiKeyRef,
   columnUiKeyRef,
-}: {
-  virtualRow: any;
-  dbOrder: number;
-  record: any;
-  cells: any[];
-  columns: any[];
-  flatCols: any[];
-  table: any;
-  tableId: string;
-  cellRenderKey: (rowId: string, columnId: string) => string;
-  handleCellSelection: (rowId: string, columnId: string) => void;
-  handleCellDeselection: () => void;
-  handleContextMenuClick: (event: React.MouseEvent, rowId: string) => void;
-  handleCellValueChange: (rowId: string, columnId: string, value: string) => void;
-  sortRules: any[];
-  filterRules: any[];
-  searchMatchInfo: any;
-  pendingRowIdsRef: React.RefObject<Set<string>>;
-  pendingColumnIdsRef: React.RefObject<Set<string>>;
-  rowUiKeyRef: React.RefObject<Map<string, string>>;
-  columnUiKeyRef: React.RefObject<Map<string, string>>;
 }) => {
-  // Debug logging for row ID mapping in component
-  if (record?.order >= 99990 && record?.order <= 100000) {
-    console.log(`🔍 MemoizedTableRow Debug - DBOrder: ${dbOrder}, RecordID: ${record?.id}, RecordOrder: ${record?.order}`);
-  }
-
-  // Create sparse row data with memoization per row
-  const sparseRowData: TableRow = useMemo(() => {
+const rowData: TableRow = useMemo(() => {
+  // Fast path: use the per-row map
+  if (rowCells && rowCells.size) {
     return {
       id: record.id,
       __cellIds: Object.fromEntries(
-        columns.map(col => [col.id, `cell-${record.id}-${col.id}`])
+        columns.map(col => [col.id, rowCells.get(col.id)?.id ?? ""])
       ),
       ...Object.fromEntries(
         columns.map(col => {
-          const cell = cells.find(c => c.rowId === record.id && c.columnId === col.id);
-          const value = cell?.value;
-          // Extract text from value object or use as string
-          const displayValue = value && typeof value === "object" && "text" in value 
-            ? value.text ?? ""
-            : typeof value === "string" || typeof value === "number"
-            ? String(value)
-            : "";
-          return [col.id, displayValue];
+          const v = rowCells.get(col.id)?.value;
+          const display =
+            v && typeof v === "object" && "text" in v
+              ? (v.text ?? "")
+              : (typeof v === "string" || typeof v === "number")
+              ? String(v)
+              : "";
+          return [col.id, display];
         })
-      )
+      ),
     };
-  }, [record, cells, columns]);
+  }
+
+  // Fallback: scan the cells array
+  return {
+    id: record.id,
+    __cellIds: Object.fromEntries(
+      columns.map(col => [col.id, `cell-${record.id}-${col.id}`])
+    ),
+    ...Object.fromEntries(
+      columns.map(col => {
+        const c = cells.find(x => x.rowId === record.id && x.columnId === col.id);
+        const v = c?.value;
+        const display =
+          v && typeof v === "object" && "text" in v
+            ? (v.text ?? "")
+            : (typeof v === "string" || typeof v === "number")
+            ? String(v)
+            : "";
+        return [col.id, display];
+      })
+    ),
+  };
+}, [record.id, columns, rowCells, cells]);
 
   const stableRowKey = `row-${record.id}`;
 
@@ -136,7 +142,7 @@ export const MemoizedTableRow = memo<{
         
         // Render data cell
         const column = columns.find(c => c.id === col.id);
-        const cellValue = (sparseRowData[col.id] as string | undefined) || "";
+        const cellValue = (rowData[col.id] as string | undefined) || "";
         
         return (
           <td
@@ -196,6 +202,8 @@ export const MemoizedTableRow = memo<{
     return false; // Cell count changed, re-render
   }
   
+  if (prevProps.rowCells !== nextProps.rowCells) return false;
+
   // Check if any cell values changed for this row
   for (let i = 0; i < prevRowCells.length; i++) {
     const prevCell = prevRowCells[i];

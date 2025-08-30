@@ -319,8 +319,6 @@ const handleDeleteTable = (tableId: string) => {
     const chunk = CHUNK_SIZE;
     const chunks = Math.ceil(total / chunk);
 
-    const { baseOrder } = await getCurrentMaxOrder.refetch().then(r => r.data!);
-
       if (optimisticCountFnRef.current) {
     // Adds to the server baseline (0 => 100,000; N => N + 100,000)
     optimisticCountFnRef.current(total);

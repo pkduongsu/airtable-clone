@@ -79,7 +79,7 @@ export function TableTabsBar({
     try {
       // Show confirmation dialog
       if (window.confirm(`Are you sure you want to delete "${table.name}"? This action cannot be undone.`)) {
-        await onDeleteTable(table.id);
+        void onDeleteTable(table.id);
       }
     } catch (error) {
       console.error('Failed to delete table:', error);
