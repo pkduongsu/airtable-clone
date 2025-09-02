@@ -7,6 +7,7 @@ import type {
 } from "@prisma/client";
 import type { SortRule } from "../modals/SortModal";
 import type { VirtualItem } from "@tanstack/react-virtual";
+import { fakeFor } from "~/lib/fakeFor";
 
 
 type TableRow = {
@@ -49,6 +50,8 @@ export const MemoizedTableRow = memo<{
   pendingColumnIdsRef: React.RefObject<Set<string>>;
   rowUiKeyRef: React.RefObject<Map<string, string>>;
   columnUiKeyRef: React.RefObject<Map<string, string>>;
+  getDraftValue: (rowId: string, colId: string) => string | undefined;   
+  isSavingCell: (rowId: string, colId: string) => boolean;               
 }>(({
   virtualRow,
   dbOrder,
@@ -72,55 +75,50 @@ export const MemoizedTableRow = memo<{
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   rowUiKeyRef,
   columnUiKeyRef,
+  getDraftValue,
+  isSavingCell
 }) => {
 const rowData: TableRow = useMemo(() => {
   // Fast path: use the per-row map
-  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
-  if (rowCells && rowCells.size) {
-    return {
-      id: record.id,
-      __cellIds: Object.fromEntries(
-        columns.map(col => [col.id, rowCells.get(col.id)?.id ?? ""])
-      ),
-      ...Object.fromEntries(
-        columns.map(col => {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-          const v = rowCells.get(col.id)?.value;
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-          const display =
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            v && typeof v === "object" && "text" in v
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/prefer-nullish-coalescing
-              ? (v.text ?? "")
-              : (typeof v === "string" || typeof v === "number")
-              ? String(v)
-              : "";
-          return [col.id, display];
-        })
-      ),
-    };
-  }
+  const makeSeed = (rId: string, cId: string) => {
+  const rk = rowUiKeyRef.current?.get(rId) ?? rId;
+  const ck = columnUiKeyRef.current?.get(cId) ?? cId;
+  return Math.abs((rk + "::" + ck).split("")
+    .reduce((acc, ch) => ((acc << 5) - acc) + ch.charCodeAt(0), 0));
+};
 
-  // Fallback: scan the cells array
-  return {
-    id: record.id,
-    __cellIds: Object.fromEntries(
-      columns.map(col => [col.id, `cell-${record.id}-${col.id}`])
-    ),
-    ...Object.fromEntries(
-      columns.map(col => {
-        const c = cells.find(x => x.rowId === record.id && x.columnId === col.id);
-        const v = c?.value;
-        const display =
-          v && typeof v === "object" && "text" in v
-            ? (v.text ?? "")
-            : (typeof v === "string" || typeof v === "number")
-            ? String(v)
-            : "";
-        return [col.id, display];
-      })
-    ),
-  };
+const isPendingRow = pendingRowIdsRef.current?.has(record.id);
+const valueMap = rowCells && rowCells.size ? rowCells : undefined;
+
+  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
+return {
+  id: record.id,
+  __cellIds: Object.fromEntries(columns.map(col => [col.id, (valueMap?.get(col.id)?.id) ?? `cell-${record.id}-${col.id}`])),
+  ...Object.fromEntries(columns.map(col => {
+    // 1) draft first
+    const draft = getDraftValue(record.id, col.id);
+    if (draft != null) return [col.id, draft];
+
+    // 2) server value next
+    const v = valueMap ? valueMap.get(col.id)?.value
+                       : cells.find(x => x.rowId === record.id && x.columnId === col.id)?.value;
+    const fromServer =
+      v && typeof v === "object" && "text" in v ? (v.text ?? "")
+      : (typeof v === "string" || typeof v === "number") ? String(v)
+      : "";
+
+    if (fromServer) return [col.id, fromServer];
+
+    // 3) otherwise: if neither row nor column is pending, show a deterministic fake
+    const isPendingCol = pendingColumnIdsRef.current?.has(col.id);
+    if (!isPendingRow && !isPendingCol) {
+      const seed = makeSeed(record.id, col.id);
+      const fake = fakeFor(col.name, col.type as "TEXT" | "NUMBER", seed);
+      return [col.id, String(fake)];
+    }
+    return [col.id, ""];
+  })),
+};
 }, [record.id, columns, rowCells, cells]);
 
   const stableRowKey = `row-${record.id}`;
@@ -168,10 +166,12 @@ const rowData: TableRow = useMemo(() => {
         const column = columns.find(c => c.id === col.id);
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/prefer-nullish-coalescing
         const cellValue = (rowData[col.id] as string | undefined) || "";
+        const saving = isSavingCell(record.id, col.id);
         
         return (
           <td
             key={tdKey}
+            data-saving={saving ? "1" : undefined}
             className="p-0 h-8 border-r border-b border-border-default relative"
             // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
@@ -202,6 +202,7 @@ const rowData: TableRow = useMemo(() => {
               // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               canPersist={!pendingRowIdsRef.current?.has(record.id) && !pendingColumnIdsRef.current?.has(col.id)}
             />
+            {saving && <span className="ml-1 inline-block animate-pulse">·</span>}
           </td>
         );
       })}

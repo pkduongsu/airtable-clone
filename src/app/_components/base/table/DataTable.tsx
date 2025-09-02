@@ -35,6 +35,7 @@ import {
 
 import { type SortRule } from "../modals/SortModal";
 import { ColumnContextMenuModal } from "../modals/ColumnContextMenuModal";
+import { fakeFor } from "~/lib/fakeFor";
 
 const PAGE_LIMIT = 200;
 
@@ -151,6 +152,14 @@ export function DataTable({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const stableCellKey = (rowId: string, colId: string) => `${getRowUiKey(rowId)}::${getColUiKey(colId)}`;
 
+  const getDraftValue = useCallback((rowId: string, colId: string) => {
+  return editedCellValuesRef.current.get(stableCellKey(rowId, colId));
+}, [stableCellKey]);
+
+  const isSavingCell = useCallback((rowId: string, colId: string) => {
+    return savingCellsRef.current.has(stableCellKey(rowId, colId));
+  }, [stableCellKey]);
+
   const pendingSearchScrollRef = useRef<{ rowId: string; columnId?: string } | null>(null);
 
   const lastScrollTargetRef = useRef<string | null>(null);
@@ -164,6 +173,7 @@ export function DataTable({
   };
 
   const trpc = api.useUtils();
+  const savingCellsRef = useRef<Set<string>>(new Set());
 
   //fresh snapshots:
   const recordsRef = useRef(records);
@@ -387,7 +397,25 @@ useEffect(() => {
         pendingRowIdsRef.current.has(row.id) ||
         pendingColumnIdsRef.current.has(col.id);
 
-      if (!isPending && !hasDraft) continue;
+      if (!isPending && !hasDraft) {
+      // pre-seed faker draft (deterministic)
+      try {
+        // Derive a deterministic seed from the stable UI keys so values don't flicker
+        const seed = Math.abs(
+          (getRowUiKey(row.id) + '::' + getColUiKey(col.id))
+            .split('')
+            .reduce((acc, ch) => ((acc << 5) - acc) + ch.charCodeAt(0), 0)
+        );
+
+        // Use your fakeFor helper (doesn't need network)
+        // NOTE: column type is available on col.type ('TEXT' | 'NUMBER')
+        // If your types differ, map accordingly.
+        const draft = fakeFor(col.name, col.type as 'TEXT' | 'NUMBER', seed);
+        editedCellValuesRef.current.set(draftKey, String(draft));
+      } catch {
+        // ignore faker failures and fall back to empty
+      }
+    }
 
 
         synthesized.push({
@@ -416,8 +444,14 @@ useEffect(() => {
 }, [tableId, tableRecords, allRecords]); //if i add records and columns, maximum depth reached error appears
 
 
-
-const updateCellMutation = api.cell.update.useMutation();
+const updateCellMutation = api.cell.update.useMutation({
+  onMutate: ({ rowId, columnId }) => {
+    savingCellsRef.current.add(stableCellKey(rowId, columnId));
+  },
+  onSettled: (_data, _err, vars) => {
+    if (vars) savingCellsRef.current.delete(stableCellKey(vars.rowId, vars.columnId));
+  },
+});
   
 // Track pending cell creation to prevent duplicates
 const pendingCellCreation = useRef(new Set<string>());
@@ -2319,6 +2353,8 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                     pendingColumnIdsRef={pendingColumnIdsRef}
                     rowUiKeyRef={rowUiKeyRef}
                     columnUiKeyRef={columnUiKeyRef}
+                    getDraftValue={getDraftValue}
+                    isSavingCell={isSavingCell}
                   />
                 );
               }
@@ -2396,6 +2432,8 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                   pendingColumnIdsRef={pendingColumnIdsRef}
                   rowUiKeyRef={rowUiKeyRef}
                   columnUiKeyRef={columnUiKeyRef}
+                  getDraftValue={getDraftValue}
+                  isSavingCell={isSavingCell}
                 />
               );
             })}
