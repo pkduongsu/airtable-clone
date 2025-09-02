@@ -227,16 +227,10 @@ export function FilterModal({
     };
   }, [closeAllModals]);
 
-
-  const getAvailableFieldsForRule = useCallback((currentRuleId: string) => {
-    return columns
-      .filter(col => {
-        // Include current field or fields not used by other rules
-        const rule = filterRules.find(r => r.columnId === col.id);
-        return !rule || rule.id === currentRuleId;
-      })
-      .sort((a, b) => a.order - b.order); // Sort by column order (first to last)
-  }, [columns, filterRules]);
+  //get all fields for filtering
+  const getAvailableFieldsForRule = useCallback((_currentRuleId: string) => {
+  return [...columns].sort((a, b) => a.order - b.order);
+  }, [columns]);
 
   const needsValueInput = useCallback((operator: FilterOperator) => {
     return !['is_empty', 'is_not_empty'].includes(operator);
@@ -543,18 +537,13 @@ export function FilterModal({
       </div>
 
       {/* Add condition button */}
-      {filterRules.length < columns.length && (
         <div className=" flex items-center justify-between px-4 pb-4">
           <div className="flex items-center mr-4">
               <button 
                 onClick={() => {
-                  // Find the first unused column, ordered by column order
-                  const usedColumnIds = new Set(filterRules.map(rule => rule.columnId));
                   const sortedColumns = [...columns].sort((a, b) => a.order - b.order);
-                  const availableColumn = sortedColumns.find(col => !usedColumnIds.has(col.id));
-                  if (availableColumn) {
-                    handleFieldSelect(availableColumn);
-                  }
+                  const first = sortedColumns[0];
+                  if (first) handleFieldSelect(first);
                 }}
                 className="mr-4 group cursor-pointer flex items-center text-[13px] text-[#616670] font-[500] font-family-system hover:text-[#1d1f25] transition-colors duration-150"
               >
@@ -577,7 +566,7 @@ export function FilterModal({
                 Copy from another view
             </button>
         </div>
-      )}
+
       
       {/* Modal components */}
       <FieldDropdownModal

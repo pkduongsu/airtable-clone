@@ -53,27 +53,71 @@ export function DashboardClient({ user }: DashboardClientProps) {
   const utils = api.useUtils();
   const { data: bases, refetch: refetchBases } = api.base.list.useQuery();
   const deleteBaseMutation = api.base.delete.useMutation();
+  
+  //optimistically add bases: 
   const createBaseMutation = api.base.create.useMutation({
-    onSuccess: (newBase) => {
-      if (!newBase) return;
-    utils.base.list.setData(undefined, (oldData) => {      
-      const baseWithTables = {
-        id: newBase.id,
-        userId: newBase.userId,
-        name: newBase.name,
-        createdAt: newBase.createdAt,
-        updatedAt: newBase.updatedAt,
-        tables: newBase.tables.map((t) => ({
-          id: t.id,
-          name: t.name,
-        })),
-      }
-      return [...(oldData ?? []), baseWithTables];
-    });
+    // 1) Optimistic add
+    onMutate: async (input) => {
+      await utils.base.list.cancel();
+      const previous = utils.base.list.getData();
+      const tempId = `temp-${Math.random().toString(36).slice(2)}`;
+      const now = new Date();
 
-    router.push(`/${newBase.id}`);
-  },
+      utils.base.list.setData(undefined, (old) => {
+        const optimisticBase = {
+          id: tempId,
+          userId: user.id,
+          name: input.name ?? "Untitled Base",
+          createdAt: now,
+          updatedAt: now,
+          // keep shape compatible with list() selection
+          tables: input.createSampleTable ? [{ id: `temp-tbl-${Date.now()}`, name: "Table 1" }] : [],
+        };
+        return [optimisticBase, ...(old ?? [])];
+      });
+
+      return { previous, tempId };
+    },
+
+    // 2) Replace optimistic with real on success, then navigate
+    onSuccess: (newBase, _input, ctx) => {
+      if (!newBase) return;
+      utils.base.list.setData(undefined, (old) => {
+        const list = old ?? [];
+        const idx = list.findIndex((b) => b.id === ctx?.tempId);
+        const baseWithTables = {
+          id: newBase.id,
+          userId: newBase.userId,
+          name: newBase.name,
+          createdAt: newBase.createdAt,
+          updatedAt: newBase.updatedAt,
+          tables: newBase.tables.map((t) => ({ id: t.id, name: t.name })),
+        };
+        if (idx !== -1) {
+          const copy = [...list];
+          copy[idx] = baseWithTables;
+          return copy;
+        }
+        return [baseWithTables, ...list];
+      });
+
+      // Keep your current UX of opening the new base after it’s created
+      router.push(`/${newBase.id}`);
+    },
+
+    // 3) Rollback on error
+    onError: (_err, _input, ctx) => {
+      if (ctx?.previous) utils.base.list.setData(undefined, ctx.previous);
+      alert("Failed to create base. Please try again.");
+    },
+
+    // 4) Final sync
+    onSettled: () => {
+      //eslint-disable-next-line @typescript-eslint/no-floating-promises
+      utils.base.list.invalidate();
+    },
   });
+
 
   const handleDeleteBase = async (baseId: string, baseName: string) => {
     if (window.confirm(`Are you sure you want to delete "${baseName}"? This action cannot be undone.`)) {

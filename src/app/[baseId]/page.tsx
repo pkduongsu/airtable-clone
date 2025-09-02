@@ -193,9 +193,9 @@ const insertChunk = api.row.insertEmptyRowsChunk.useMutation();
 
   // Search state
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
-const [searchQuery, setSearchQuery] = useState("");
-const [scrollToRowId, setScrollToRowId] = useState<string | null>(null);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [scrollToRowId, setScrollToRowId] = useState<string | null>(null);
 
 
 
