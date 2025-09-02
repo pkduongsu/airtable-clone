@@ -265,7 +265,8 @@ export const tableRouter = createTRPCRouter({
         columnName: z.string(),
         columnType: z.enum(['TEXT', 'NUMBER']),
         operator: z.enum(['is_empty', 'is_not_empty', 'contains', 'not_contains', 'equals', 'greater_than', 'less_than']),
-        value: z.union([z.string(), z.number()]).optional()
+        value: z.union([z.string(), z.number()]).optional(),
+        logicOperator: z.enum(['and', 'or']).optional(),
       })).optional(),
       globalSearch: z.string().optional(),
     }))
@@ -394,7 +395,20 @@ export const tableRouter = createTRPCRouter({
           
           // Add filter conditions
           if (filterConditions.length > 0) {
-            sqlQuery += ` AND (${filterConditions.join(' AND ')})`;
+            const orGroups: string[] = [];
+            let current: string[] = [];
+
+            filterRules.forEach((rule, i) => {
+              const splitBefore = i > 0 && rule.logicOperator === 'or';
+              if (splitBefore) {
+                if (current.length) orGroups.push(`(${current.join(' AND ')})`);
+                current = [];
+              }
+              current.push(filterConditions[i]!);
+            });
+
+            if (current.length) orGroups.push(`(${current.join(' AND ')})`);
+            sqlQuery += ` AND (${orGroups.join(' OR ')})`;
           }
 
           // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
@@ -460,6 +474,7 @@ export const tableRouter = createTRPCRouter({
           let whereConditions: Prisma.RowWhereInput = { tableId };
           
           if (filterRules.length > 0) {
+            //eslint-disable-next-line @typescript-eslint/no-unused-vars
             const filterConditions: Prisma.RowWhereInput[] = filterRules.map(rule => {
               const baseCondition: Prisma.RowWhereInput = {
                 cells: {
@@ -519,10 +534,6 @@ export const tableRouter = createTRPCRouter({
               }
             });
             
-            whereConditions = {
-              ...whereConditions,
-              AND: filterConditions
-            };
           }
 
            // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
@@ -555,8 +566,55 @@ export const tableRouter = createTRPCRouter({
             orderBy: { order: 'asc' },
             take: maxFallbackRows,
           }) as RowWithCells[];
+
+          type FRule = typeof filterRules[number];
+
+          function getCellText(row: RowWithCells, columnId: string) {
+            const cell = row.cells.find(c => c.columnId === columnId);
+            const v = (cell?.value as { text?: string } | null)?.text;
+            return v == null ? '' : String(v);
+          }
+
+          function matchesRule(row: RowWithCells, rule: FRule) {
+            const text = getCellText(row, rule.columnId);
+            switch (rule.operator) {
+              case 'is_empty':      return text === '';
+              case 'is_not_empty':  return text !== '';
+              case 'contains':      return rule.value != null && text.toLowerCase().includes(String(rule.value).toLowerCase());
+              case 'not_contains':  return rule.value != null ? !text.toLowerCase().includes(String(rule.value).toLowerCase()) : true;
+              case 'equals':
+                return rule.columnType === 'NUMBER'
+                  ? Number(text || '0') === Number(rule.value)
+                  : text.toLowerCase() === String(rule.value ?? '').toLowerCase();
+              case 'greater_than':  return Number(text || '0') > Number(rule.value);
+              case 'less_than':     return Number(text || '0') < Number(rule.value);
+              default:              return true;
+            }
+          }
+
+          function groupByOr(rules: FRule[]) {
+            const groups: FRule[][] = [];
+            let curr: FRule[] = [];
+            rules.forEach((r, i) => {
+              const splitBefore = i > 0 && r.logicOperator === 'or';
+              if (splitBefore) {
+                if (curr.length) groups.push(curr);
+                curr = [];
+              }
+              curr.push(r);
+            });
+            if (curr.length) groups.push(curr);
+            return groups;
+          }
+
+          const groups = groupByOr(filterRules);
+          const filteredRows = groups.length
+            ? allRows.filter(row => groups.some(g => g.every(r => matchesRule(row, r))))
+            : allRows;
+
+
           // Sort rows based on sort rules
-          const sortedRows = allRows.sort((a, b) => {
+          const sortedRows = filteredRows.sort((a, b) => {
             for (const rule of sortRules) {
               const cellA = a.cells.find(cell => cell.columnId === rule.columnId);
               const cellB = b.cells.find(cell => cell.columnId === rule.columnId);
@@ -617,7 +675,8 @@ export const tableRouter = createTRPCRouter({
         columnName: z.string(),
         columnType: z.enum(['TEXT', 'NUMBER']),
         operator: z.enum(['is_empty', 'is_not_empty', 'contains', 'not_contains', 'equals', 'greater_than', 'less_than']),
-        value: z.union([z.string(), z.number()]).optional()
+        value: z.union([z.string(), z.number()]).optional(),
+        logicOperator: z.enum(['and', 'or']).optional(),
       })).optional()
     }))
     .query(async ({ ctx, input }) => {
@@ -758,7 +817,21 @@ export const tableRouter = createTRPCRouter({
           AND LOWER(c.value->>'text') LIKE LOWER($2)`;
         
         if (filterConditions.length > 0) {
-          sqlQuery += ` AND (${filterConditions.join(' AND ')})`;
+          // fixed (splits BEFORE the rule flagged as 'or')
+          const orGroups: string[] = [];
+          let current: string[] = [];
+
+          filterRules.forEach((rule, i) => {
+            const splitBefore = i > 0 && rule.logicOperator === 'or';
+            if (splitBefore) {
+              if (current.length) orGroups.push(`(${current.join(' AND ')})`);
+              current = [];
+            }
+            current.push(filterConditions[i]!);
+          });
+
+          if (current.length) orGroups.push(`(${current.join(' AND ')})`);
+          sqlQuery += ` AND (${orGroups.join(' OR ')})`; 
         }
         
         

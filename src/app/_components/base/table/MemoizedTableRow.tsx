@@ -88,9 +88,8 @@ const rowData: TableRow = useMemo(() => {
           const v = rowCells.get(col.id)?.value;
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           const display =
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             v && typeof v === "object" && "text" in v
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/prefer-nullish-coalescing
+            //eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
               ? (v.text ?? "")
               : (typeof v === "string" || typeof v === "number")
               ? String(v)
@@ -153,7 +152,6 @@ const rowData: TableRow = useMemo(() => {
               key={tdKey}
               className="p-0 h-8 border-r border-b border-border-default relative"
               // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             style={{ display: 'flex', width: col.getSize(), alignItems: 'center' }}
             >
               <div className="w-full h-full flex items-center justify-center text-xs text-gray-500">
@@ -184,9 +182,8 @@ const rowData: TableRow = useMemo(() => {
               // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               onSelect={() => handleCellSelection(record.id, col.id)}
               onDeselect={handleCellDeselection}
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
               rowId={record.id}
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
               columnId={col.id}
               onContextMenu={handleContextMenuClick}
               onValueChange={handleCellValueChange}
