@@ -103,6 +103,8 @@ type TableRow = {
   onDataTableReady?: (handlers: {
     handleCreateRow: () => Promise<void>;
   }) => void;
+  fakerEnabled?: boolean;         
+  fakerFromOrder?: number | null; 
 }
 export function DataTable({ 
   tableId, 
@@ -120,6 +122,8 @@ export function DataTable({
   columns,
   setColumns, //set local columns state 
   onDataTableReady,
+  fakerEnabled,
+  fakerFromOrder
 }: DataTableProps) {
   
   const [cells, setCells] = useState<Cell[]>([]);
@@ -396,8 +400,11 @@ useEffect(() => {
       const isPending =
         pendingRowIdsRef.current.has(row.id) ||
         pendingColumnIdsRef.current.has(col.id);
+      
+      const inFakerRange =
+      fakerEnabled && (fakerFromOrder == null || (typeof row.order === 'number' && row.order >= fakerFromOrder));
 
-      if (!isPending && !hasDraft) {
+      if (inFakerRange &&!isPending && !hasDraft) {
       // pre-seed faker draft (deterministic)
       try {
         // Derive a deterministic seed from the stable UI keys so values don't flicker
@@ -2355,6 +2362,8 @@ const scrollToIndexLoaded = useCallback(async (index: number, align: 'start'|'ce
                     columnUiKeyRef={columnUiKeyRef}
                     getDraftValue={getDraftValue}
                     isSavingCell={isSavingCell}
+                    fakerEnabled={fakerEnabled}          
+                    fakerFromOrder={fakerFromOrder} 
                   />
                 );
               }

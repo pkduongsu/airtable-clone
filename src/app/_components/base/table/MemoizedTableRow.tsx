@@ -51,7 +51,9 @@ export const MemoizedTableRow = memo<{
   rowUiKeyRef: React.RefObject<Map<string, string>>;
   columnUiKeyRef: React.RefObject<Map<string, string>>;
   getDraftValue: (rowId: string, colId: string) => string | undefined;   
-  isSavingCell: (rowId: string, colId: string) => boolean;               
+  isSavingCell: (rowId: string, colId: string) => boolean;
+  fakerEnabled?: boolean;                
+  fakerFromOrder?: number | null;               
 }>(({
   virtualRow,
   dbOrder,
@@ -76,7 +78,9 @@ export const MemoizedTableRow = memo<{
   rowUiKeyRef,
   columnUiKeyRef,
   getDraftValue,
-  isSavingCell
+  isSavingCell,
+  fakerEnabled,               
+  fakerFromOrder
 }) => {
 const rowData: TableRow = useMemo(() => {
   // Fast path: use the per-row map
@@ -89,6 +93,8 @@ const rowData: TableRow = useMemo(() => {
 
 const isPendingRow = pendingRowIdsRef.current?.has(record.id);
 const valueMap = rowCells && rowCells.size ? rowCells : undefined;
+const rowEligible =
+  fakerEnabled && (fakerFromOrder == null || (typeof record.order === 'number' && record.order >= fakerFromOrder));
 
   // eslint-disable-next-line @typescript-eslint/prefer-optional-chain
 return {
@@ -109,9 +115,9 @@ return {
 
     if (fromServer) return [col.id, fromServer];
 
-    // 3) otherwise: if neither row nor column is pending, show a deterministic fake
+    // if neither row nor column is pending, show a deterministic fake
     const isPendingCol = pendingColumnIdsRef.current?.has(col.id);
-    if (!isPendingRow && !isPendingCol) {
+    if (rowEligible && !isPendingRow && !isPendingCol) {
       const seed = makeSeed(record.id, col.id);
       const fake = fakeFor(col.name, col.type as "TEXT" | "NUMBER", seed);
       return [col.id, String(fake)];

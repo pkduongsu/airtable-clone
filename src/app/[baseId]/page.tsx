@@ -61,6 +61,8 @@ function BasePageContent() {
   const [isBulkLoading, setIsBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkProgressText, setBulkProgressText] = useState("");
+  const [fakerEnabled, setFakerEnabled] = useState(false);
+  const [fakerFromOrder, setFakerFromOrder] = useState<number | null>(null);
 
   // Column visibility state
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
@@ -334,6 +336,10 @@ const handleDeleteTable = (tableId: string) => {
     let insertedRows = 0;
     let insertedCells = 0;
 
+    // enable faker only for rows added at or after this order
+    setFakerFromOrder(baseOrder);
+    setFakerEnabled(true);
+
     setBulkProgressText(`Starting ${chunks} chunks…`);
 
     // Simple async pool for limited concurrency
@@ -392,6 +398,8 @@ const handleDeleteTable = (tableId: string) => {
       setIsBulkLoading(false);
       setBulkProgress(0);
       setBulkProgressText("");
+      setFakerEnabled(false);
+      setFakerFromOrder(null);
     }, 800);
   }
 };
@@ -698,6 +706,8 @@ const handleShowAllColumns = useCallback(() => {
                     setRecords={setRecords}
                     columns={columns}
                     setColumns={setColumns}
+                    fakerEnabled={fakerEnabled}
+                    fakerFromOrder={fakerFromOrder}
                   />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center bg-[#f6f8fc] z-10">
