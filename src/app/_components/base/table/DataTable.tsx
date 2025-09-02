@@ -47,6 +47,15 @@ const OVERSCAN_MULTIPLIER = 8; // increased for better prefetching
 const LOADING_DEBOUNCE_MS = 25; // reduced from 100ms for faster response
 const PRIORITY_LOADING_DEBOUNCE_MS = 5; // immediate loading for visible skeleton rows
 
+  type FilterRule = {
+    id: string;
+    columnId: string;
+    columnType: 'TEXT' | 'NUMBER';
+    operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
+    value?: string | number;
+    logicOperator?: 'and' | 'or';
+  };
+
 
 type SearchResult = {
   type: 'field' | 'cell';
@@ -77,6 +86,7 @@ type TableRow = {
     columnType: 'TEXT' | 'NUMBER';
     operator: 'is_empty' | 'is_not_empty' | 'contains' | 'not_contains' | 'equals' | 'greater_than' | 'less_than';
     value?: string | number;
+    logicOperator?: 'and' | 'or';
   }>;
   searchResults?: SearchResult[];
   currentSearchIndex?: number;
@@ -548,52 +558,45 @@ const rowData = useMemo(() => {
 const filteredData = useMemo(() => {
   if (!filterRules?.length) return rowData;
 
-  const colTypeById = new Map(columns.map(c => [c.id, c.type]));
-  const toStr = (v: unknown): string => {
-    if (v == null) return "";
-    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
-      return String(v);
+  const colTypeById = new Map(columns.map(c => [c.id, c.type as 'TEXT' | 'NUMBER']));
+
+  const toStr = (v: unknown) =>
+    v == null ? "" : typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+      ? String(v) : typeof v === "object" ? JSON.stringify(v) : "";
+
+  const matchesRule = (row: Record<string, unknown>, rule: FilterRule) => {
+    const raw = toStr(row[rule.columnId]).trim();
+    const type = colTypeById.get(rule.columnId) ?? 'TEXT';
+
+    switch (rule.operator) {
+      case 'is_empty':       return raw === "";
+      case 'is_not_empty':   return raw !== "";
+      case 'contains':       return raw.toLowerCase().includes(String(rule.value ?? "").toLowerCase());
+      case 'not_contains':   return !raw.toLowerCase().includes(String(rule.value ?? "").toLowerCase());
+      case 'equals':
+        if (type === 'NUMBER') return Number(raw || '0') === Number(rule.value);
+        return raw.toLowerCase() === String(rule.value ?? '').toLowerCase();
+      case 'greater_than':   return Number(raw || '0') > Number(rule.value);
+      case 'less_than':      return Number(raw || '0') < Number(rule.value);
+      default:               return true;
     }
-    if (typeof v === "object" && v !== null) {
-      return JSON.stringify(v);
-    }
-    // Fallback for other types
-    return "";
   };
 
-  return rowData.filter((row) =>
-    filterRules.every((rule) => {
-      const raw = toStr(row[rule.columnId]).trim();
-      const type = colTypeById.get(rule.columnId) ?? "TEXT";
-      const val = rule.value;
+  // Split into OR groups: [A, B, (or), C, D, (or), E] -> [[A,B],[C,D],[E]]
+  const groups: FilterRule[][] = (() => {
+    const out: FilterRule[][] = [];
+    let curr: FilterRule[] = [];
+    filterRules.forEach((r, i) => {
+      curr.push(r);
+      const isOr = r.logicOperator === 'or' && i < filterRules.length - 1;
+      if (isOr) { out.push(curr); curr = []; }
+    });
+    if (curr.length) out.push(curr);
+    return out;
+  })();
 
-      switch (rule.operator) {
-        case "is_empty":
-          return raw === "";
-        case "is_not_empty":
-          return raw !== "";
-        case "contains":
-          return val != null && raw.toLowerCase().includes(String(val).toLowerCase());
-        case "not_contains":
-          return val == null || raw === "" || !raw.toLowerCase().includes(String(val).toLowerCase());
-        case "equals":
-          if (type === "NUMBER") {
-            const n = Number(raw);
-            return !Number.isNaN(n) && val != null && n === Number(val);
-          }
-          return raw.toLowerCase() === String(val ?? "").toLowerCase();
-        case "greater_than": {
-          const n = Number(raw);
-          return !Number.isNaN(n) && val != null && n > Number(val);
-        }
-        case "less_than": {
-          const n = Number(raw);
-          return !Number.isNaN(n) && val != null && n < Number(val);
-        }
-        default:
-          return true;
-      }
-    })
+  return rowData.filter(row =>
+    groups.some(group => group.every(rule => matchesRule(row, rule)))
   );
 }, [rowData, filterRules, columns]);
 
