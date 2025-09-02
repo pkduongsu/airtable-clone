@@ -842,7 +842,6 @@ const sortedData = useMemo(() => {
       setCells(old => old.filter(c => c.rowId !== tempRowId));
       
       if (onRecordCountChange) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const base = (tableData?._count?.rows ?? recordsRef.current.length);
         onRecordCountChange(base); // rollback to baseline
       }

@@ -67,7 +67,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
         const optimisticBase = {
           id: tempId,
           userId: user.id,
-          name: input.name || "Untitled Base",
+          name: input.name ?? "Untitled Base",
           createdAt: now,
           updatedAt: now,
           // keep shape compatible with list() selection
@@ -113,6 +113,7 @@ export function DashboardClient({ user }: DashboardClientProps) {
 
     // 4) Final sync
     onSettled: () => {
+      //eslint-disable-next-line @typescript-eslint/no-floating-promises
       utils.base.list.invalidate();
     },
   });

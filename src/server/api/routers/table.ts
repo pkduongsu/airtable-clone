@@ -474,6 +474,7 @@ export const tableRouter = createTRPCRouter({
           let whereConditions: Prisma.RowWhereInput = { tableId };
           
           if (filterRules.length > 0) {
+            //eslint-disable-next-line @typescript-eslint/no-unused-vars
             const filterConditions: Prisma.RowWhereInput[] = filterRules.map(rule => {
               const baseCondition: Prisma.RowWhereInput = {
                 cells: {

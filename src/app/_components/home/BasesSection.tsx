@@ -125,13 +125,13 @@ export function BasesSection({ bases, onDeleteBase, getRelativeTime }: BasesSect
                   <div className="block">
                     <div className="relative rounded-[6px] bg-white shadow-at-main-nav h-[92px] w-full">
                       {/* reuse CardInner for list width */}
-                      <div className="p-0"><CardInner base={base as any} /></div>
+                      <div className="p-0"><CardInner base={base} /></div>
                     </div>
                   </div>
                 ) : (
                   <Link href={`/${base.id}`} className="block">
                     <div className="relative rounded-[6px] bg-white cursor-pointer shadow-at-main-nav h-[92px] w-full">
-                      <div className="p-0"><CardInner base={base as any} /></div>
+                      <div className="p-0"><CardInner base={base} /></div>
                     </div>
                   </Link>
                 )}
